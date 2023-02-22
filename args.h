@@ -1,4 +1,5 @@
 // args.h - simple and robust command line argument parsing - felix-u 2023
+// 2023-02-21
 //
 //    This is an stb-style single-header-file C library.
 //
