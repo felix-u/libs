@@ -4,8 +4,9 @@ VERSION=version
 src = $(wildcard src/*.c)
 obj = $(src:.c=.o)
 
-CFLAGS=-std=c99 -pedantic -Wshadow -Wstrict-aliasing -Wstrict-overflow \
-	   -Wextra -Wall
+CFLAGS=-std=c99 \
+	-Wall -Wextra -pedantic -Werror -Wshadow \
+	-fno-strict-aliasing -Wstrict-overflow \
 DEBUGFLAGS=-Og -g -ggdb
 RELEASEFLAGS=-O3 -s
 LIBS=
