@@ -28,13 +28,13 @@ typedef    double   f64;
 typedef int error;
 
 static error fatal(char *file, usize line, const char *func) {
-    #ifdef COMPILE_DEBUG
+    #ifdef DEBUG
         fprintf(stderr, "%s:%d:%s() fatal error\n", file, line, func);
     #else
         (void)file;
         (void)line;
         (void)func;
-    #endif // COMPILE_DEBUG
+    #endif // DEBUG
     return 1;
 }
 
@@ -45,11 +45,11 @@ static error fatal(char *file, usize line, const char *func) {
 static error _err(const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
 
-    #ifdef COMPILE_DEBUG
+    #ifdef DEBUG
         fprintf(stderr, "note: in function '%s'\n", func);
     #else
         (void)func;
-    #endif // COMPILE_DEBUG
+    #endif // DEBUG
 
     return 1;
 }
@@ -63,11 +63,11 @@ static error _errf(const char *func, char *fmt, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
-    #ifdef COMPILE_DEBUG
+    #ifdef DEBUG
         fprintf(stderr, "note: in function '%s'\n", func);
     #else
         (void)func;
-    #endif // COMPILE_DEBUG
+    #endif // DEBUG
 
     return 1;
 }
