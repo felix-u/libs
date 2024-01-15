@@ -25,11 +25,6 @@ typedef  intptr_t  iptr;
 typedef     float   f32;
 typedef    double   f64;
 
-typedef  i8  b8;
-typedef i16 b16;
-typedef i32 b32;
-typedef i64 b64;
-
 typedef int error;
 
 static error fatal(char *file, usize line, const char *func) {
@@ -108,45 +103,19 @@ static error _arena_alloc(Arena *arena, usize size, void **out) {
     return 0;
 }
 
-#define arena_realloc(arena, size, out) \
-    _arena_realloc(arena, size, (void **)(out))
-static error _arena_realloc(Arena *arena, usize size, void **out) {
-    void *last_allocation = (u8 *)arena->mem + arena->last_offset;
-    if (*out == last_allocation && arena->last_offset + size <= arena->cap) {
-        return 0;
-    }
-    try (arena_alloc(arena, size, out));
-    return 0;
-}
-
 static void arena_deinit(Arena *arena) {
     free(arena->mem);
     arena->offset = 0;
     arena->cap = 0;
 }
 
-// typedef struct Hashmap {
-//     void *table;
-// } Hashmap;
-
-// static usize hash_djb2(void *_data, usize len) { 
-//     usize hash = 5381;
-//     u8 *data = _data;
-//     for (usize i = 0; i < len; i += 1, data += 1) {
-//         u8 byte = data[i];
-//         hash += (hash << 5) + byte;
-//     }
-//     return hash;
-// }
-
 #define Slice(type) struct { type *ptr; usize len; }
+#define slice_expand(s) (s).ptr, (s).len
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = (item)
 #define slice_pop(slice) (slice).ptr[--(slice).len]
 
 typedef Slice(u8) Str8;
-
 #define str8(s) (Str8){ .ptr = (u8 *)s, .len = sizeof(s) - 1 }
-#define str8_expand(s) (s).ptr, (s).len
 #define str8_fmt(s) (int)(s).len, (s).ptr
 
 static bool str8_eql(Str8 s1, Str8 s2) {
@@ -172,12 +141,7 @@ static char *cstr_from_str8(Arena *arena, Str8 s) {
 }
 
 // Only bases <= 10
-static error str8_from_int_base(
-    Arena *arena, 
-    usize _num, 
-    usize base, 
-    Str8 *out
-) {
+static error str8_from_int_base(Arena *arena, usize _num, u8 base, Str8 *out) {
     out->len = 0;
     usize num = _num;
 
@@ -195,11 +159,6 @@ static error str8_from_int_base(
     }
 
     return 0;
-}
-
-static void str8_offset(Str8 *s, usize offset) {
-    s->ptr += offset;
-    s->len -= offset;
 }
 
 static Str8 str8_range(Str8 s, usize beg, usize end) {
