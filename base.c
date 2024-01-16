@@ -29,7 +29,7 @@ typedef int error;
 
 static error fatal(char *file, usize line, const char *func) {
     #ifdef DEBUG
-        fprintf(stderr, "%s:%d:%s() fatal error\n", file, line, func);
+        fprintf(stderr, "%s:%zu:%s() fatal error\n", file, line, func);
     #else
         (void)file;
         (void)line;
