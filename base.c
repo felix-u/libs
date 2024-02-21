@@ -193,15 +193,12 @@ static usize decimal_from_hex_str8(Str8 s) {
 }
 
 static error file_open(Str8 path, char *mode, FILE **file_out) {
-    FILE *file = NULL;
     if (path.len == 0) return err("empty path");
     if (mode == NULL) return err("invalid mode");
-
-    if ((file = fopen((char *)path.ptr, mode)) == NULL) {
-        return errf("failed to open file '%.*s'", path);
+    *file_out = fopen((char *)path.ptr, mode);
+    if (*file_out == NULL) {
+        return errf("failed to open file '%.*s'", str8_fmt(path));
     }
-
-    *file_out = file;
     return 0;
 }
 
