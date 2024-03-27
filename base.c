@@ -43,8 +43,8 @@ typedef      intptr_t  iptr;
 //     Error_Node *stack;
 // } Error_Info;
 
-#define log_err(s) _log_err(__FILE__, __LINE__, __func__, s)
-static void _log_err(char *file, usize line, const char *func, char *s) {
+#define err(s) _err(__FILE__, __LINE__, __func__, s)
+static void _err(char *file, usize line, const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
     #ifdef DEBUG
         fprintf(
@@ -59,10 +59,8 @@ static void _log_err(char *file, usize line, const char *func, char *s) {
     #endif // DEBUG
 }
 
-#define log_errf(fmt, ...) \
-    _log_errf(__FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
-static void _log_errf(char *file, usize line, const char *func, char *fmt, ...) 
-{
+#define errf(fmt, ...) _errf(__FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
+static void _errf(char *file, usize line, const char *func, char *fmt, ...) {
     fprintf(stderr, "error: ");
     va_list args;
     va_start(args, fmt);
@@ -95,7 +93,7 @@ typedef struct Arena {
 static Arena arena_init(usize size) {
     Arena arena = {0};
     arena.mem = calloc(1, size);
-    if (arena.mem == 0) log_err("allocation failure");
+    if (arena.mem == 0) err("allocation failure");
     arena.cap = size; 
     return arena;
 }
@@ -110,7 +108,7 @@ static Array_Memory arena_alloc(Arena *arena, usize size) {
     Array_Memory memory = {0};
     arena_align(arena, ARENA_DEFAULT_ALIGNMENT);
     if (arena->offset + size >= arena->cap) {
-        log_err("allocation failure");
+        err("allocation failure");
         return memory;
     }
     memory.ptr = (u8 *)arena->mem + arena->offset;
@@ -209,7 +207,7 @@ static usize decimal_from_hex_str8(Str8 s) {
 static FILE *file_open(Str8 path, char *mode) {
     if (path.len == 0 || mode == 0) return 0;
     FILE *file = fopen((char *)path.ptr, mode);
-    if (file == 0) log_errf("failed to open file '%.*s'", str8_fmt(path));
+    if (file == 0) errf("failed to open file '%.*s'", str8_fmt(path));
     return file;
 }
 
@@ -229,7 +227,7 @@ static Str8 file_read(Arena *arena, Str8 path, char *mode) {
 
     if (ferror(file)) {
         fclose(file);
-        log_errf("error reading file '%.*s'", str8_fmt(path));
+        errf("error reading file '%.*s'", str8_fmt(path));
         return (Str8){0};
     }
 
