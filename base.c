@@ -27,6 +27,8 @@ typedef        size_t usize;
 typedef     uintptr_t  uptr;
 typedef      intptr_t  iptr;
 
+#define discard(expression) (void)(expression)
+
 #define err(s) _err(__FILE__, __LINE__, __func__, s)
 static void _err(char *file, usize line, const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
