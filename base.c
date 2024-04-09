@@ -27,22 +27,6 @@ typedef        size_t usize;
 typedef     uintptr_t  uptr;
 typedef      intptr_t  iptr;
 
-// static void err_accumulation_begin(void);
-// static void err(Str8 error);
-// static void errf(char *fmt, ...);
-// static Str8 err_accumulation_end(Arena *arena);
-//
-// typedef struct Error_Node {
-//     struct Error_Node *next;
-//     usize pos;
-//     Str8 error;
-// } Error_Node;
-//
-// typedef struct Error_Info {
-//     Arena *arena;
-//     Error_Node *stack;
-// } Error_Info;
-
 #define err(s) _err(__FILE__, __LINE__, __func__, s)
 static void _err(char *file, usize line, const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
@@ -91,23 +75,18 @@ typedef struct Arena {
 
 #define Array(type) type *
 typedef struct Array_Header { 
-    Arena *arena; 
-    usize cap;
     usize len; 
+    usize cap;
+    Arena *arena; 
 } Array_Header;
 
-static struct {
-    Arena *arena;
-    usize cap;
-    usize len;
-    usize first;
-} nil_array_data = {0};
+static Array_Header nil_arrays[2] = {0};
+static Array(void) nil_array = &(nil_arrays[1].len);
 
-static Array(void) nil_array = &nil_array_data.first;
-
-#define len(array) (((Array_Header *)(array) - 1)->len)
-#define array_push_unchecked(array, item) (array)[len(array)++] = (item)
-#define array_pop_unchecked(array) (array)[--len(array)]
+#define array_len(array) (((Array_Header *)(array) - 1)->len)
+#define array_cap(array) (((Array_Header *)(array) - 1)->cap)
+#define array_push_unchecked(array, item) (array)[array_len(array)++] = (item)
+#define array_pop_unchecked(array) (array)[--array_len(array)]
 
 static Arena arena_init(usize size) {
     Arena arena = { .mem = calloc(1, size) };
@@ -213,16 +192,16 @@ static usize decimal_from_hex_str8(Str8 s) {
     return result;
 }
 
-static FILE *file_open(Str8 path, char *mode) {
-    if (path.len == 0 || mode == 0) return 0;
-    FILE *file = fopen((char *)path.ptr, mode);
-    if (file == 0) errf("failed to open file '%.*s'", str8_fmt(path));
+static FILE *file_open(char *path, char *mode) {
+    if (path == 0 || mode == 0) return 0;
+    FILE *file = fopen(path, mode);
+    if (file == 0) errf("failed to open file '%s'", path);
     return file;
 }
 
-static Str8 file_read(Arena *arena, Str8 path, char *mode) {
+static Str8 file_read(Arena *arena, char *path, char *mode) {
     Str8 bytes = {0};
-    if (path.len == 0 || mode == 0) return bytes;
+    if (path == 0 || mode == 0) return bytes;
 
     FILE *file = file_open(path, mode);
     
@@ -236,7 +215,7 @@ static Str8 file_read(Arena *arena, Str8 path, char *mode) {
 
     if (ferror(file)) {
         fclose(file);
-        errf("error reading file '%.*s'", str8_fmt(path));
+        errf("error reading file '%s'", path);
         return (Str8){0};
     }
 
