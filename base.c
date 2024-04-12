@@ -200,6 +200,7 @@ _array_push(Arena *arena, Array_void *array, void *item, usize sizeof_elem) {
 }
 
 #define Slice(type) struct { type *ptr; usize len; }
+#define slice(c_array) { .ptr = c_array, .len = count_of(c_array) }
 #define slice_c_array(c_array) { .ptr = c_array, .len = count_of(c_array) }
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
 
