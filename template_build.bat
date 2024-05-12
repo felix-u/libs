@@ -1,8 +1,18 @@
 @echo off
 
-set compiler=zig cc -std=c99 -pedantic ^
-    -Wall -Werror -Wextra -Wshadow -Wconversion -Wdouble-promotion ^
-    -Wno-unused-function -Wno-sign-conversion -fno-strict-aliasing ^
-    -g3 -fsanitize=undefined -fsanitize-trap -DDEBUG
+set name=template
 
-%compiler% -o name.exe src\main.c
+set cl_common=cl -nologo -std:c11 ^
+    user32.lib gdi32.lib ..\src\main.c
+
+set cl_link=-link -incremental:no
+
+set cl_debug=%cl_common% -W4 -WX -Z7 -DBUILD_DEBUG -fsanitize=address
+
+if not exist build mkdir build
+pushd build
+
+if exist %name%.pdb del %name%.pdb
+%cl_debug% %cl_link% -out:%name%.exe
+
+popd

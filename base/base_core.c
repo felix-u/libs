@@ -1,16 +1,14 @@
 static void _err(char *file, usize line, const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
-    #ifdef DEBUG
+    #ifdef BUILD_DEBUG
         fprintf(
             stderr,
             "%s:%zu:%s(): error first returned here\n",
             file, line, func
         );
     #else
-        discard(file);
-        discard(line);
-        discard(func);
-    #endif // DEBUG
+        discard(file); discard(line); discard(func);
+    #endif // BUILD_DEBUG
 }
 
 static void _errf(char *file, usize line, const char *func, char *fmt, ...) {
@@ -20,17 +18,15 @@ static void _errf(char *file, usize line, const char *func, char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
-    #ifdef DEBUG
+    #ifdef BUILD_DEBUG
         fprintf(
             stderr,
             "%s:%zu:%s(): error first returned here\n",
             file, line, func
         );
     #else
-        discard(file);
-        discard(line);
-        discard(func);
-    #endif // DEBUG
+        discard(file); discard(line); discard(func);
+    #endif // BUILD_DEBUG
 }
 
 static inline usize _next_power_of_2(usize n) {

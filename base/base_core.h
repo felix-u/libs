@@ -36,7 +36,17 @@ typedef Array(void) Array_void;
 
 #define discard(expression) (void)(expression)
 
-#define structdef(Name) typedef struct Name Name; struct Name
+#define structdef(Name) \
+    typedef struct Name Name; \
+    typedef Slice(Name) Slice_##Name; \
+    typedef Array(Name) Array_##Name; \
+    struct Name
+
+#define uniondef(Name) \
+    typedef union Name Name; \
+    typedef Slice(Name) Slice_##Name; \
+    typedef Array(Name) Array_##Name; \
+    union Name
 
 #define err(s) _err(__FILE__, __LINE__, __func__, s)
 static void _err(char *file, usize line, const char *func, char *s);
@@ -75,3 +85,7 @@ _array_push(struct Arena *arena, Array_void *array, void *item, usize size);
     x = min_((min_val), (x));\
     x = max_((max_val), (x));\
 }
+
+#define v2_add(a, b) { (a).x + (b).x, (a).y + (b).y }
+#define v2_sub(a, b) { (a).x - (b).x, (a).y - (b).y }
+#define v2_scale(v, s) { (v).x * (s), (v).y * (s) }
