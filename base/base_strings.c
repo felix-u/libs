@@ -41,6 +41,23 @@ static String8 string8_from_int_base(Arena *arena, usize _num, u8 base) {
     return str;
 }
 
+static String8 string8_printf(Arena *arena, char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    usize buf_len = 4 * strlen(fmt);
+    char *buf = arena_alloc(arena, buf_len + 1, sizeof(char));
+    int printed_len = vsnprintf(buf, buf_len, fmt, args); 
+
+    va_end(args);
+
+    buf[printed_len] = 0;
+    return (String8){
+        .ptr = (u8 *)buf,
+        .len = printed_len,
+    };
+}
+
 static String8 string8_range(String8 s, usize beg, usize end) {
     return (String8){ .ptr = s.ptr + beg, .len = end - beg };
 }
