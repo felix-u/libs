@@ -1,6 +1,9 @@
-#define _CRT_SECURE_NO_WARNINGS
-#define WIN32_LEAN_AND_MEAN
-#define VC_EXTRALEAN
+#if OS_WINDOWS
+    #define WIN32_LEAN_AND_MEAN
+    #define VC_EXTRALEAN
+    #include "windows.h"
+    #define _CRT_SECURE_NO_WARNINGS
+#endif // OS_...
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -34,12 +37,14 @@ typedef Slice(void) Slice_void;
 #define Array(type) struct { type *ptr; usize len, cap; }
 typedef Array(void) Array_void;
 
-#define foreach(ptr_type, name, slice)\
+#define for_slice(ptr_type, name, slice)\
     for (ptr_type name = slice.ptr; name < slice.ptr + slice.len; name += 1)
 
 #define array_count(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define discard(expression) (void)(expression)
+
+#define enumdef(Name, type) typedef type Name; enum Name
 
 #define structdef(Name) \
     typedef struct Name Name; \
@@ -52,6 +57,12 @@ typedef Array(void) Array_void;
     typedef Slice(Name) Slice_##Name; \
     typedef Array(Name) Array_##Name; \
     union Name
+
+#if COMPILER_MSVC
+    #define force_inline __forceinline
+#else
+    #define force_inline inline
+#endif // COMPILER_...
 
 #define err(s) _err(__FILE__, __LINE__, __func__, s)
 static void _err(char *file, usize line, const char *func, char *s);
@@ -86,35 +97,9 @@ static void _array_push_slice(
 static inline void
 _array_push(struct Arena *arena, Array_void *array, void *item, usize size); 
 
-#define min_(a, b) ((a) < (b)) ? (a) : (b)
-#define max_(a, b) ((a) > (b)) ? (a) : (b)
+#define min_(a, b) (((a) < (b)) ? (a) : (b))
+#define max_(a, b) (((a) > (b)) ? (a) : (b))
 #define clamp(x, min_val, max_val) {\
     x = min_((min_val), (x));\
     x = max_((max_val), (x));\
 }
-
-#define v2_add(a, b)   { (a).x + (b).x, (a).y + (b).y }
-#define v2_cast(t, v)  { (t)(v).x, (t)(v).y }
-#define v2_div(a, b)   { (a).x / (b).x, (a).y / (b).y }
-#define v2_eql(a, b)   ((a).x == (b).x && (a).y == (b).y)
-#define v2_expand(v)   (v).x, (v).y
-#define v2_lerp(a, b, amount) {\
-    (a).x + (amount) * ((b).x - (a).x),\
-    (a).y + (amount) * ((b).y - (a).y),\
-}
-#define v2_mul(a, b)   { (a).x * (b).x, (a).y * (b).y }
-#define v2_scale(v, s) { (v).x * (s), (v).y * (s) }
-#define v2_sub(a, b)   { (a).x - (b).x, (a).y - (b).y }
-
-#define v3_add(a, b) { (a).x + (b).x, (a).y + (b).y, (a).z + (b).z }
-#define v3_expand(v) (v).x, (v).y, (v).z
-#define v3_len(sqrt_fn, v)\
-    sqrt_fn((v).x * (v).x + (v).y * (v).y + (v).z * (v).z)
-#define v3_lerp(a, b, amount) {\
-    (a).x + (amount) * ((b).x - (a).x),\
-    (a).y + (amount) * ((b).y - (a).y),\
-    (a).z + (amount) * ((b).z - (a).z),\
-}
-#define v3_norm(sqrt_fn, v) v3_scale_div(v, v3_len(sqrt_fn, v))
-#define v3_scale(v, s)      { (v).x * (s), (v).y * (s), (v).z * (s) }
-#define v3_scale_div(v, s)  { (v).x / (s), (v).y / (s), (v).z / (s) }

@@ -2,8 +2,7 @@
 
 set name=template
 
-set cl_common=cl -nologo -std:c11 ^
-    user32.lib gdi32.lib ..\src\main.c
+set cl_common=cl -nologo -std:c11 ..\src\main.c
 
 set cl_link=-link -incremental:no
 
