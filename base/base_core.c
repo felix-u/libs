@@ -4,7 +4,7 @@ static void _err(char *file, usize line, const char *func, char *s) {
         #if OS_WINDOWS
             char buf[2048] = {0};
             snprintf(buf, 2047, "error: %s\n%s:%zu:%s(): error first returned here\n", s, file, line, func);
-            OutputDebugStringA(s);
+            OutputDebugStringA(buf);
         #endif // OS_WINDOWS
         fprintf(stderr, "%s:%zu:%s(): error first returned here\n", file, line, func);
     #else
