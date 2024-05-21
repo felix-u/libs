@@ -5,6 +5,35 @@
     #define _CRT_SECURE_NO_WARNINGS
 #endif // OS_...
 
+
+#if COMPILER_CLANG
+    #define assume(expr) __builtin_assume(expr)
+    #define breakpoint __builtin_debugtrap()
+    #define builtin_unreachable __builtin_unreachable()
+    #define force_inline inline __attribute__((always_inline))
+
+#elif COMPILER_GCC
+    #define assume(expr) { if (!(expr)) unreachable; }
+    #define breakpoint __builtin_trap()
+    #define builtin_unreachable __builtin_unreachable()
+    #define force_inline inline __attribute__((always_inline))
+
+#elif COMPILER_MSVC
+    #define assume(expr) __assume(expr)
+    #define breakpoint __debugbreak()
+    #define builtin_unreachable assume(false)
+    #define force_inline inline __forceinline
+
+#endif // COMPILER_...
+
+
+#if BUILD_DEBUG
+    #define unreachable panic("reached unreachable code")
+#else
+    #define unreachable builtin_unreachable
+#endif // BUILD_DEBUG
+
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,16 +42,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef   uint8_t    u8;
-typedef  uint16_t   u16;
-typedef  uint32_t   u32;
-typedef  uint64_t   u64;
-typedef    int8_t    i8;
-typedef   int16_t   i16;
-typedef   int32_t   i32;
-typedef   int64_t   i64;
-typedef     float   f32;
-typedef    double   f64;
+typedef  uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef   int8_t  i8;
+typedef  int16_t i16;
+typedef  int32_t i32;
+typedef  int64_t i64;
+typedef    float f32;
+typedef   double f64;
 
 typedef unsigned char uchar;
 typedef        size_t usize;
@@ -41,6 +70,7 @@ typedef Array(void) Array_void;
     for (ptr_type name = slice.ptr; name < slice.ptr + slice.len; name += 1)
 
 #define array_count(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define array_size(arr) ((arr).cap * sizeof(*((arr).ptr)))
 
 #define discard(expression) (void)(expression)
 
@@ -58,44 +88,45 @@ typedef Array(void) Array_void;
     typedef Array(Name) Array_##Name; \
     union Name
 
-#if COMPILER_MSVC
-    #define force_inline __forceinline
-#else
-    #define force_inline inline
-#endif // COMPILER_...
-
 #define err(s) _err(__FILE__, __LINE__, __func__, s)
 static void _err(char *file, usize line, const char *func, char *s);
 
 #define errf(fmt, ...) _errf(__FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
 static void _errf(char *file, usize line, const char *func, char *fmt, ...);
 
-#define slice(c_array) { .ptr = c_array, .len = array_count(c_array) }
-#define slice_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
+#define panic(s) { err(s); breakpoint; exit(1); }
+#define panicf(fmt, ...) { errf(fmt, __VA_ARGS__); breakpoint; exit(1); }
+
+#define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
-#define slice_remove(slice_ptr, idx)\
-    (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]
+#define slice_remove(slice_ptr, idx) (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]
+#define slice_size(slice) ((slice).len * sizeof(*((slice).ptr)))
 
 #define array_from_slice(s) { .ptr = (s).ptr, .len = (s).len, .cap = (s).len }
+
+#define array_push(arena_ptr, array_ptr, item_ptr) \
+    _array_push(arena_ptr, (Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr)))
+static inline void _array_push(struct Arena *arena, Array_void *array, void *item, usize size); 
+
+#define array_push_assume_capacity(array_ptr, item_ptr) \
+    _array_push_assume_capacity((Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr)))
+static inline void _array_push_assume_capacity(Array_void *array, void *item, usize size);
 
 #define array_push_slice(arena_ptr, array_ptr, slice_ptr) \
     _array_push_slice(\
         arena_ptr,\
-        (Array_void *)array_ptr,\
-        (Slice_void *)slice_ptr,\
+        (Array_void *)(array_ptr),\
+        (Slice_void *)(slice_ptr),\
         sizeof(*((array_ptr)->ptr))\
     )
-static void _array_push_slice(
-    struct Arena *arena, Array_void *array, Slice_void *slice, usize size
-); 
+static void _array_push_slice(struct Arena *arena, Array_void *array, Slice_void *slice, usize size); 
 
-#define array_push(arena_ptr, array_ptr, item_ptr) \
-    _array_push(\
-        arena_ptr, (Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr))\
-    )
-static inline void
-_array_push(struct Arena *arena, Array_void *array, void *item, usize size); 
+#define array_push_slice_assume_capacity(array_ptr, slice_ptr) \
+    _array_push_slice_assume_capacity((Array_void *)(array_ptr), (Slice_void *)(slice_ptr), sizeof(*((array_ptr)->ptr)))
+static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *slice, usize size);
+
+#define array_unused_capacity(array) ((array).cap - (array).len)
 
 #define min_(a, b) (((a) < (b)) ? (a) : (b))
 #define max_(a, b) (((a) > (b)) ? (a) : (b))

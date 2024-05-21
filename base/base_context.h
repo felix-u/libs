@@ -3,28 +3,66 @@
 #ifndef BASE_CONTEXT_CUSTOM
 
 
-#ifdef _WIN32
+#if defined(__linux__) || defined(__gnu_linux__)
+    #define OS_LINUX 1
+#elif defined(__APPLE__) && defined(__MACH__)
+    #define OS_MACOS
+#elif defined(_WIN32)
     #define OS_WINDOWS 1
 #else
     #error unsupported OS
 #endif // OS_...
 
+#ifndef OS_LINUX
+    #define OS_LINUX 0
+#endif
+#ifndef OS_MACOS
+    #define OS_MACOS 0
+#endif
 #ifndef OS_WINDOWS
     #define OS_WINDOWS 0
 #endif
  
 
-#if defined(_MSC_VER)
+#if defined(__clang__)
+    #define COMPILER_CLANG 1
+#elif defined(__GNUC__)
+    #define COMPILER_GCC 1
+#elif defined(_MSC_VER)
     #define COMPILER_MSVC 1
     #if !OS_WINDOWS
         #error not sure how we got here, but MSVC on a non-Windows OS is unsupported
-    #endif // !OS_WINDOWS
+    #endif
 #else
     #error unsupported compiler
 #endif // COMPILER_...
 
+#ifndef COMPILER_CLANG
+    #define COMPILER_CLANG 0
+#endif
+#ifndef COMPILER_GCC
+    #define COMPILER_GCC 0
+#endif
 #ifndef COMPILER_MSVC
     #define COMPILER_MSVC 0
+#endif
+
+
+#if COMPILER_CLANG
+    #if __has_feature(address_sanitizer)
+        #define BUILD_ASAN 1
+    #endif
+#elif COMPILER_GCC || COMPILER_MSVC
+    #ifdef __SANITIZE_ADDRESS__
+        #define BUILD_ASAN 1
+    #endif
+#endif // COMPILER_...
+
+#ifndef BUILD_ASAN
+    #define BUILD_ASAN 0
+#endif
+#ifndef BUILD_DEBUG
+    #define BUILD_DEBUG 0
 #endif
 
 

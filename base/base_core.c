@@ -1,6 +1,6 @@
 static void _err(char *file, usize line, const char *func, char *s) {
     fprintf(stderr, "error: %s\n", s);
-    #ifdef BUILD_DEBUG
+    #if BUILD_DEBUG
         #if OS_WINDOWS
             char buf[2048] = {0};
             snprintf(buf, 2047, "error: %s\n%s:%zu:%s(): error first returned here\n", s, file, line, func);
@@ -30,7 +30,7 @@ static void _errf(char *file, usize line, const char *func, char *fmt, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
-    #ifdef BUILD_DEBUG
+    #if BUILD_DEBUG
         fprintf(stderr, "%s:%zu:%s(): error first returned here\n", file, line, func);
     #else
         discard(file); discard(line); discard(func);
@@ -43,9 +43,21 @@ static inline usize _next_power_of_2(usize n) {
     return result;
 }
 
+static inline void _array_push(Arena *arena, Array_void *array, void *item, usize size) {
+    Slice_void slice = { .ptr = item, .len = 1 };
+    _array_push_slice(arena, array, &slice, size);
+}
+
+static inline void _array_push_assume_capacity(Array_void *array, void *item, usize size) {
+    usize new_len = array->len + 1;
+    if (new_len > array->cap) unreachable;
+    memmove((u8 *)array->ptr + (array->len * size), item, size);
+    array->len = new_len;
+}
+
 static void _array_push_slice(Arena *arena, Array_void *array, Slice_void *slice, usize size) {
     usize new_len = array->len + slice->len;
-    if (new_len >= array->cap) {
+    if (new_len > array->cap) {
         usize new_cap = _next_power_of_2(new_len);
         _arena_realloc_array(arena, array, new_cap, size);
         if (array->cap == 0) return;
@@ -54,7 +66,9 @@ static void _array_push_slice(Arena *arena, Array_void *array, Slice_void *slice
     array->len = new_len;
 }
 
-static inline void _array_push(Arena *arena, Array_void *array, void *item, usize size) {
-    Slice_void slice = { .ptr = item, .len = 1 };
-    _array_push_slice(arena, array, &slice, size);
+static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *slice, usize size) {
+    usize new_len = array->len + slice->len;
+    if (new_len > array->cap) unreachable;
+    memmove((u8 *)array->ptr + (array->len * size), slice->ptr, slice->len * size);
+    array->len = new_len;
 }
