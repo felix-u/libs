@@ -3,7 +3,7 @@ structdef(String8) {
     usize len; 
 };
 
-#define string8(s) (String){ .ptr = (u8 *)s, .len = sizeof(s) - 1 }
+#define string8(s) (String8){ .ptr = (u8 *)s, .len = sizeof(s) - 1 }
 #define string_fmt(s) (int)(s).len, (s).ptr
 #define cstring_printf(arena_ptr, fmt, ...)\
     (char *)(string8_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)

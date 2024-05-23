@@ -1,12 +1,23 @@
 static force_inline V2 v2(f32 x, f32 y) { return (V2){ .x = x, .y = y }; }
 
+static force_inline V2 v2_add(V2 a, V2 b) { return v2(a.x + b.x, a.y + b.y); }
+
 static force_inline V2 v2_div(V2 a, V2 b) { return v2(a.x / b.x, a.y / b.y); }
 
 static force_inline bool v2_eql(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
 
+static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
+    V2 add = v2_scale(v2_sub(b, a), amount);
+    return v2_add(a, add);
+}
+
 static force_inline V2 v2_mul(V2 a, V2 b) { return v2(a.x * b.x, a.y * b.y); }
 
 static force_inline V2 v2_reciprocal(V2 v) { return v2(1.f / v.x, 1.f / v.y); }
+
+static force_inline V2 v2_scale(V2 v, f32 s) { return v2(v.x * s, v.y * s); }
+
+static force_inline V2 v2_sub(V2 a, V2 b) { return v2(a.x - b.x, a.y - b.y); }
 
 static force_inline V3 v3(f32 x, f32 y, f32 z) { return (V3){ .x = x, .y = y, .z = z }; }
 

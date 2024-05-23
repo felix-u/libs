@@ -57,10 +57,14 @@ uniondef(M4) {
 #define vector_pi_f32 3.14159265358979f
 
 static force_inline V2   v2(f32 x, f32 y); 
+static force_inline V2   v2_add(V2 a, V2 b);
 static force_inline V2   v2_div(V2 a, V2 b); 
 static force_inline bool v2_eql(V2 a, V2 b); 
+static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
 static force_inline V2   v2_mul(V2 a, V2 b);
 static force_inline V2   v2_recipocal(V2 v);
+static force_inline V2   v2_scale(V2 v, f32 s);
+static force_inline V2   v2_sub(V2 a, V2 b);
 
 static force_inline V3  v3(f32 x, f32 y, f32 z); 
 static force_inline V3  v3_add(V3 a, V3 b); 
