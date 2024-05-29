@@ -7,19 +7,19 @@
 
 
 #if COMPILER_CLANG
-    #define assume(expr) __builtin_assume(expr)
+    #define builtin_assume(expr) __builtin_assume(expr)
     #define breakpoint __builtin_debugtrap()
     #define builtin_unreachable __builtin_unreachable()
     #define force_inline inline __attribute__((always_inline))
 
 #elif COMPILER_GCC
-    #define assume(expr) { if (!(expr)) unreachable; }
+    #define builtin_assume(expr) { if (!(expr)) unreachable; }
     #define breakpoint __builtin_trap()
     #define builtin_unreachable __builtin_unreachable()
     #define force_inline inline __attribute__((always_inline))
 
 #elif COMPILER_MSVC
-    #define assume(expr) __assume(expr)
+    #define builtin_assume(expr) __assume(expr)
     #define breakpoint __debugbreak()
     #define builtin_unreachable assume(false)
     #define force_inline inline __forceinline
@@ -28,8 +28,10 @@
 
 
 #if BUILD_DEBUG
+    #define assume(expr) { if(!(expr)) unreachable; }
     #define unreachable panic("reached unreachable code")
 #else
+    #define assume(expr) builtin_assume(expr)
     #define unreachable builtin_unreachable
 #endif // BUILD_DEBUG
 
@@ -88,11 +90,17 @@ typedef Array(void) Array_void;
     typedef Array(Name) Array_##Name; \
     union Name
 
-#define err(s) _err(__FILE__, __LINE__, __func__, s)
-static void _err(char *file, usize line, const char *func, char *s);
+#define err(s) log_internal(stderr, "error: " s)
+#define errf(fmt, ...) logf_internal(stderr, "error: " fmt, __VA_ARGS__)
 
-#define errf(fmt, ...) _errf(__FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
-static void _errf(char *file, usize line, const char *func, char *fmt, ...);
+#define log_info(s) log_internal(stdout, "info: " s)
+#define logf_info(fmt, ...) logf_internal(stdout, "info: " fmt, __VA_ARGS__)
+
+#define log_internal(out, s) _log_internal(out, __FILE__, __LINE__, __func__, s)
+static void _log_internal(FILE *out, char *file, usize line, const char *func, char *s);
+
+#define logf_internal(out, fmt, ...) _logf_internal(out, __FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
+static void _logf_internal(FILE *out, char *file, usize line, const char *func, char *fmt, ...);
 
 #define panic(s) { err(s); breakpoint; exit(1); }
 #define panicf(fmt, ...) { errf(fmt, __VA_ARGS__); breakpoint; exit(1); }
@@ -100,6 +108,7 @@ static void _errf(char *file, usize line, const char *func, char *fmt, ...);
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
+#define slice_range(slice, beg, end) { .ptr = (slice).ptr + beg, .len = end }
 #define slice_remove(slice_ptr, idx) (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]
 #define slice_size(slice) ((slice).len * sizeof(*((slice).ptr)))
 

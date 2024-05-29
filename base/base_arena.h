@@ -30,7 +30,8 @@ static void _arena_realloc_array(Arena *arena, Array_void *array, usize cap, usi
 static Arena_Temp arena_temp_begin(Arena *arena);
 static void       arena_temp_end(Arena_Temp arena_temp);
 
-#ifdef BUILD_ASAN
+// TODO: why no vork on clang?
+#if BUILD_ASAN && !COMPILER_CLANG
     #define asan_poison_memory_region(addr, size)   __asan_poison_memory_region(addr, size)
     #define asan_unpoison_memory_region(addr, size) __asan_unpoison_memory_region(addr, size)
     #include <sanitizer/asan_interface.h>

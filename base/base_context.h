@@ -34,7 +34,7 @@
         #error not sure how we got here, but MSVC on a non-Windows OS is unsupported
     #endif
 #else
-    #error unsupported compiler
+    #define COMPILER_STD
 #endif // COMPILER_...
 
 #ifndef COMPILER_CLANG
