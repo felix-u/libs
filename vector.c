@@ -33,6 +33,8 @@ static inline V3 v3_cross(V3 a, V3 b) {
 
 static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
+static force_inline bool v3_eql(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
+
 static force_inline V3 v3_forward_from_view(M4 view) {
     return v3(-view.elements[0][2], -view.elements[1][2], -view.elements[2][2]);
 }
@@ -40,6 +42,11 @@ static force_inline V3 v3_forward_from_view(M4 view) {
 static inline f32 v3_len(V3 v) { return sqrtf(v3_len_squared(v)); }
 
 static inline f32 v3_len_squared(V3 v) { return v3_dot(v, v); }
+
+static inline V3 v3_lerp(V3 a, V3 b, f32 amount) {
+    V3 add = v3_scale(v3_sub(b, a), amount);
+    return v3_add(a, add);
+}
 
 static force_inline V3 v3_neg(V3 v) { return v3(-v.x, -v.y, -v.z); }
 
