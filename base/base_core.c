@@ -1,32 +1,41 @@
 static void _log_internal(FILE *out, char *file, usize line, const char *func, char *s) {
-    fprintf(out, "%s\n", s);
-    #if BUILD_DEBUG
-        #if OS_WINDOWS
-            char buf[2048] = {0};
-            snprintf(buf, 2047, "%s\n%s:%zu:%s(): first logged here\n", s, file, line, func);
-            OutputDebugStringA(buf);
-        #endif // OS_WINDOWS
-        fprintf(out, "%s:%zu:%s(): first logged here\n", file, line, func);
-    #else
-        discard(file); discard(line); discard(func);
-    #endif // BUILD_DEBUG
+    _logf_internal(out, file, line, func, "%s", s);
 }
 
 static void _logf_internal(FILE *out, char *file, usize line, const char *func, char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
+
+    #if OS_EMSCRIPTEN
+        char *log_string = 0;
+        char buf[2048] = {0};
+
+        #if BUILD_DEBUG
+            int move_along = vsnprintf(buf, 2047, fmt, args);
+            snprintf(buf + move_along, 2047 - move_along, "\n%s:%zu:%s(): first logged here\n", file, line, func);
+            log_string = buf;
+        #else
+            Arena temp = { .mem = buf, .cap = 2047 };
+            log_string = string8_printf(&temp, "%s", args).ptr;
+        #endif // BUILD_DEBUG
+
+        va_end(args);
+        emscripten_console_log(log_string);
+        return;
+    #endif // OS_EMSCRIPTEN
+
     vfprintf(out, fmt, args);
 
-    #if defined(BUILD_DEBUG) && OS_WINDOWS
+    #if OS_WINDOWS && BUILD_DEBUG
         char buf[2048] = {0};
         int move_along = vsnprintf(buf, 2047, fmt, args);
         snprintf(buf + move_along, 2047 - move_along, "\n%s:%zu:%s(): first logged here\n", file, line, func);
         OutputDebugStringA(buf);
-    #endif // BUILD_DEBUG && OS_WINDOWS
+    #endif // OS_WINDOWS && BUILD_DEBUG
 
     va_end(args);
-    fprintf(out, "\n");
 
+    fprintf(out, "\n");
     #if BUILD_DEBUG
         fprintf(out, "%s:%zu:%s(): first logged here\n", file, line, func);
     #else
@@ -68,4 +77,11 @@ static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *sli
     assume(new_len <= array->cap);
     memmove((u8 *)array->ptr + (array->len * size), slice->ptr, slice->len * size);
     array->len = new_len;
+}
+
+static force_inline u32 byte_swap_u32(u32 bytes) {
+    return ((bytes             ) << 24) |
+           ((bytes & 0x0000ff00) <<  8) |
+           ((bytes & 0x00ff0000) >>  8) |
+           ((bytes             ) >> 24);
 }

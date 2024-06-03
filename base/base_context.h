@@ -3,7 +3,9 @@
 #ifndef BASE_CONTEXT_CUSTOM
 
 
-#if defined(__linux__) || defined(__gnu_linux__)
+#if defined(__EMSCRIPTEN__)
+    #define OS_EMSCRIPTEN 1
+#elif defined(__linux__) || defined(__gnu_linux__)
     #define OS_LINUX 1
 #elif defined(__APPLE__) && defined(__MACH__)
     #define OS_MACOS
@@ -13,6 +15,9 @@
     #error unsupported OS
 #endif // OS_...
 
+#ifndef OS_EMSCRIPTEN
+    #define OS_EMSCRIPTEN 0
+#endif
 #ifndef OS_LINUX
     #define OS_LINUX 0
 #endif

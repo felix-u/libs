@@ -1,9 +1,4 @@
-// link: gdi32
-// link: user32
-// include: windows.h
-// include: windowsx.h
-
-structdef(Gui) {
+structdef(Gfx) {
     char *name; 
     int width, height, scale, fps;
     u32 *pixels, *screen_buffer;
@@ -15,50 +10,55 @@ structdef(Gui) {
     bool last_mouse_right_down, mouse_right_down;
     bool key_down[256];
 
-    HWND handle;
-    LARGE_INTEGER ticks_per_second;
-    LARGE_INTEGER last_tick_count, tick_count;
+    #if OS_WINDOWS
+        HWND handle;
+        LARGE_INTEGER ticks_per_second;
+        LARGE_INTEGER last_tick_count, tick_count;
+    #endif // OS
 };
 
-structdef(Gui_V2) { int x, y; };
-static force_inline Gui_V2 gui_v2_scale(Gui_V2 v, int s) { return (Gui_V2){ v.x * s, v.y * s }; }
+structdef(Gfx_V2) { int x, y; };
+static force_inline Gfx_V2 gfx_v2_scale(Gfx_V2 v, int s) { return (Gfx_V2){ v.x * s, v.y * s }; }
 
-uniondef(Gui_Rect) {  
+uniondef(Gfx_Rect) {  
     struct { int x, y, width, height; };
-    struct { Gui_V2 pos, dim; };
+    struct { Gfx_V2 pos, dim; };
 };
 
-static Gui g_gui;
+#define gfx_set_palette(palette) g_palette = palette
 
-static u32 *g_palette;
-#define gui_set_palette(palette) g_palette = palette
+// platform-specific implementation
+static              Gfx  *gfx_create(Gfx gfx);
+static              void  gfx_get_input(void);
+static              void  gfx_main_loop(void (*user_loop_fn)(void));
+static              bool  gfx_render(void);
+static force_inline u32   gfx_rgb(u32 rgb);
+static              void  gfx_update_t_delta(void);
 
-static Gui  *gui_create(Gui gui);
-static void  gui_update_delta_time(void);
-static void  gui_upscale_pixels_to_buf_(void);
-static bool  gui_render(void);
-static bool  gui_bounds_check(Gui_Rect *rect);
-static void  gui_draw_rect_no_bounds_check(Gui_Rect rect, u32 colour);
-static void  gui_draw_rect(Gui_Rect rect, u32 colour);
-static void  gui_draw_rect_palette(Gui_Rect rect, usize palette_i);
-static void  gui_draw_sprite_no_bounds_check(u32 *sprite, Gui_V2 dim, Gui_Rect area);
-static void  gui_draw_sprite_palette_no_bounds_check(u32 *sprite, Gui_V2 dim, Gui_Rect area);
-static void  gui_draw_sprite(u32 *sprite, Gui_V2 dim, Gui_Rect area);
-static void  gui_draw_sprite_palette(u32 *sprite, Gui_V2 dim, Gui_Rect area);
-static void  gui_draw_ascii_3x5(String8 ascii, Gui_V2 pos, u32 colour);
-static void  gui_draw_ascii_3x5_palette(String8 ascii, Gui_V2 pos, u32 palette_i);
-static void  gui_draw_ascii_char_3x5(u8 c, Gui_V2 pos, u32 colour);
-static void  gui_draw_ascii_char_3x5_no_bounds_check(u8 c, Gui_Rect area, u32 colour);
-static void  gui_clear(void);
-static void  gui_clear_colour(u32 colour);
-static void  gui_clear_palette(usize palette_i);
-static bool  gui_is_point_in_rect(Gui_V2 point, Gui_Rect rect);
+// common implementation
+static bool  gfx_bounds_check(Gfx_Rect *rect);
+static void  gfx_clear(void);
+static void  gfx_clear_colour(u32 colour);
+static void  gfx_clear_palette(usize palette_i);
+static void  gfx_draw_ascii_3x5(String8 ascii, Gfx_V2 pos, u32 colour);
+static void  gfx_draw_ascii_3x5_palette(String8 ascii, Gfx_V2 pos, u32 palette_i);
+static void  gfx_draw_ascii_char_3x5(u8 c, Gfx_V2 pos, u32 colour);
+static void  gfx_draw_ascii_char_3x5_no_bounds_check(u8 c, Gfx_Rect area, u32 colour);
+static void  gfx_draw_rect(Gfx_Rect rect, u32 colour);
+static void  gfx_draw_rect_no_bounds_check(Gfx_Rect rect, u32 colour);
+static void  gfx_draw_rect_palette(Gfx_Rect rect, usize palette_i);
+static void  gfx_draw_sprite(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
+static void  gfx_draw_sprite_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
+static void  gfx_draw_sprite_palette(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
+static void  gfx_draw_sprite_palette_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
+static bool  gfx_is_point_in_rect(Gfx_V2 point, Gfx_Rect rect);
+static void  gfx_upscale_pixels_to_buf_(void);
 
-#define gui_draw_ascii_3x5_loop(action) {\
+#define gfx_draw_ascii_3x5_loop(action) {\
     int left = pos.x;\
-    Gui_V2 pos_add = {0};\
+    Gfx_V2 pos_add = {0};\
     for (usize i = 0; i < ascii.len; i += 1, pos.x += pos_add.x, pos.y += pos_add.y) {\
-        pos_add = (Gui_V2){ .x = 4 };\
+        pos_add = (Gfx_V2){ .x = 4 };\
         u8 c = ascii.ptr[i];\
         switch (c) {\
             case ' ': continue; break;\
@@ -70,11 +70,11 @@ static bool  gui_is_point_in_rect(Gui_V2 point, Gui_Rect rect);
     }\
 }
 
-#define gui_draw_no_bounds_check_loop(action) {\
+#define gfx_draw_no_bounds_check_loop(action) {\
     int x_offset = dim.x - area.width;\
     int y_offset = dim.y - area.height;\
     int sprite_row_i = (y_offset * dim.x) + x_offset;\
-    int win_row_i = area.y * g_gui.width + area.x;\
+    int win_row_i = area.y * g_gfx.width + area.x;\
     for (int y_i = 0; y_i < area.height;) {\
         for (int x_i = 0; x_i < area.width; x_i += 1) {\
             int sprite_i = sprite_row_i + x_i;\
@@ -83,12 +83,12 @@ static bool  gui_is_point_in_rect(Gui_V2 point, Gui_Rect rect);
             action;\
         }\
         y_i += 1;\
-        win_row_i += g_gui.width;\
+        win_row_i += g_gfx.width;\
         sprite_row_i += dim.x;\
     }\
 }
 
-static bool gui_font_3x5[128][15] = {
+static bool gfx_font_3x5[128][15] = {
     [' '] = {
         0, 0, 0,
         0, 0, 0,

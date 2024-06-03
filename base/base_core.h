@@ -1,9 +1,12 @@
-#if OS_WINDOWS
+#if OS_EMSCRIPTEN
+    #include "emscripten/console.h"
+    #undef unreachable
+#elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
     #include "windows.h"
     #define _CRT_SECURE_NO_WARNINGS
-#endif // OS_...
+#endif // OS
 
 
 #if COMPILER_CLANG
@@ -57,6 +60,7 @@ typedef   double f64;
 
 typedef unsigned char uchar;
 typedef        size_t usize;
+typedef      intptr_t isize;
 typedef     uintptr_t  uptr;
 typedef      intptr_t  iptr;
 
@@ -143,3 +147,5 @@ static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *sli
     x = min_((min_val), (x));\
     x = max_((max_val), (x));\
 }
+
+static force_inline u32 byte_swap_u32(u32 bytes);
