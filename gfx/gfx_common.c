@@ -43,23 +43,23 @@ static void gfx_clear_palette(usize palette_i) {
     gfx_clear_colour(g_palette[palette_i]);
 }
 
-static void gfx_draw_ascii_3x5(String8 ascii, Gfx_V2 pos, u32 colour) {
-    gfx_draw_ascii_3x5_loop(gfx_draw_ascii_char_3x5(c, pos, colour));
+static void gfx_draw_ascii_3x5(String8 ascii, int x, int y, u32 colour) {
+    gfx_draw_ascii_3x5_loop(gfx_draw_ascii_char_3x5(c, x, y, colour));
 }
 
-static void gfx_draw_ascii_3x5_palette(String8 ascii, Gfx_V2 pos, u32 palette_i) {
-    gfx_draw_ascii_3x5_loop(gfx_draw_ascii_char_3x5(c, pos, g_palette[palette_i]));
+static void gfx_draw_ascii_3x5_palette(String8 ascii, int x, int y, u32 palette_i) {
+    gfx_draw_ascii_3x5_loop(gfx_draw_ascii_char_3x5(c, x, y, g_palette[palette_i]));
 }
 
-static void gfx_draw_ascii_char_3x5(u8 c, Gfx_V2 pos, u32 colour) {
-    Gfx_Rect area = { .pos = pos, .dim = { 3, 5 } };
+static void gfx_draw_ascii_char_3x5(u8 c, int x, int y, u32 colour) {
+    Gfx_Rect area = { .x = x, .y = y, .width = 3, .height = 5 };
     if (!gfx_bounds_check(&area)) return;
     gfx_draw_ascii_char_3x5_no_bounds_check(c, area, colour);
 }
 
 static void gfx_draw_ascii_char_3x5_no_bounds_check(u8 c, Gfx_Rect area, u32 colour) {
-    Gfx_V2 dim = { 3, 5 };
-    bool *sprite = gfx_font_3x5[c];
+    int width = 3, height = 5;
+    const bool *sprite = gfx_font_3x5[c];
     gfx_draw_no_bounds_check_loop(g_gfx.pixels[win_i] = colour);
 }
 
@@ -88,27 +88,27 @@ static void gfx_draw_rect_palette(Gfx_Rect rect, usize palette_i) {
     gfx_draw_rect_no_bounds_check(rect, g_palette[palette_i]);
 }
 
-static void gfx_draw_sprite(u32 *sprite, Gfx_V2 dim, Gfx_Rect area) {
+static void gfx_draw_sprite(u32 *sprite, int width, int height, Gfx_Rect area) {
     if (!gfx_bounds_check(&area)) return;
-    gfx_draw_sprite_no_bounds_check(sprite, dim, area);
+    gfx_draw_sprite_no_bounds_check(sprite, width, height, area);
 }
 
-static void gfx_draw_sprite_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area) {
+static void gfx_draw_sprite_no_bounds_check(u32 *sprite, int width, int height, Gfx_Rect area) {
     gfx_draw_no_bounds_check_loop(g_gfx.pixels[win_i] = sprite[sprite_i]);
 }
 
-static void gfx_draw_sprite_palette(u32 *sprite, Gfx_V2 dim, Gfx_Rect area) {
+static void gfx_draw_sprite_palette(u32 *sprite, int width, int height, Gfx_Rect area) {
     if (!gfx_bounds_check(&area)) return;
-    gfx_draw_sprite_palette_no_bounds_check(sprite, dim, area);
+    gfx_draw_sprite_palette_no_bounds_check(sprite, width, height, area);
 }
 
-static void gfx_draw_sprite_palette_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area) {
+static void gfx_draw_sprite_palette_no_bounds_check(u32 *sprite, int width, int height, Gfx_Rect area) {
     gfx_draw_no_bounds_check_loop(g_gfx.pixels[win_i] = g_palette[sprite[sprite_i]]);
 }
 
-static bool gfx_is_point_in_rect(Gfx_V2 point, Gfx_Rect rect) {
-    if (point.x < rect.x || rect.x + rect.width  < point.x) return false;
-    if (point.y < rect.y || rect.y + rect.height < point.y) return false;
+static bool gfx_is_point_in_rect(int x, int y, Gfx_Rect rect) {
+    if (x < rect.x || rect.x + rect.width  < x) return false;
+    if (y < rect.y || rect.y + rect.height < y) return false;
     return true;
 }
 

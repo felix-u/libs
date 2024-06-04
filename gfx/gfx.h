@@ -17,13 +17,7 @@ structdef(Gfx) {
     #endif // OS
 };
 
-structdef(Gfx_V2) { int x, y; };
-static force_inline Gfx_V2 gfx_v2_scale(Gfx_V2 v, int s) { return (Gfx_V2){ v.x * s, v.y * s }; }
-
-uniondef(Gfx_Rect) {  
-    struct { int x, y, width, height; };
-    struct { Gfx_V2 pos, dim; };
-};
+structdef(Gfx_Rect) { int x, y, width, height; };
 
 #define gfx_set_palette(palette) g_palette = palette
 
@@ -40,30 +34,30 @@ static bool  gfx_bounds_check(Gfx_Rect *rect);
 static void  gfx_clear(void);
 static void  gfx_clear_colour(u32 colour);
 static void  gfx_clear_palette(usize palette_i);
-static void  gfx_draw_ascii_3x5(String8 ascii, Gfx_V2 pos, u32 colour);
-static void  gfx_draw_ascii_3x5_palette(String8 ascii, Gfx_V2 pos, u32 palette_i);
-static void  gfx_draw_ascii_char_3x5(u8 c, Gfx_V2 pos, u32 colour);
+static void  gfx_draw_ascii_3x5(String8 ascii, int x, int y, u32 colour);
+static void  gfx_draw_ascii_3x5_palette(String8 ascii, int x, int y, u32 palette_i);
+static void  gfx_draw_ascii_char_3x5(u8 c, int x, int y, u32 colour);
 static void  gfx_draw_ascii_char_3x5_no_bounds_check(u8 c, Gfx_Rect area, u32 colour);
 static void  gfx_draw_rect(Gfx_Rect rect, u32 colour);
 static void  gfx_draw_rect_no_bounds_check(Gfx_Rect rect, u32 colour);
 static void  gfx_draw_rect_palette(Gfx_Rect rect, usize palette_i);
-static void  gfx_draw_sprite(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
-static void  gfx_draw_sprite_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
-static void  gfx_draw_sprite_palette(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
-static void  gfx_draw_sprite_palette_no_bounds_check(u32 *sprite, Gfx_V2 dim, Gfx_Rect area);
-static bool  gfx_is_point_in_rect(Gfx_V2 point, Gfx_Rect rect);
+static void  gfx_draw_sprite(u32 *sprite, int width, int height, Gfx_Rect area);
+static void  gfx_draw_sprite_no_bounds_check(u32 *sprite, int width, int height, Gfx_Rect area);
+static void  gfx_draw_sprite_palette(u32 *sprite, int width, int height, Gfx_Rect area);
+static void  gfx_draw_sprite_palette_no_bounds_check(u32 *sprite, int width, int height, Gfx_Rect area);
+static bool  gfx_is_point_in_rect(int x, int y, Gfx_Rect rect);
 static void  gfx_upscale_pixels_to_buf_(void);
 
 #define gfx_draw_ascii_3x5_loop(action) {\
-    int left = pos.x;\
-    Gfx_V2 pos_add = {0};\
-    for (usize i = 0; i < ascii.len; i += 1, pos.x += pos_add.x, pos.y += pos_add.y) {\
-        pos_add = (Gfx_V2){ .x = 4 };\
+    int left = x, x_add = 0, y_add = 0;\
+    for (usize i = 0; i < ascii.len; i += 1, x += x_add, y += x_add) {\
+        x_add = 4;\
+        y_add = 0;\
         u8 c = ascii.ptr[i];\
         switch (c) {\
             case ' ': continue; break;\
-            case '\t': pos_add.x = 16; continue; break;\
-            case '\n': pos_add.y = 6; pos.x = left; continue; break;\
+            case '\t': x_add = 16; continue; break;\
+            case '\n': y_add = 6; x = left; continue; break;\
             default: break;\
         }\
         action;\
@@ -71,9 +65,9 @@ static void  gfx_upscale_pixels_to_buf_(void);
 }
 
 #define gfx_draw_no_bounds_check_loop(action) {\
-    int x_offset = dim.x - area.width;\
-    int y_offset = dim.y - area.height;\
-    int sprite_row_i = (y_offset * dim.x) + x_offset;\
+    int x_offset = width - area.width;\
+    int y_offset = height - area.height;\
+    int sprite_row_i = (y_offset * width) + x_offset;\
     int win_row_i = area.y * g_gfx.width + area.x;\
     for (int y_i = 0; y_i < area.height;) {\
         for (int x_i = 0; x_i < area.width; x_i += 1) {\
@@ -84,11 +78,11 @@ static void  gfx_upscale_pixels_to_buf_(void);
         }\
         y_i += 1;\
         win_row_i += g_gfx.width;\
-        sprite_row_i += dim.x;\
+        sprite_row_i += width;\
     }\
 }
 
-static bool gfx_font_3x5[128][15] = {
+static const bool gfx_font_3x5[128][15] = {
     [' '] = {
         0, 0, 0,
         0, 0, 0,
