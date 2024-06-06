@@ -106,15 +106,19 @@ static void _log_internal(FILE *out, char *file, usize line, const char *func, c
 #define logf_internal(out, fmt, ...) _logf_internal(out, __FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
 static void _logf_internal(FILE *out, char *file, usize line, const char *func, char *fmt, ...);
 
-#define panic(s) { err(s); breakpoint; exit(1); }
-#define panicf(fmt, ...) { errf(fmt, __VA_ARGS__); breakpoint; exit(1); }
+#define panic(s) { err(s); breakpoint; abort(); }
+#define panicf(fmt, ...) { errf(fmt, __VA_ARGS__); breakpoint; abort(); }
 
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
-#define slice_range(slice, beg, end) { .ptr = (slice).ptr + beg, .len = end }
+#define slice_range(slice, beg, end) { .ptr = (void *)((uptr)(slice).ptr + (beg)), .len = (end) - (beg) }
 #define slice_remove(slice_ptr, idx) (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]
 #define slice_size(slice) ((slice).len * sizeof(*((slice).ptr)))
+
+#define slice_split_scalar(slice_ptr, scalar_ptr, capture_ptr) \
+    slice_split_scalar_explicit((Slice_void *)(slice_ptr), scalar_ptr, (Slice_void *)capture_ptr, sizeof(*((slice_ptr)->ptr)))
+static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_void *capture, usize size);
 
 #define array_from_slice(s) { .ptr = (s).ptr, .len = (s).len, .cap = (s).len }
 

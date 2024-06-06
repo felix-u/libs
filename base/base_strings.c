@@ -1,9 +1,6 @@
 static bool string8_eql(String8 s1, String8 s2) {
     if (s1.len != s2.len) return false;
-    for (usize i = 0; i < s1.len; i += 1) {
-        if (s1.ptr[i] != s2.ptr[i]) return false;
-    }
-    return true;
+    return memcmp(s1.ptr, s2.ptr, s1.len) == 0;
 }
 
 static String8 string8_from_cstring(char *s) {
