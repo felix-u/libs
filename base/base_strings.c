@@ -38,13 +38,15 @@ static String8 string8_from_int_base(Arena *arena, usize _num, u8 base) {
     return str;
 }
 
-static String8 string8_printf(Arena *arena, char *fmt, ...) {
+static String8 string8_printf(Arena *arena, usize alloc_size, char *fmt, ...) {
+    printf("ok\n");
+    assume(alloc_size > 1);
+
     va_list args;
     va_start(args, fmt);
 
-    usize buf_len = 4 * strlen(fmt);
-    char *buf = arena_alloc(arena, buf_len + 1, sizeof(char));
-    int printed_len = vsnprintf(buf, buf_len, fmt, args); 
+    char *buf = arena_alloc(arena, alloc_size, sizeof(char));
+    int printed_len = vsnprintf(buf, alloc_size - 1, fmt, args); 
 
     va_end(args);
 
@@ -62,7 +64,7 @@ static String8 string8_range(String8 s, usize beg, usize end) {
 static usize decimal_from_hex_string8(String8 s) {
     usize result = 0, magnitude = s.len;
     for (usize i = 0; i < s.len; i += 1, magnitude -= 1) {
-        usize hex_digit = decimal_from_hex_char_table[s.ptr[i]];
+        usize hex_digit = decimal_from_hex_digit_table[s.ptr[i]];
         for (usize j = 1; j < magnitude; j += 1) hex_digit *= 16;
         result += hex_digit;
     }

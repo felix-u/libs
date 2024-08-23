@@ -14,7 +14,7 @@ static void arena_align(Arena *arena, usize align) {
 static void *arena_alloc(Arena *arena, usize cap, usize size) {
     usize num_bytes = cap * size;
     arena_align(arena, arena_default_alignment);
-    if (arena->offset + num_bytes >= arena->cap) panic("allocation failure");
+    if (arena->offset + num_bytes > arena->cap) panic("allocation failure");
 
     void *mem = (u8 *)arena->mem + arena->offset;
     arena->last_offset = arena->offset;
