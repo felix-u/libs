@@ -1,12 +1,10 @@
-structdef(String8) { 
-    u8 *ptr; 
-    usize len; 
-};
+structdef(Str8) { u8 *ptr; usize len; };
 
-#define string8(s) (String8){ .ptr = (u8 *)s, .len = sizeof(s) - 1 }
-#define string_fmt(s) (int)(s).len, (s).ptr
-#define cstring_printf(arena_ptr, fmt, ...)\
-    (char *)(string8_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
+#define str8c(s)  { .ptr = (u8 *)s, .len = sizeof(s) - 1 }
+#define str8(s) (Str8){ .ptr = (u8 *)s, .len = sizeof(s) - 1 }
+#define str_fmt(s) (int)(s).len, (s).ptr
+#define cstr_printf(arena_ptr, fmt, ...)\
+    (char *)(str8_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
 
 #define _for_valid_hex_digit(action)\
     action('0', 0x0) action('1', 0x1) action('2', 0x2) action('3', 0x3)\
@@ -26,12 +24,12 @@ const b8 is_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
 
-static char   *cstring_from_string8(Arena *arena, String8 s); 
+static char *cstr_from_str8(Arena *arena, Str8 s); 
 
-static bool    string8_eql(String8 s1, String8 s2); 
-static String8 string8_from_cstring(char *s); 
-static String8 string8_from_int_base(Arena *arena, usize _num, u8 base); 
-static String8 string8_printf(Arena *arena, usize alloc_size, char *fmt, ...);
-static String8 string8_range(String8 s, usize beg, usize end); 
+static bool str8_eql(Str8 s1, Str8 s2); 
+static Str8 str8_from_cstring(char *s); 
+static Str8 str8_from_int_base(Arena *arena, usize _num, u8 base); 
+static Str8 str8_printf(Arena *arena, usize alloc_size, char *fmt, ...);
+static Str8 str8_range(Str8 s, usize beg, usize end); 
 
-static usize decimal_from_hex_string8(String8 s); 
+static usize decimal_from_hex_str8(Str8 s); 

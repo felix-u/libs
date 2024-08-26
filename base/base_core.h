@@ -91,7 +91,7 @@ typedef Array(void) Array_void;
 
 #define discard(expression) (void)(expression)
 
-#define enumdef(Name, type) typedef type Name; enum Name
+#define enumdef(Name, type) typedef type Name_##type; typedef enum Name Name; enum Name
 
 #define structdef(Name) \
     typedef struct Name Name; \

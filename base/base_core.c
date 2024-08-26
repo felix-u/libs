@@ -7,20 +7,20 @@ static void _logf_internal(FILE *out, char *file, usize line, const char *func, 
     va_start(args, fmt);
 
     #if OS_EMSCRIPTEN
-        char *log_string = 0;
+        char *log_str = 0;
         char buf[2048] = {0};
 
         #if BUILD_DEBUG
             int move_along = vsnprintf(buf, 2047, fmt, args);
             snprintf(buf + move_along, 2047 - move_along, "\n%s:%zu:%s(): first logged here\n", file, line, func);
-            log_string = buf;
+            log_str = buf;
         #else
             Arena temp = { .mem = buf, .cap = 2047 };
-            log_string = string8_printf(&temp, "%s", args).ptr;
+            log_str = str8_printf(&temp, "%s", args).ptr;
         #endif // BUILD_DEBUG
 
         va_end(args);
-        emscripten_console_log(log_string);
+        emscripten_console_log(log_str);
         return;
     #endif // OS_EMSCRIPTEN
 
@@ -51,10 +51,10 @@ static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_v
     usize slice_len_bytes = slice->len * size;
     for (usize pos = 0; pos + size < slice_len_bytes;) {
         void *this = (char *)slice->ptr + pos;
-        String8 this_bytes = { .ptr = this, .len = size };
-        String8 scalar_bytes = { .ptr = scalar, .len = size };
+        Str8 this_bytes = { .ptr = this, .len = size };
+        Str8 scalar_bytes = { .ptr = scalar, .len = size };
 
-        if (!string8_eql(this_bytes, scalar_bytes)) {
+        if (!str8_eql(this_bytes, scalar_bytes)) {
             pos += size;
             if (pos + size < slice_len_bytes) continue;
             pos = slice_len_bytes;

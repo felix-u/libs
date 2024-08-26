@@ -1,25 +1,25 @@
-static bool string8_eql(String8 s1, String8 s2) {
+static bool str8_eql(Str8 s1, Str8 s2) {
     if (s1.len != s2.len) return false;
     return memcmp(s1.ptr, s2.ptr, s1.len) == 0;
 }
 
-static String8 string8_from_cstring(char *s) {
-    if (s == NULL) return (String8){ 0 };
+static Str8 str8_from_cstr(char *s) {
+    if (s == NULL) return (Str8){ 0 };
     usize len = 0;
     while (s[len] != '\0') len += 1;
-    return (String8){ .ptr = (u8 *)s, .len = len };
+    return (Str8){ .ptr = (u8 *)s, .len = len };
 }
 
-static char *cstring_from_string8(Arena *arena, String8 s) {
-    char *cstring = arena_alloc(arena, s.len + 1, sizeof(char));
-    for (usize i = 0; i < s.len; i += 1) cstring[i] = s.ptr[i];
-    cstring[s.len] = '\0';
-    return cstring;
+static char *cstr_from_str8(Arena *arena, Str8 s) {
+    char *cstr = arena_alloc(arena, s.len + 1, sizeof(char));
+    for (usize i = 0; i < s.len; i += 1) cstr[i] = s.ptr[i];
+    cstr[s.len] = '\0';
+    return cstr;
 }
 
 // Only bases <= 10
-static String8 string8_from_int_base(Arena *arena, usize _num, u8 base) {
-    String8 str = {0};
+static Str8 str8_from_int_base(Arena *arena, usize _num, u8 base) {
+    Str8 str = {0};
     usize num = _num;
 
     do {
@@ -38,7 +38,7 @@ static String8 string8_from_int_base(Arena *arena, usize _num, u8 base) {
     return str;
 }
 
-static String8 string8_printf(Arena *arena, usize alloc_size, char *fmt, ...) {
+static Str8 str8_printf(Arena *arena, usize alloc_size, char *fmt, ...) {
     printf("ok\n");
     assume(alloc_size > 1);
 
@@ -51,17 +51,17 @@ static String8 string8_printf(Arena *arena, usize alloc_size, char *fmt, ...) {
     va_end(args);
 
     buf[printed_len] = 0;
-    return (String8){
+    return (Str8){
         .ptr = (u8 *)buf,
         .len = printed_len,
     };
 }
 
-static String8 string8_range(String8 s, usize beg, usize end) {
-    return (String8){ .ptr = s.ptr + beg, .len = end - beg };
+static Str8 str8_range(Str8 s, usize beg, usize end) {
+    return (Str8){ .ptr = s.ptr + beg, .len = end - beg };
 }
 
-static usize decimal_from_hex_string8(String8 s) {
+static usize decimal_from_hex_str8(Str8 s) {
     usize result = 0, magnitude = s.len;
     for (usize i = 0; i < s.len; i += 1, magnitude -= 1) {
         usize hex_digit = decimal_from_hex_digit_table[s.ptr[i]];
