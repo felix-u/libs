@@ -10,7 +10,7 @@ if not "%release%"=="1"                    set debug=1
 set dir_deps=..\deps
 set include_paths=-I%dir_deps%
 
-set cl_common=cl -nologo -std:c11 %include_paths% 
+set cl_common=cl -nologo -FC -diagnostics:column -std:c11 %include_paths% 
 set clang_common=clang -std=c11 %include_paths%
 set cl_link=-link -incremental:no
 set clang_link=
