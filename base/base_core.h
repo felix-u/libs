@@ -1,11 +1,17 @@
 #if OS_EMSCRIPTEN
     #include "emscripten/console.h"
     #undef unreachable
+
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
     #include "windows.h"
     #define _CRT_SECURE_NO_WARNINGS
+    // TODO(felix): these win32_asserts should probably be in base_gfx once that exists (at the very least, win32_assert_d3d_compile should be)
+    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panicf("win32: %s", GetLastError()); } }
+    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panicf("win32: 0x%X", hr_); } }
+    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panicf("D3D compile:\n%s", err_blob->lpVtbl->GetBufferPointer(err_blob)); } }
+
 #endif // OS
 
 
@@ -34,7 +40,7 @@
     #define builtin_unreachable assume(false)
     #define force_inline inline
 
-#endif // COMPILER_...
+#endif // COMPILER
 
 
 #if BUILD_DEBUG
@@ -45,7 +51,7 @@
     #define unreachable builtin_unreachable
 #endif // BUILD_DEBUG
 
-
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -82,6 +88,7 @@ typedef Slice(void) Slice_void;
 
 #define Array(type) struct { type *ptr; usize len, cap; }
 typedef Array(void) Array_void;
+typedef Array(u8) Array_u8;
 
 #define for_slice(ptr_type, name, slice)\
     for (ptr_type name = slice.ptr; name < slice.ptr + slice.len; name += 1)
@@ -91,7 +98,11 @@ typedef Array(void) Array_void;
 
 #define discard(expression) (void)(expression)
 
-#define enumdef(Name, type) typedef type Name_##type; typedef enum Name Name; enum Name
+#define enumdef(Name, type)\
+    typedef type Name;\
+    typedef Slice(Name) Slice_##Name;\
+    typedef Array(Name) Array_##Name;\
+    enum
 
 #define structdef(Name) \
     typedef struct Name Name; \
@@ -123,6 +134,8 @@ static void _logf_internal(FILE *out, char *file, usize line, const char *func, 
     breakpoint; abort();\
 }
 
+#define slice_copy(arena, dest_ptr, src_ptr)\
+    slice_copy_explicit_bytes((arena), (Slice_void *)(dest_ptr), (Slice_void *)(src_ptr), sizeof(*(dest_ptr)->ptr))
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
@@ -138,7 +151,7 @@ static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_v
 
 #define array_push(arena_ptr, array_ptr, item_ptr) \
     _array_push(arena_ptr, (Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr)))
-static inline void _array_push(struct Arena *arena, Array_void *array, void *item, usize size); 
+static inline void _array_push(struct Arena *arena, Array_void *array, void *item, usize size);
 
 #define array_push_assume_capacity(array_ptr, item_ptr) \
     _array_push_assume_capacity((Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr)))
@@ -151,7 +164,7 @@ static inline void _array_push_assume_capacity(Array_void *array, void *item, us
         (Slice_void *)(slice_ptr),\
         sizeof(*((array_ptr)->ptr))\
     )
-static void _array_push_slice(struct Arena *arena, Array_void *array, Slice_void *slice, usize size); 
+static void _array_push_slice(struct Arena *arena, Array_void *array, Slice_void *slice, usize size);
 
 #define array_push_slice_assume_capacity(array_ptr, slice_ptr) \
     _array_push_slice_assume_capacity((Array_void *)(array_ptr), (Slice_void *)(slice_ptr), sizeof(*((array_ptr)->ptr)))

@@ -43,6 +43,12 @@ static void _logf_internal(FILE *out, char *file, usize line, const char *func, 
     #endif // BUILD_DEBUG
 }
 
+static void slice_copy_explicit_bytes(Arena *arena, Slice_void *dest, Slice_void *src, usize size) {
+    dest->ptr = arena_alloc(arena, src->len, size);
+    memcpy(dest->ptr, src->ptr, src->len * size);
+    dest->len = src->len;
+}
+
 // TODO: simplify. current complexity is due to making valid capture to end of slice if end of slice is hit with no match.
 // I think this makes sense - e.g. when splitting lines of a file, there may not be a newline between the last line and EOF.
 static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_void *capture, usize size) {
