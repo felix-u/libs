@@ -6,10 +6,6 @@ static f32 screen_width, screen_height;
 static f32 mouse_x, mouse_y;
 static bool mouse_left_down, mouse_right_down;
 static bool mouse_left_clicked, mouse_right_clicked;
-static void input_reset(void) {
-    mouse_left_clicked = false;
-    mouse_right_clicked = false;
-}
 
 static D3D_Device_Info d3d_device_create(void) {
     D3D_Device_Info d3d = {0};
@@ -50,20 +46,20 @@ static D3D_Device_Info d3d_device_create(void) {
     return d3d;
 }
 
-static void d3d_render_target_view_resize(D3D_Device_Info *d3d, IDXGISwapChain1 **swapchain, ID3D11RenderTargetView **render_target_view, Dwrite_Ctx *dw_ctx) {
-    if (render_target_view != 0) {
-        vcall(d3d->device_ctx, ClearState);
-        ensure_released_and_null(render_target_view);
+static void d3d_render_target_view_resize(Gfx_Render_Ctx *ctx) {
+    if (ctx->render_target_view != 0) {
+        vcall(ctx->d3d.device_ctx, ClearState);
+        ensure_released_and_null(&ctx->render_target_view);
     }
 
-    ensure_released_and_null(&dw_ctx->brush);
-    ensure_released_and_null(&dw_ctx->render_target);
+    ensure_released_and_null(&ctx->dw_ctx.brush);
+    ensure_released_and_null(&ctx->dw_ctx.render_target);
 
-    win32_assert_hr(vcalla(*swapchain, ResizeBuffers, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0));
+    win32_assert_hr(vcalla(ctx->swapchain, ResizeBuffers, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0));
 
     ID3D11Texture2D *backbuffer = 0;
-    win32_assert_hr(vcalla(*swapchain, GetBuffer, 0, &IID_ID3D11Texture2D, (void **)&backbuffer));
-    win32_assert_hr(vcalla(d3d->device, CreateRenderTargetView, (ID3D11Resource *)backbuffer, 0, render_target_view));
+    win32_assert_hr(vcalla(ctx->swapchain, GetBuffer, 0, &IID_ID3D11Texture2D, (void **)&backbuffer));
+    win32_assert_hr(vcalla(ctx->d3d.device, CreateRenderTargetView, (ID3D11Resource *)backbuffer, 0, &ctx->render_target_view));
 
     IDXGISurface *surface = 0;
     vcalla(backbuffer, QueryInterface, &IID_IDXGISurface, (void **)&surface);
@@ -76,11 +72,11 @@ static void d3d_render_target_view_resize(D3D_Device_Info *d3d, IDXGISwapChain1 
             .usage = D2D1_RENDER_TARGET_USAGE_NONE,
             .minLevel = D2D1_FEATURE_LEVEL_DEFAULT,
         };
-        win32_assert_hr(ID2D1Factory_CreateDxgiSurfaceRenderTarget(dw_ctx->d2_factory, surface, &properties, &dw_ctx->render_target));
+        win32_assert_hr(ID2D1Factory_CreateDxgiSurfaceRenderTarget(ctx->dw_ctx.d2_factory, surface, &properties, &ctx->dw_ctx.render_target));
     }
 
     D2D_COLOR_F draw_colour = { .r = 0, .g = 0, .b = 0, .a = 1.f };
-    win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(dw_ctx->render_target, &draw_colour, 0, &dw_ctx->brush));
+    win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(ctx->dw_ctx.render_target, &draw_colour, 0, &ctx->dw_ctx.brush));
 
     release(surface);
     release(backbuffer);
@@ -98,8 +94,8 @@ static D3D_Shader_Info d3d_shader_compile(ID3D11Device *device, Str8 hlsl) {
     #endif
 
     ID3DBlob *vblob = 0, *pblob = 0;
-    win32_assert_d3d_compile(D3DCompile(hlsl.ptr, hlsl.len, 0, 0, 0, "vs", "vs_5_0", flags, 0, &vblob, &err_blob), err_blob);
-    win32_assert_d3d_compile(D3DCompile(hlsl.ptr, hlsl.len, 0, 0, 0, "ps", "ps_5_0", flags, 0, &pblob, &err_blob), err_blob);
+    win32_assert_d3d_compile(D3DCompile(hlsl.ptr, hlsl.len, 0, 0, 0, "vertex_shader", "vs_5_0", flags, 0, &vblob, &err_blob), err_blob);
+    win32_assert_d3d_compile(D3DCompile(hlsl.ptr, hlsl.len, 0, 0, 0, "pixel_shader", "ps_5_0", flags, 0, &pblob, &err_blob), err_blob);
     win32_assert_hr(vcalla(device, CreateVertexShader, vcall(vblob, GetBufferPointer), vcall(vblob, GetBufferSize), 0, &shader.vertex));
     win32_assert_hr(vcalla(device, CreatePixelShader, vcall(pblob, GetBufferPointer), vcall(pblob, GetBufferSize), 0, &shader.pixel));
 
@@ -274,13 +270,26 @@ static HWND win32_window_create(char *window_name) {
     return window_handle;
 }
 
-static bool win32_window_show(void) {
+static bool win32_window_show(Gfx_Render_Ctx *ctx) {
+    mouse_left_clicked = false;
+    mouse_right_clicked = false;
+
+    f32 current_width = screen_width;
+    f32 current_height = screen_height;
+
     bool stay_running = true;
     for (MSG message = {0}; PeekMessageA(&message, 0, 0, 0, PM_REMOVE);) {
         if (message.message == WM_QUIT) stay_running = false;
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
+
+    if (current_width != screen_width || current_height != screen_height ||
+        ctx->render_target_view == 0 // TODO(felix): do we really need this check?
+    ) {
+        d3d_render_target_view_resize(ctx);
+    }
+
     return stay_running;
 }
 

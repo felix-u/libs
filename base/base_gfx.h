@@ -41,6 +41,13 @@ structdef(Dwrite_Ctx) {
     ID2D1StrokeStyle     *stroke_style;
 };
 
+structdef(Gfx_Render_Ctx) {
+    D3D_Device_Info d3d;
+    Dwrite_Ctx dw_ctx;
+    ID3D11RenderTargetView *render_target_view;
+    IDXGISwapChain1 *swapchain;
+};
+
 // TODO(felix): which of these needs to take into account dpi? update relevant functions
 structdef(Gfx_Rounded_Rect) {
     V4 colour;
@@ -57,7 +64,7 @@ structdef(Vertex) { f32 x, y, r, g, b, a; };
 #define vcalla(struct_ptr, fn_name, ...) (struct_ptr)->lpVtbl->fn_name((struct_ptr), __VA_ARGS__)
 
 static D3D_Device_Info  d3d_device_create(void);
-static            void  d3d_render_target_view_resize(D3D_Device_Info *d3d, IDXGISwapChain1 **swapchain, ID3D11RenderTargetView **render_target_view, Dwrite_Ctx *dw_ctx);
+static            void  d3d_render_target_view_resize(Gfx_Render_Ctx *ctx);
 static D3D_Shader_Info  d3d_shader_compile(ID3D11Device *device, Str8 hlsl);
 static    ID3D11Buffer *d3d_vbuf_create(ID3D11Device *device, usize num_vertices, usize sizeof_vertex);
 
@@ -70,5 +77,5 @@ static void gfx_draw_text(Arena *arena, Dwrite_Ctx *dw_ctx, Str8 str, V4 rect);
 static   V2 gfx_str_dimensions(Arena *arena, Dwrite_Ctx *dw_ctx, Str8 str);
 
 static    HWND win32_window_create(char *window_name);
-static    bool win32_window_show(void);
+static    bool win32_window_show(Gfx_Render_Ctx *ctx);
 static LRESULT win32_window_proc(HWND window, u32 message, WPARAM w, LPARAM l);
