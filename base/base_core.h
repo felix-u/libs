@@ -1,6 +1,5 @@
 #if OS_EMSCRIPTEN
-    #include "emscripten/console.h"
-    #undef unreachable
+    #error "emscripten not yet supported!"
 
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
@@ -8,9 +7,9 @@
     #include "windows.h"
     #define _CRT_SECURE_NO_WARNINGS
     // TODO(felix): these win32_asserts should probably be in base_gfx once that exists (at the very least, win32_assert_d3d_compile should be)
-    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panicf("win32: %s", GetLastError()); } }
-    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panicf("win32: 0x%X", hr_); } }
-    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panicf("D3D compile:\n%s", err_blob->lpVtbl->GetBufferPointer(err_blob)); } }
+    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panicf("win32: %", fmt(u64, GetLastError())); } }
+    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panicf("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } }
+    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panicf("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } }
 
 #endif // OS
 
@@ -30,35 +29,39 @@
 #elif COMPILER_MSVC
     #define builtin_assume(expr) __assume(expr)
     #define breakpoint __debugbreak()
-    #define builtin_unreachable assume(false)
+    #define builtin_unreachable assert(false)
     #define force_inline inline __forceinline
 
 #elif COMPILER_STD
     #include <assert.h>
     #define builtin_assume(expr) assert(expr)
     #define breakpoint builtin_assume(false)
-    #define builtin_unreachable assume(false)
+    #define builtin_unreachable assert(false)
     #define force_inline inline
 
 #endif // COMPILER
 
 
 #if BUILD_DEBUG
-    #define assume(expr) { if(!(expr)) unreachable; }
+    #define assert(expr) { if(!(expr)) unreachable; }
     #define unreachable panic("reached unreachable code")
 #else
-    #define assume(expr) builtin_assume(expr)
+    #define assert(expr) builtin_assume(expr)
     #define unreachable builtin_unreachable
 #endif // BUILD_DEBUG
 
-#include <math.h>
-#include <stdarg.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+// TODO(felix): no dependency on C stdlib!
+    #include <math.h> // TODO(felix): look into
+    #include <stdint.h> // TODO(felix): look into
+    #include <stdio.h> // TODO(felix): finish implementation of ryu float print algorithm
+    // TODO(felix): base_arena: replace _alloc functions
+    // TODO(felix): everywhere: replace mem_ functions with intrinsics
+
+#define bool _Bool
+#define true 1
+#define false 0
+#define __bool_true_false_are_defined 1
 
 typedef  uint8_t  u8;
 typedef uint16_t u16;
@@ -80,8 +83,6 @@ typedef        size_t usize;
 typedef      intptr_t isize;
 typedef     uintptr_t  uptr;
 typedef      intptr_t  iptr;
-
-struct Arena;
 
 #define Slice(type) struct { type *ptr; usize len; }
 typedef Slice(void) Slice_void;
@@ -116,21 +117,12 @@ typedef Array(u8) Array_u8;
     typedef Array(Name) Array_##Name; \
     union Name
 
-#define err(s) log_internal(stderr, "error: " s)
-#define errf(fmt, ...) logf_internal(stderr, "error: " fmt, __VA_ARGS__)
+#define err(s) log_internal("error: " s)
+#define errf(fmt, ...) logf_internal("error: " fmt, __VA_ARGS__)
 
-#define log_info(s) log_internal(stdout, "info: " s)
-#define logf_info(fmt, ...) logf_internal(stdout, "info: " fmt, __VA_ARGS__)
-
-#define log_internal(out, s) _log_internal(out, __FILE__, __LINE__, __func__, s)
-static void _log_internal(FILE *out, char *file, usize line, const char *func, char *s);
-
-#define logf_internal(out, fmt, ...) _logf_internal(out, __FILE__, __LINE__, __func__, fmt, __VA_ARGS__)
-static void _logf_internal(FILE *out, char *file, usize line, const char *func, char *fmt, ...);
-
-#define panic(s) { panicf("%s", s); }
-#define panicf(fmt, ...) {\
-    _logf_internal(stderr, __FILE__, __LINE__, __func__, "panic: " fmt, __VA_ARGS__);\
+#define panic(s) { panicf("%", fmt(cstring, s)); }
+#define panicf(format, ...) {\
+    logf_internal_with_location(__FILE__, __LINE__, (char *)__func__, "panic: " format, __VA_ARGS__);\
     breakpoint; abort();\
 }
 
@@ -138,6 +130,7 @@ static void _logf_internal(FILE *out, char *file, usize line, const char *func, 
     slice_copy_explicit_bytes((arena), (Slice_void *)(dest_ptr), (Slice_void *)(src_ptr), sizeof(*(dest_ptr)->ptr))
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
+#define slice_get_last_assume_not_empty(s) ((s).ptr[(s).len - 1])
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
 #define slice_range(slice, beg, end) { .ptr = (void *)((uptr)(slice).ptr + (beg)), .len = (end) - (beg) }
 #define slice_remove(slice_ptr, idx) (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]
@@ -151,6 +144,7 @@ static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_v
 
 #define array_push(arena_ptr, array_ptr, item_ptr) \
     _array_push(arena_ptr, (Array_void *)(array_ptr), item_ptr, sizeof(*(item_ptr)))
+struct Arena;
 static inline void _array_push(struct Arena *arena, Array_void *array, void *item, usize size);
 
 #define array_push_assume_capacity(array_ptr, item_ptr) \
@@ -171,12 +165,3 @@ static void _array_push_slice(struct Arena *arena, Array_void *array, Slice_void
 static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *slice, usize size);
 
 #define array_unused_capacity(array) ((array).cap - (array).len)
-
-#define min_(a, b) (((a) < (b)) ? (a) : (b))
-#define max_(a, b) (((a) > (b)) ? (a) : (b))
-#define clamp(x, min_val, max_val) {\
-    x = min_((min_val), (x));\
-    x = max_((max_val), (x));\
-}
-
-static force_inline u32 byte_swap_u32(u32 bytes);

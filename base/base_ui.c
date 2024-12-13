@@ -23,43 +23,144 @@ static Array_UI_Box_Ptr ui_box_hashmap = {
 
 static UI_State ui_state;
 
-static inline UI_Box *ui_box(Str8 str) {
-    UI_Str_Parsed parsed = ui_parse_str(str);
-    return ui_hash_find_or_alloc_new(ui_hash_key_from_str(parsed.to_hash), parsed);
+static UI_Box *ui_border_box(void) {
+    UI_Box *panel = ui_box_frame_local_not_keyed();
+    panel->build.flags = ui_box_flag_draw_border;
+    for_ui_axis (axis) panel->build.size[axis].kind = ui_size_kind_sum_of_children;
+    return panel;
 }
 
-static void ui_box_add_child(UI_Box *parent, UI_Box *child) {
-    if (parent->first == 0) {
-        parent->first = child;
-        parent->last = child;
-        return;
+static inline UI_Box *ui_box(Str8 str) {
+    assert(str.len != 0 && str.ptr != 0);
+
+    Str8 display_str = str;
+    Str8 hash_str = str;
+    {
+        usize specifier_beg_i = 0, specifier_end_i = 0;
+        enum { before, after, pos_count };
+        bool hash[pos_count] = {0};
+        bool display[pos_count] = {0};
+
+        for (usize i = 0; i < str.len; i += 1) {
+            if (str.ptr[i] != '#') continue;
+
+            i += 1;
+            if (i == str.len) break;
+            if (str.ptr[i] != '[') continue;
+
+            specifier_beg_i = i - 1;
+            usize pos = before;
+
+            for (; i < str.len; i += 1) switch (str.ptr[i]) {
+                case ']': specifier_end_i = i; goto compute_specifier;
+                case 'h': hash[pos] = true; break;
+                case 'd': display[pos] = true; break;
+                case ',': {
+                    pos += 1;
+                    if (pos != after) panicf("specifier in string '%' has too many commas", fmt(Str8, str));
+                } break;
+                default: break;
+            }
+            panicf("specifier in string '%' never closed with ']'", fmt(Str8, str));
+        }
+        goto done_parsing;
+
+        compute_specifier: {
+            assert(specifier_end_i != 0 || hash[before] || hash[after]);
+            Str8 before_specifier = str8_range(str, 0, specifier_beg_i);
+            Str8 after_specifier = str8_range(str, specifier_end_i + 1, str.len);
+
+            Array_u8 hash_str_builder = {0};
+            arena_alloc_array(ui_state.arena_frame, &hash_str_builder, str.len);
+            if (hash[before]) array_push_slice_assume_capacity(&hash_str_builder, &before_specifier);
+            if (hash[after]) array_push_slice_assume_capacity(&hash_str_builder, &after_specifier);
+
+            Array_u8 display_str_builder = {0};
+            arena_alloc_array(ui_state.arena_frame, &display_str_builder, str.len);
+            if (display[before]) array_push_slice_assume_capacity(&display_str_builder, &before_specifier);
+            if (display[after]) array_push_slice_assume_capacity(&display_str_builder, &after_specifier);
+
+            hash_str = (Str8)slice_from_array(hash_str_builder);
+            display_str = (Str8)slice_from_array(display_str_builder);
+        }
+
+        done_parsing:;
     }
-    child->parent = parent;
-    parent->last->next = child;
-    child->prev = parent->last;
-    parent->last = child;
+
+    assert(display_str.len != 0 && display_str.ptr != 0);
+    assert(hash_str.len != 0 && hash_str.ptr != 0);
+
+    // djb2 hash
+    usize key = 5381;
+    for (usize i = 0; i < hash_str.len; i += 1) {
+        key = ((key << 5) + key) + hash_str.ptr[i];
+    }
+    key %= ui_state.box_hashmap.cap;
+
+    V2 str_dimensions = gfx_str_dimensions(ui_state.arena_frame, ui_state.render_ctx, display_str);
+
+    for (UI_Box *match = ui_state.box_hashmap.ptr[key]; match != 0; match = match->next) {
+        if (!str8_eql(hash_str, match->build.str_to_hash)) continue;
+        // TODO(felix): there are fields we need to initialise here that are currently only initialised when allocating a new widget
+        // TODO(felix): also, I think, fields that need to be zeroed
+        // TODO(felix): need to do some cleanup here to unify control flow
+        slice_copy(ui_state.arena_frame, &match->build.str_to_display, &display_str);
+        match->computed_size_px[ui_axis_x] = str_dimensions.x + match->style.pad.x * 2.f;
+        match->computed_size_px[ui_axis_y] = str_dimensions.y + match->style.pad.y * 2.f;
+        return match;
+    }
+
+    // TODO(felix): check freelist in ui_state before allocating new memory. To populate said freelist, we'll need to prune the hashmap every frame.
+    UI_Box *new = arena_alloc(ui_state.arena_persistent, 1, sizeof(UI_Box));
+    ui_state.box_hashmap.ptr[key] = new;
+
+    // TODO(felix): I think the new style should be applied even above, in the case where the widget already exists
+    UI_Box_Style target_style = {
+        .pad = slice_get_last_assume_not_empty(ui_state.style_stack.pad),
+        .margin = slice_get_last_assume_not_empty(ui_state.style_stack.margin),
+        .clr_fg = slice_get_last_assume_not_empty(ui_state.style_stack.clr_fg),
+        .clr_bg = slice_get_last_assume_not_empty(ui_state.style_stack.clr_bg),
+        .clr_border = slice_get_last_assume_not_empty(ui_state.style_stack.clr_border),
+    };
+    *new = (UI_Box){
+        .key = key,
+        .target_style = target_style,
+        .computed_size_px = { str_dimensions.x + target_style.pad.x * 2.f, str_dimensions.y + target_style.pad.y * 2.f },
+    };
+    slice_copy(ui_state.arena_persistent, &new->build.str_to_hash, &hash_str);
+    slice_copy(ui_state.arena_frame, &new->build.str_to_display, &display_str);
+    return new;
 }
 
 // TODO(felix): can take from freelist here also once implemented
-static UI_Box *ui_box_frame_local_not_keyed(void) { return arena_alloc(ui_state.arena_frame, 1, sizeof(UI_Box)); }
-
-static UI_Box_Style ui_box_style_lerp(UI_Box_Style a, UI_Box_Style b, f32 amount) {
-    return (UI_Box_Style){
-        .pad = v2_lerp(a.pad, b.pad, amount),
-        .margin = v2_lerp(a.margin, b.margin, amount),
-        .clr_fg = v4_lerp(a.clr_fg, b.clr_fg, amount),
-        .clr_bg = v4_lerp(a.clr_bg, b.clr_bg, amount),
-        .clr_border = v4_lerp(a.clr_border, b.clr_border, amount),
-    };
+static UI_Box *ui_box_frame_local_not_keyed(void) {
+    UI_Box *box = arena_alloc(ui_state.arena_frame, 1, sizeof(UI_Box));
+    return box;
 }
-
-static inline void ui_box_zero_tree_links(UI_Box *b) { b->parent = 0; b->prev = 0; b->next = 0; b->first = 0; b->last = 0; }
 
 // NOTE(felix): Since a root node is guaranteed before user UI code, a possible optimisation/simplification could be to remove
 // all checks for nonzero root and current_parent throughout UI functions
 static void ui_begin_build(void) {
     ui_state.current_parent = 0;
     ui_state.root = 0;
+
+    ui_state.style_stack.pad.len = 0;
+    V2 default_pad = v2_scale((V2){ .x = 5.f, .y = 2.5f }, dpi_scale);
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.pad, &default_pad);
+
+    ui_state.style_stack.margin.len = 0;
+    V2 default_margin = v2_scale((V2){ .x = 5.f, .y = 5.f }, dpi_scale);
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.margin, &default_margin);
+
+    ui_state.style_stack.clr_fg.len = 0;
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_fg, (&(V4){ .r = 1.f, .g = 0, .b = 0, .a = 1.f }));
+
+    ui_state.style_stack.clr_bg.len = 0;
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_bg, &(V4){0});
+
+    ui_state.style_stack.clr_border.len = 0;
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_border, &(V4){0});
+
     ui_push_parent(ui_row());
 }
 
@@ -93,7 +194,9 @@ static void ui_compute_layout_dependent_descendant(UI_Box *box) {
             box->computed_size_px[axis] = 0;
             for (UI_Box *child = box->first; child != 0; child = child->next) {
                 box->computed_size_px[axis] += child->computed_size_px[axis];
+                box->computed_size_px[axis] += child->style.margin.elements[axis];
             }
+            box->computed_size_px[axis] += box->last->style.margin.elements[axis];
         } break;
         case ui_size_kind_largest_child: {
             box->computed_size_px[axis] = 0;
@@ -104,6 +207,7 @@ static void ui_compute_layout_dependent_descendant(UI_Box *box) {
             }
         } break;
     }
+    for_ui_axis (axis) assert(box->computed_size_px[axis] != 0);
 }
 
 static void ui_compute_layout_relative_positions_and_rect(UI_Box *box) {
@@ -141,145 +245,54 @@ static void ui_compute_layout_solve_violations(UI_Box *box) {
 static void ui_compute_layout_standalone(UI_Box *box) {
     if (box == 0) return;
     for_ui_axis (axis) switch (box->build.size[axis].kind) {
-        case ui_size_kind_nil: assume(false); break;
+        case ui_size_kind_nil: assert(false); break;
         case ui_size_kind_text: /* computed_size_px is already known */ break;
     }
     for (UI_Box *child = box->first; child != 0; child = child->next) ui_compute_layout_standalone(child);
     return;
 }
 
-static void ui_end_build_and_compute_layout(void) {
-    ui_compute_layout_standalone(ui_state.root);
-    ui_compute_layout_dependent_ancestor(ui_state.root);
-    ui_compute_layout_dependent_descendant(ui_state.root);
-    ui_compute_layout_solve_violations(ui_state.root);
-    ui_compute_layout_relative_positions_and_rect(ui_state.root);
-}
-
-static UI_Box *ui_hash_find_or_alloc_new(usize key, UI_Str_Parsed str) {
-    V2 str_dimensions = gfx_str_dimensions(ui_state.arena_frame, ui_state.dw_ctx, str.to_display);
-
-    for (UI_Box *match = ui_state.box_hashmap.ptr[key]; match != 0; match = match->next) {
-        if (!str8_eql(str.to_hash, match->build.str.to_hash)) continue;
-        // TODO(felix): there are fields we need to initialise here that are currently only initialised when allocating a new widget
-        // TODO(felix): also, I think, fields that need to be zeroed
-        // TODO(felix): need to do some cleanup here to unify control flow
-        slice_copy(ui_state.arena_frame, &match->build.str.to_display, &str.to_display);
-        match->computed_size_px[ui_axis_x] = str_dimensions.x + match->style.pad.x * 2.f;
-        match->computed_size_px[ui_axis_y] = str_dimensions.y + match->style.pad.y * 2.f;
-        return match;
-    }
-
-    // TODO(felix): check freelist in ui_state before allocating new memory. To populate said freelist, we'll need to prune the hashmap every frame.
-    UI_Box *new = arena_alloc(ui_state.arena_persistent, 1, sizeof(UI_Box));
-    ui_state.box_hashmap.ptr[key] = new;
-
-    UI_Box_Style target_style = { .pad = v2(15.f, 7.5f), .margin = v2(10.f, 10.f), .clr_fg = v4(0, 0, 0, 1.f) };
-    *new = (UI_Box){
-        .key = key,
-        .target_style = target_style, // NOTE(felix): for testing
-        .computed_size_px = { str_dimensions.x + target_style.pad.x * 2.f, str_dimensions.y + target_style.pad.y * 2.f },
-    };
-    slice_copy(ui_state.arena_persistent, &new->build.str.to_hash, &str.to_hash);
-    slice_copy(ui_state.arena_frame, &new->build.str.to_display, &str.to_display);
-    return new;
-}
-
-static usize ui_hash_key_from_str(Str8 str) {
-    // djb2 hash
-    usize hash = 5381;
-    for (usize i = 0; i < str.len; i += 1) {
-        hash = ((hash << 5) + hash) + str.ptr[i];
-    }
-    return hash % ui_state.box_hashmap.cap;
-}
-
-static UI_Interaction ui_interaction_compute(UI_Box *box) {
-    if (!(box->build.flags & ui_box_flag_clickable)) return (UI_Interaction){0};
-
-    // TODO(felix): can this be naively optimised by returning a nil interaction if the mouse doesn't fall within the parent rect?
-    bool hovered = ui_mouse_in_rect(box->rect);
-    return (UI_Interaction){
-        .hovered = hovered,
-        .clicked = hovered & mouse_left_clicked,
-    };
-}
-
-static inline bool ui_mouse_in_rect(UI_Rect rect) {
-    return (rect.left <= mouse_x && mouse_x <= rect.right) && (rect.top <= mouse_y && mouse_y <= rect.bottom);
-}
-
-static UI_Str_Parsed ui_parse_str(Str8 s) {
-    UI_Str_Parsed result = { .to_hash = s, .to_display = s };
-
-    usize specifier_beg_i = 0, specifier_end_i = 0;
-    enum { before, after, pos_count };
-    bool hash[pos_count] = {0};
-    bool display[pos_count] = {0};
-
-    for (usize i = 0; i < s.len; i += 1) {
-        if (s.ptr[i] != '#') continue;
-
-        i += 1;
-        if (i == s.len) break;
-        if (s.ptr[i] != '[') continue;
-
-        specifier_beg_i = i - 1;
-        usize pos = before;
-
-        for (; i < s.len; i += 1) switch (s.ptr[i]) {
-            case ']': specifier_end_i = i; goto compute_specifier;
-            case 'h': hash[pos] = true; break;
-            case 'd': display[pos] = true; break;
-            case ',': {
-                pos += 1;
-                if (pos != after) panicf("specifier in string '%.*s' has too many commas", str_fmt(s));
-            } break;
-            default: break;
-        }
-        panicf("specifier in string '%.*s' never closed with ']'", str_fmt(s));
-    }
-    goto no_specifier;
-
-    compute_specifier: {
-        assume(specifier_end_i != 0 || hash[before] || hash[after]);
-        Str8 before_specifier = str8_range(s, 0, specifier_beg_i);
-        Str8 after_specifier = str8_range(s, specifier_end_i + 1, s.len);
-
-        Array_u8 to_hash = {0};
-        arena_alloc_array(ui_state.arena_frame, &to_hash, s.len);
-        if (hash[before]) array_push_slice_assume_capacity(&to_hash, &before_specifier);
-        if (hash[after]) array_push_slice_assume_capacity(&to_hash, &after_specifier);
-
-        Array_u8 to_display = {0};
-        arena_alloc_array(ui_state.arena_frame, &to_display, s.len);
-        if (display[before]) array_push_slice_assume_capacity(&to_display, &before_specifier);
-        if (display[after]) array_push_slice_assume_capacity(&to_display, &after_specifier);
-
-        result = (UI_Str_Parsed){ .to_hash = slice_from_array(to_hash), .to_display = slice_from_array(to_display) };
-    }
-
-    no_specifier:
-    return result;
-}
-
 static inline void ui_pop_parent(void) { ui_state.current_parent = ui_state.current_parent->parent; }
 
 static UI_Interaction ui_push(UI_Box *box) {
-    ui_box_zero_tree_links(box);
+    box->parent = 0;
+    box->prev = 0;
+    box->next = 0;
+    box->first = 0;
+    box->last = 0;
 
     if (ui_state.root == 0) {
-        assume(ui_state.current_parent == 0);
+        assert(ui_state.current_parent == 0);
         ui_state.root = box;
         ui_state.current_parent = box;
         goto interaction;
     }
-    assume(ui_state.current_parent != 0);
+    assert(ui_state.current_parent != 0);
 
-    ui_box_add_child(ui_state.current_parent, box);
+    UI_Box *parent = ui_state.current_parent;
+    UI_Box *child = box;
+    child->parent = parent;
+    if (parent->first == 0) {
+        parent->first = child;
+        parent->last = child;
+    } else {
+        parent->last->next = child;
+        child->prev = parent->last;
+        parent->last = child;
+    }
 
     interaction: {
-        box->interaction = ui_interaction_compute(box);
+        if (!(box->build.flags & ui_box_flag_clickable)) {
+            box->interaction = (UI_Interaction){0};
+        } else {
+            bool hovered =
+                (box->rect.left <= mouse_pos.x && mouse_pos.x <= box->rect.right) &&
+                (box->rect.top <= mouse_pos.y && mouse_pos.y <= box->rect.bottom);
+            box->interaction = (UI_Interaction){
+                .hovered = hovered,
+                .clicked = hovered & mouse_left_clicked,
+            };
+        }
         return box->interaction;
     }
 }
@@ -300,27 +313,32 @@ static inline void ui_rect_shift_x(UI_Rect *rect, f32 shift) { rect->left += shi
 
 static inline void ui_rect_shift_y(UI_Rect *rect, f32 shift) { rect->top += shift; rect->bottom += shift; }
 
-static void ui_render_recurse(UI_Box *box) {
-    box->style = ui_box_style_lerp(box->style, box->target_style, ui_animation_speed);
+static void ui_render_recursive(UI_Box *box) {
+    // TODO(felix): framerate-independent lerping
+    box->style = (UI_Box_Style){
+        .pad = v2_lerp(box->style.pad, box->target_style.pad, ui_animation_speed),
+        .margin = v2_lerp(box->style.margin, box->target_style.margin, ui_animation_speed),
+        .clr_fg = v4_lerp(box->style.clr_fg, box->target_style.clr_fg, ui_animation_speed),
+        .clr_bg = v4_lerp(box->style.clr_bg, box->target_style.clr_bg, ui_animation_speed),
+        .clr_border = v4_lerp(box->style.clr_border, box->target_style.clr_border, ui_animation_speed),
+    };
 
-    if (!(box->build.flags & ui_box_flag_draw_text)) {
-        // TODO(felix): support border, background, etc. even without text
-        assume(box->build.flags == 0 || box->build.flags == ui_axis_y);
-        goto recurse;
-    }
+    assert(!v4_eql(box->target_rect, (V4){0}));
 
+    b8 draw_text = box->build.flags & ui_box_flag_draw_text;
     b8 draw_border = box->build.flags & ui_box_flag_draw_border;
     b8 draw_background = box->build.flags & ui_box_flag_draw_background;
 
-    // TODO(felix): get all the colours and values below from somewhere else - make a style stack system? - but don't hardcode here
+    // TODO(felix): get all the colours and values below from box style
 
-    if (draw_border) box->target_style.clr_border = v4(0, 0, 0, 0.7f);
+    box->target_style.clr_border.a = draw_border ? 0.7f : 0;
+
     if (draw_background) {
-        box->target_style.clr_bg = v4(0.6f, 0.6f, 0.6f, 1.f);
+        box->target_style.clr_bg = (V4){ .r = 0.6f, .g = 0.6f, .b = 0.6f, .a = 1.f };
         if (box->build.flags & ui_box_flag_clickable) {
             if (box->interaction.clicked) {
-                box->style.clr_bg = v4(0, 0, 0, 1.f);
-                box->style.clr_border = v4(1.f, 1.f, 1.f, 1.f);
+                box->style.clr_bg = (V4){ .r = 0, .g = 0, .b = 0, .a = 1.f };
+                box->style.clr_border = (V4){ .r = 1.f, .g = 1.f, .b = 1.f, .a = 1.f };
             } else if (box->interaction.hovered) {
                 box->target_style.clr_bg.a = 0.4f;
                 box->target_style.clr_border.a = 1.f;
@@ -331,21 +349,22 @@ static void ui_render_recurse(UI_Box *box) {
         }
     }
 
-    gfx_draw_rounded_rect(ui_state.dw_ctx, (Gfx_Rounded_Rect){
+    gfx_draw_rounded_rect(ui_state.render_ctx, (Gfx_Rounded_Rect){
         .colour = draw_background ? box->style.clr_bg : (V4){0},
-        .corner_radius = 15.f,
-        .border_thickness = draw_border ? 3.f : 0,
+        .corner_radius = 5.f * dpi_scale,
+        .border_thickness = draw_border ? (dpi_scale * 1.f) : 0,
         .border_colour = box->style.clr_border,
         .rect = box->rect,
     });
 
-    UI_Rect text_rect = box->rect;
-    text_rect.left += box->style.margin.x;
-    // TODO(felix): add parameter for text colour
-    gfx_draw_text(ui_state.arena_frame, ui_state.dw_ctx, box->build.str.to_display, text_rect);
+    if (draw_text) {
+        UI_Rect text_rect = box->rect;
+        text_rect.left += box->style.margin.x;
+        // TODO(felix): add parameters for text colour, font size
+        gfx_draw_text(ui_state.arena_frame, ui_state.render_ctx, box->build.str_to_display, text_rect);
+    }
 
-    recurse:
-    for (UI_Box *child = box->first; child != 0; child = child->next) ui_render_recurse(child);
+    for (UI_Box *child = box->first; child != 0; child = child->next) ui_render_recursive(child);
 }
 
 static UI_Box *ui_row(void) {

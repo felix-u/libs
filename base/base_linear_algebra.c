@@ -1,10 +1,8 @@
 static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
 
-static force_inline V2 v2(f32 x, f32 y) { return (V2){ .x = x, .y = y }; }
+static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.y + b.y }; }
 
-static force_inline V2 v2_add(V2 a, V2 b) { return v2(a.x + b.x, a.y + b.y); }
-
-static force_inline V2 v2_div(V2 a, V2 b) { return v2(a.x / b.x, a.y / b.y); }
+static force_inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
 
 static force_inline bool v2_eql(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
 
@@ -13,17 +11,15 @@ static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
     return v2_add(a, add);
 }
 
-static force_inline V2 v2_mul(V2 a, V2 b) { return v2(a.x * b.x, a.y * b.y); }
+static force_inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
 
-static force_inline V2 v2_reciprocal(V2 v) { return v2(1.f / v.x, 1.f / v.y); }
+static force_inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
 
-static force_inline V2 v2_scale(V2 v, f32 s) { return v2(v.x * s, v.y * s); }
+static force_inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v.y * s }; }
 
-static force_inline V2 v2_sub(V2 a, V2 b) { return v2(a.x - b.x, a.y - b.y); }
+static force_inline V2 v2_sub(V2 a, V2 b) { return (V2){ .x = a.x - b.x, .y = a.y - b.y }; }
 
-static force_inline V3 v3(f32 x, f32 y, f32 z) { return (V3){ .x = x, .y = y, .z = z }; }
-
-static force_inline V3 v3_add(V3 a, V3 b) { return v3(a.x + b.x, a.y + b.y, a.z + b.z); }
+static force_inline V3 v3_add(V3 a, V3 b) { return (V3){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z }; }
 
 static inline V3 v3_cross(V3 a, V3 b) {
     return (V3) {
@@ -38,7 +34,7 @@ static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z;
 static force_inline bool v3_eql(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
 
 static force_inline V3 v3_forward_from_view(M4 view) {
-    return v3(-view.elements[0][2], -view.elements[1][2], -view.elements[2][2]);
+    return (V3){ .x = -view.elements[0][2], .y = -view.elements[1][2], .z = -view.elements[2][2] };
 }
 
 static inline f32 v3_len(V3 v) { return sqrtf(v3_len_squared(v)); }
@@ -50,7 +46,7 @@ static inline V3 v3_lerp(V3 a, V3 b, f32 amount) {
     return v3_add(a, add);
 }
 
-static force_inline V3 v3_neg(V3 v) { return v3(-v.x, -v.y, -v.z); }
+static force_inline V3 v3_neg(V3 v) { return (V3){ .x = -v.x, .y = -v.y, .z = -v.z }; }
 
 static inline V3 v3_norm(V3 v) {
     f32 length = v3_len(v);
@@ -63,12 +59,12 @@ static inline V3 v3_norm(V3 v) {
 }
 
 static force_inline V3 v3_right_from_view(M4 view) {
-    return v3(view.elements[0][0], view.elements[1][0], view.elements[2][0]);
+    return (V3){ .x = view.elements[0][0], .y = view.elements[1][0], .z = view.elements[2][0] };
 }
 
-static force_inline V3 v3_scale(V3 v, f32 s) { return v3(v.x * s, v.y * s, v.z * s); }
+static force_inline V3 v3_scale(V3 v, f32 s) { return (V3){ .x = v.x * s, .y = v.y * s, .z = v.z * s }; }
 
-static force_inline V3 v3_sub(V3 a, V3 b) { return v3(a.x - b.x, a.y - b.y, a.z - b.z); }
+static force_inline V3 v3_sub(V3 a, V3 b) { return (V3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z }; }
 
 static inline V3 v3_unproject(V3 pos, M4 view_projection) {
     M4 view_projection_inv = m4_inverse(view_projection);
@@ -78,14 +74,16 @@ static inline V3 v3_unproject(V3 pos, M4 view_projection) {
 }
 
 static force_inline V3 v3_up_from_view(M4 view) {
-    return v3(view.elements[0][1], view.elements[1][1], view.elements[2][1]);
+    return (V3){ .x = view.elements[0][1], .y = view.elements[1][1], .z = view.elements[2][1] };
 }
 
-static force_inline V4 v4(f32 x, f32 y, f32 z, f32 w) { return (V4){ .x = x, .y = y, .z = z, .w = w }; }
-
-static force_inline V4 v4_add(V4 a, V4 b) { return v4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w); }
+static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
 
 static inline f32 v4_dot(V4 a, V4 b) { return v3_dot(a.xyz, b.xyz) + a.w * b.w; }
+
+static force_inline bool v4_eql(V4 a, V4 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+}
 
 static inline V4 v4_lerp(V4 a, V4 b, f32 amount) {
     V4 add = v4_scale(v4_sub(b, a), amount);
@@ -100,44 +98,44 @@ static inline V4 v4_round(V4 v) {
     return v;
 }
 
-static force_inline V4 v4_scale(V4 v, f32 s) { return v4(v.x * s, v.y * s, v.z * s, v.w * s); }
+static force_inline V4 v4_scale(V4 v, f32 s) { return (V4){ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s }; }
 
-static force_inline V4 v4_sub(V4 a, V4 b) { return v4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w); }
+static force_inline V4 v4_sub(V4 a, V4 b) { return (V4){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w }; }
 
-static V4 v4v(V3 xyz, f32 w) { return v4(xyz.x, xyz.y, xyz.z, w); }
+static V4 v4v(V3 xyz, f32 w) { return (V4){ .x = xyz.x, .y = xyz.y, .z = xyz.z, .w = w }; }
 
 static inline Quat quat_from_rotation(V3 axis, f32 angle) {
     f32 half_angle = angle / 2.f;
     f32 sin_half_angle = sinf(half_angle);
-    return quat(
-        axis.x * sin_half_angle,
-        axis.y * sin_half_angle,
-        axis.z * sin_half_angle,
-        cosf(half_angle)
-    );
+    return (Quat){
+        .x = axis.x * sin_half_angle,
+        .y = axis.y * sin_half_angle,
+        .z = axis.z * sin_half_angle,
+        .w = cosf(half_angle),
+    };
 }
 
 static inline Quat quat_mul_quat(Quat a, Quat b) {
-    return quat(
-        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
-    );
+    return (Quat){
+        .x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        .y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        .z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        .w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    };
 }
 
 static inline V3 quat_rotate_v3(Quat q, V3 v) {
     Quat qv = { .xyz = v };
-    Quat q_conjugate = quat(-q.x, -q.y, -q.z, q.w);
+    Quat q_conjugate = (Quat){ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
     return quat_mul_quat(quat_mul_quat(q, qv), q_conjugate).xyz;
 }
 
 static inline V3 m3_mul_v3(M3 m, V3 v) {
-    return v3(
-        v3_dot(v, v3(m.elements[0][0], m.elements[0][1], m.elements[0][2])),
-        v3_dot(v, v3(m.elements[1][0], m.elements[1][1], m.elements[1][2])),
-        v3_dot(v, v3(m.elements[2][0], m.elements[2][1], m.elements[2][2]))
-    );
+    return (V3){
+        .x = v3_dot(v, (V3){ .x = m.elements[0][0], .y = m.elements[0][1], .z = m.elements[0][2] }),
+        .y = v3_dot(v, (V3){ .x = m.elements[1][0], .y = m.elements[1][1], .z = m.elements[1][2] }),
+        .z = v3_dot(v, (V3){ .x = m.elements[2][0], .y = m.elements[2][1], .z = m.elements[2][2] }),
+    };
 }
 
 static force_inline M4 m4_fill_diagonal(f32 value) {
@@ -234,12 +232,12 @@ static inline M4 m4_mul_m4(M4 a, M4 b) {
 }
 
 static inline V4 m4_mul_v4(M4 m, V4 v) {
-    return v4(
-        v4_dot(v, v4(m.elements[0][0], m.elements[0][1], m.elements[0][2], m.elements[0][3])),
-        v4_dot(v, v4(m.elements[1][0], m.elements[1][1], m.elements[1][2], m.elements[1][3])),
-        v4_dot(v, v4(m.elements[2][0], m.elements[2][1], m.elements[2][2], m.elements[2][3])),
-        v4_dot(v, v4(m.elements[3][0], m.elements[3][1], m.elements[3][2], m.elements[3][3]))
-    );
+    return (V4){
+        .x = v4_dot(v, (V4){ .x = m.elements[0][0], .y = m.elements[0][1], .z = m.elements[0][2], .w = m.elements[0][3] }),
+        .y = v4_dot(v, (V4){ .x = m.elements[1][0], .y = m.elements[1][1], .z = m.elements[1][2], .w = m.elements[1][3] }),
+        .z = v4_dot(v, (V4){ .x = m.elements[2][0], .y = m.elements[2][1], .z = m.elements[2][2], .w = m.elements[2][3] }),
+        .w = v4_dot(v, (V4){ .x = m.elements[3][0], .y = m.elements[3][1], .z = m.elements[3][2], .w = m.elements[3][3] }),
+    };
 }
 
 static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far) {

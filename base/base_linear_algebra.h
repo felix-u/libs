@@ -43,7 +43,6 @@ uniondef(V4) {
 };
 
 typedef V4 Quat;
-#define quat v4
 
 uniondef(M3) {
     f32 elements[3][3];
@@ -59,7 +58,6 @@ uniondef(M4) {
 
 static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount);
 
-static force_inline V2   v2(f32 x, f32 y);
 static force_inline V2   v2_add(V2 a, V2 b);
 static force_inline V2   v2_div(V2 a, V2 b);
 static force_inline bool v2_eql(V2 a, V2 b);
@@ -69,7 +67,6 @@ static force_inline V2   v2_recipocal(V2 v);
 static force_inline V2   v2_scale(V2 v, f32 s);
 static force_inline V2   v2_sub(V2 a, V2 b);
 
-static force_inline V3   v3(f32 x, f32 y, f32 z);
 static force_inline V3   v3_add(V3 a, V3 b);
 static       inline V3   v3_cross(V3 a, V3 b);
 static       inline f32  v3_dot(V3 a, V3 b);
@@ -86,14 +83,14 @@ static force_inline V3   v3_sub(V3 a, V3 b);
 static       inline V3   v3_unproject(V3 pos, M4 view_projection);
 static force_inline V3   v3_up_from_view(M4 view);
 
-static force_inline V4  v4(f32 x, f32 y, f32 z, f32 w);
-static force_inline V4  v4_add(V4 a, V4 b);
-static       inline f32 v4_dot(V4 a, V4 b);
-static       inline V4  v4_lerp(V4 a, V4 b, f32 amount);
-static       inline V4  v4_round(V4 v);
-static force_inline V4  v4_scale(V4 v, f32 s);
-static force_inline V4  v4_sub(V4 a, V4 b);
-static force_inline V4  v4v(V3 xyz, f32 w);
+static force_inline V4   v4_add(V4 a, V4 b);
+static       inline f32  v4_dot(V4 a, V4 b);
+static force_inline bool v4_eql(V4 a, V4 b);
+static       inline V4   v4_lerp(V4 a, V4 b, f32 amount);
+static       inline V4   v4_round(V4 v);
+static force_inline V4   v4_scale(V4 v, f32 s);
+static force_inline V4   v4_sub(V4 a, V4 b);
+static force_inline V4   v4v(V3 xyz, f32 w);
 
 static inline Quat quat_from_rotation(V3 axis, f32 angle);
 static inline Quat quat_mul_quat(Quat a, Quat b);

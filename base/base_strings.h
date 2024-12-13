@@ -6,7 +6,32 @@ structdef(Str16) { u16 *ptr; usize len; };
 #define str16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
 #define str16(s) (Str16)str16c(s)
 
-#define str_fmt(s) (int)(s).len, (s).ptr
+structdef(Str8_Builder) { u8 *ptr; usize len, cap; Arena *arena; };
+
+structdef(Format) {
+    u32 magic; // TODO(felix): remove
+    enum {
+        format_type_char,
+        format_type_u64,
+        format_type_f64,
+        format_type_cstring,
+        format_type_Str8,
+    } type;
+    union {
+        u8 value_char;
+        u64 value_u64;
+        f64 value_f64;
+        char *value_cstring;
+        Str8 value_Str8;
+    };
+    u8 base; // TODO(felix)
+    bool prefix; // TODO(felix)
+    bool uppercase; // TODO(felix)
+};
+
+#define fmt_magic_number 1234567890
+#define fmt(type_, ...) (Format){ .magic = fmt_magic_number, .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
+
 #define strc_printf(arena_ptr, fmt, ...)\
     (char *)(str8_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
 
@@ -35,8 +60,18 @@ static char *strc_from_str8(Arena *arena, Str8 s);
 static bool str8_eql(Str8 s1, Str8 s2);
 static Str8 str8_from_strc(char *s);
 static Str8 str8_from_int_base(Arena *arena, usize _num, u8 base);
-static Str8 str8_printf(Arena *arena, usize alloc_size, char *fmt, ...);
+static Str8 str8_printf(Arena *arena, char *fmt, ...);
 static Str8 str8_range(Str8 s, usize beg, usize end);
-static Str8 str8_vprintf(Arena *arena, usize alloc_size, char *fmt, va_list args);
+static Str8 str8_vprintf(Arena *arena, char *fmt, va_list args);
 
 static Str16 str16_from_str8(Arena *arena, Str8 s);
+
+static void str8_builder_null_terminate(Str8_Builder *builder);
+static void str8_builder_printf(Str8_Builder *builder, char *fmt, ...);
+static void str8_builder_printf_var_args(Str8_Builder *builder, char *fmt, va_list args);
+static void str8_builder_push_f64(Str8_Builder *builder, f64 value);
+static void str8_builder_push_u64(Str8_Builder *builder, u64 value);
+static void str8_builder_push_char(Str8_Builder *builder, u8 c);
+static void str8_builder_push_str8(Str8_Builder *builder, Str8 str);
+static Str8 str8_from_str8_builder(Str8_Builder builder);
+

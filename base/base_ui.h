@@ -10,14 +10,12 @@ enumdef(UI_Size_Kind, u8) {
     ui_size_kind_largest_child,
 };
 
-typedef V4 UI_Rect, UI_Rgba;
+typedef V4 UI_Rect;
 
 structdef(UI_Size) {
     UI_Size_Kind kind;
     f32 value, strictness;
 };
-
-structdef(UI_Str_Parsed) { Str8 to_hash, to_display; };
 
 // TODO(felix): add flags for text alignment
 enumdef(UI_Box_Flags, u8) {
@@ -29,14 +27,14 @@ enumdef(UI_Box_Flags, u8) {
 };
 
 structdef(UI_Box_Build) {
-    UI_Str_Parsed str;
+    Str8 str_to_hash, str_to_display;
     UI_Box_Flags flags;
     UI_Size size[ui_axis_count];
 };
 
 structdef(UI_Box_Style) {
     V2 pad, margin;
-    UI_Rgba clr_fg, clr_bg, clr_border;
+    V4 clr_fg, clr_bg, clr_border;
 };
 
 structdef(UI_Box) {
@@ -57,14 +55,21 @@ structdef(UI_Box) {
 };
 typedef Array(UI_Box *) Array_UI_Box_Ptr;
 
+structdef(UI_Style_Stack) {
+    Array_V2 pad, margin;
+    Array_V4 clr_fg, clr_bg, clr_border;
+};
+
 structdef(UI_State) {
     Arena *arena_persistent, *arena_frame;
-    Dwrite_Ctx *dw_ctx;
+    Gfx_Render_Ctx *render_ctx;
     f32 pos[ui_axis_count];
 
     UI_Box *root;
     UI_Box *current_parent;
     Array_UI_Box_Ptr box_hashmap;
+
+    UI_Style_Stack style_stack;
 };
 
 #define ui_animation_speed 0.4f
@@ -83,8 +88,7 @@ structdef(UI_State) {
 #define ui_define_fmt_fns(ui_fn_takes_str8_returns_interaction)\
     static UI_Interaction ui_fn_takes_str8_returns_interaction##f(char *fmt, ...) {\
         va_list args; va_start(args, fmt);\
-        usize reasonable_max = 256;\
-        Str8 text = str8_vprintf(ui_state.arena_frame, reasonable_max, fmt, args);\
+        Str8 text = str8_vprintf(ui_state.arena_frame, fmt, args);\
         va_end(args);\
         return ui_fn_takes_str8_returns_interaction##S(text);\
     }\
@@ -93,46 +97,23 @@ structdef(UI_State) {
         return ui_fn_takes_str8_returns_interaction##S(str8_from_strc(strc));\
     }
 
-static inline  UI_Box *ui_box(Str8 str);
-static           void  ui_box_add_child(UI_Box *parent, UI_Box *child);
-static         UI_Box *ui_box_frame_local_not_keyed(void);
-static   UI_Box_Style  ui_box_style_lerp(UI_Box_Style a, UI_Box_Style b, f32 amount);
-static inline    void  ui_box_zero_tree_links(UI_Box *b);
-
-static void ui_begin_build(void);
-
-static UI_Interaction ui_buttonS(Str8 str);
-
-static UI_Box *ui_column(void);
-
-static void ui_compute_layout_dependent_ancestor(UI_Box *box);
-static void ui_compute_layout_dependent_descendant(UI_Box *box);
-static void ui_compute_layout_relative_positions_and_rect(UI_Box *box);
-static void ui_compute_layout_solve_violations(UI_Box *box);
-static void ui_compute_layout_standalone(UI_Box *box);
-
-static void ui_end_build_and_compute_layout(void);
-
-static UI_Box *ui_hash_find_or_alloc_new(usize key, UI_Str_Parsed str);
-static   usize ui_hash_key_from_str(Str8 str);
-
-static UI_Interaction ui_interaction_compute(UI_Box *box);
-
-static inline bool ui_mouse_in_rect(UI_Rect rect);
-
-static UI_Str_Parsed ui_parse_str(Str8 s);
-
-static inline    void ui_pop_parent(void);
-static UI_Interaction ui_push(UI_Box *box);
-static UI_Interaction ui_push_parent(UI_Box *box);
-
-static inline void ui_rect_shift_axis(UI_Rect *rect, UI_Axis axis, f32 shift);
-static inline void ui_rect_shift_x(UI_Rect *rect, f32 shift);
-static inline void ui_rect_shift_y(UI_Rect *rect, f32 shift);
-
-#define     ui_render() ui_render_recurse(ui_state.root)
-static void ui_render_recurse(UI_Box *box);
-
-static UI_Box *ui_row(void);
-
-static UI_Interaction ui_textS(Str8 str);
+static          UI_Box *ui_border_box(void);
+static  inline  UI_Box *ui_box(Str8 str);
+static          UI_Box *ui_box_frame_local_not_keyed(void);
+static            void  ui_begin_build(void);
+static  UI_Interaction  ui_buttonS(Str8 str);
+static          UI_Box *ui_column(void);
+static            void  ui_compute_layout_dependent_ancestor(UI_Box *box);
+static            void  ui_compute_layout_dependent_descendant(UI_Box *box);
+static            void  ui_compute_layout_relative_positions_and_rect(UI_Box *box);
+static            void  ui_compute_layout_solve_violations(UI_Box *box);
+static            void  ui_compute_layout_standalone(UI_Box *box);
+static inline     void  ui_pop_parent(void);
+static  UI_Interaction  ui_push(UI_Box *box);
+static  UI_Interaction  ui_push_parent(UI_Box *box);
+static inline     void  ui_rect_shift_axis(UI_Rect *rect, UI_Axis axis, f32 shift);
+static inline     void  ui_rect_shift_x(UI_Rect *rect, f32 shift);
+static inline     void  ui_rect_shift_y(UI_Rect *rect, f32 shift);
+static            void  ui_render_recursive(UI_Box *box);
+static          UI_Box *ui_row(void);
+static  UI_Interaction  ui_textS(Str8 str);
