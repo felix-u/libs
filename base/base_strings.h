@@ -13,6 +13,7 @@ structdef(Format) {
     enum {
         format_type_char,
         format_type_u64,
+        format_type_f32,
         format_type_f64,
         format_type_cstring,
         format_type_Str8,
@@ -20,6 +21,7 @@ structdef(Format) {
     union {
         u8 value_char;
         u64 value_u64;
+        f32 value_f32;
         f64 value_f64;
         char *value_cstring;
         Str8 value_Str8;

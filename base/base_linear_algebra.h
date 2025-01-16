@@ -62,8 +62,12 @@ static force_inline V2   v2_add(V2 a, V2 b);
 static force_inline V2   v2_div(V2 a, V2 b);
 static force_inline bool v2_eql(V2 a, V2 b);
 static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
+static force_inline V2   v2_max(V2 a, V2 b);
+static force_inline V2   v2_min(V2 a, V2 b);
 static force_inline V2   v2_mul(V2 a, V2 b);
 static force_inline V2   v2_recipocal(V2 v);
+static       inline V2   v2_round(V2 v);
+static       inline V2   v2_round_down(V2 v);
 static force_inline V2   v2_scale(V2 v, f32 s);
 static force_inline V2   v2_sub(V2 a, V2 b);
 

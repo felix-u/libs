@@ -97,7 +97,18 @@ static inline UI_Box *ui_box(Str8 str) {
     }
     key %= ui_state.box_hashmap.cap;
 
-    V2 str_dimensions = gfx_str_dimensions(ui_state.arena_frame, ui_state.render_ctx, display_str);
+    V2 str_dimensions = {0};
+    {
+        Str16 wstr = str16_from_str8(ui_state.arena_frame, display_str);
+        // TODO(felix): cache this! we want to call these functions as little as possible
+        IDWriteFactory_CreateTextLayout(ui_state.render_ctx->dw_factory,
+            wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, window_size.x, window_size.y, &ui_state.render_ctx->dw_text_layout
+        );
+        DWRITE_TEXT_METRICS metrics = {0};
+        win32_assert_hr(IDWriteTextLayout_GetMetrics(ui_state.render_ctx->dw_text_layout, &metrics));
+        ensure_released_and_null(&ui_state.render_ctx->dw_text_layout);
+        str_dimensions = (V2){ .x = metrics.width, .y = metrics.height };
+    }
 
     for (UI_Box *match = ui_state.box_hashmap.ptr[key]; match != 0; match = match->next) {
         if (!str8_eql(hash_str, match->build.str_to_hash)) continue;
@@ -159,7 +170,7 @@ static void ui_begin_build(void) {
     array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_bg, &(V4){0});
 
     ui_state.style_stack.clr_border.len = 0;
-    array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_border, &(V4){0});
+    array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_border, &(V4){ .a = 0.7f });
 
     ui_push_parent(ui_row());
 }
@@ -168,6 +179,9 @@ static UI_Interaction ui_buttonS(Str8 str) {
     UI_Box *button = ui_box(str);
     button->build.flags = ui_box_flag_clickable | ui_box_flag_draw_text | ui_box_flag_draw_border | ui_box_flag_draw_background;
     for_ui_axis (axis) button->build.size[axis].kind = ui_size_kind_text;
+    // button->target_style = (UI_Box_Style){
+    //     .clr_border = { .a = 0.7f },
+    // };
     return ui_push(button);
 }
 ui_define_fmt_fns(ui_button)
@@ -314,15 +328,6 @@ static inline void ui_rect_shift_x(UI_Rect *rect, f32 shift) { rect->left += shi
 static inline void ui_rect_shift_y(UI_Rect *rect, f32 shift) { rect->top += shift; rect->bottom += shift; }
 
 static void ui_render_recursive(UI_Box *box) {
-    // TODO(felix): framerate-independent lerping
-    box->style = (UI_Box_Style){
-        .pad = v2_lerp(box->style.pad, box->target_style.pad, ui_animation_speed),
-        .margin = v2_lerp(box->style.margin, box->target_style.margin, ui_animation_speed),
-        .clr_fg = v4_lerp(box->style.clr_fg, box->target_style.clr_fg, ui_animation_speed),
-        .clr_bg = v4_lerp(box->style.clr_bg, box->target_style.clr_bg, ui_animation_speed),
-        .clr_border = v4_lerp(box->style.clr_border, box->target_style.clr_border, ui_animation_speed),
-    };
-
     assert(!v4_eql(box->target_rect, (V4){0}));
 
     b8 draw_text = box->build.flags & ui_box_flag_draw_text;
@@ -330,38 +335,80 @@ static void ui_render_recursive(UI_Box *box) {
     b8 draw_background = box->build.flags & ui_box_flag_draw_background;
 
     // TODO(felix): get all the colours and values below from box style
+    UI_Box_Style *target = &box->target_style;
 
-    box->target_style.clr_border.a = draw_border ? 0.7f : 0;
+    // if (!draw_border) target->clr_border.a = 0;
+    target->clr_border.a = draw_border ? 0.7f : 0;
+
+    // TODO(felix): framerate-independent lerping
+    box->style = (UI_Box_Style){
+        .pad = v2_lerp(box->style.pad, target->pad, ui_animation_speed),
+        .margin = v2_lerp(box->style.margin, target->margin, ui_animation_speed),
+        .clr_fg = v4_lerp(box->style.clr_fg, target->clr_fg, ui_animation_speed),
+        .clr_bg = v4_lerp(box->style.clr_bg, target->clr_bg, ui_animation_speed),
+        .clr_border = v4_lerp(box->style.clr_border, target->clr_border, ui_animation_speed),
+    };
 
     if (draw_background) {
-        box->target_style.clr_bg = (V4){ .r = 0.6f, .g = 0.6f, .b = 0.6f, .a = 1.f };
+        target->clr_bg = (V4){ .r = 0.6f, .g = 0.6f, .b = 0.6f, .a = 1.f };
         if (box->build.flags & ui_box_flag_clickable) {
             if (box->interaction.clicked) {
                 box->style.clr_bg = (V4){ .r = 0, .g = 0, .b = 0, .a = 1.f };
                 box->style.clr_border = (V4){ .r = 1.f, .g = 1.f, .b = 1.f, .a = 1.f };
             } else if (box->interaction.hovered) {
-                box->target_style.clr_bg.a = 0.4f;
-                box->target_style.clr_border.a = 1.f;
+                target->clr_bg.a = 0.4f;
+                target->clr_border.a = 1.f;
                 // looks better when instant; the *return* to unhovered colours can animate instead
                 box->style.clr_bg.a = 0.4f;
                 box->style.clr_border.a = 1.f;
-            } else box->target_style.clr_bg.a = 1.f;
+            } else target->clr_bg.a = 1.f;
         }
     }
 
-    gfx_draw_rounded_rect(ui_state.render_ctx, (Gfx_Rounded_Rect){
-        .colour = draw_background ? box->style.clr_bg : (V4){0},
-        .corner_radius = 5.f * dpi_scale,
-        .border_thickness = draw_border ? (dpi_scale * 1.f) : 0,
-        .border_colour = box->style.clr_border,
-        .rect = box->rect,
-    });
+    {
+        V4 clr_bg = box->style.clr_bg;
+        if (!draw_background) clr_bg.a = 0.f;
+
+        // TODO(felix): move these to box style
+        f32 corner_radius = 5.f * dpi_scale;
+        f32 border_thickness = draw_border ? (dpi_scale * 1.f) : 0;
+
+        D2D1_RECT_F d2_layout_rect = *(D2D1_RECT_F *)(&box->rect);
+        D2D1_ROUNDED_RECT d2_rounded_rect = {
+            .rect = d2_layout_rect,
+            .radiusX = corner_radius, .radiusY = corner_radius,
+        };
+
+        // TODO(felix): cache this!
+        ID2D1SolidColorBrush *bg_brush = 0;
+        win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(ui_state.render_ctx->d2_render_target, (D2D1_COLOR_F *)&clr_bg, 0, &bg_brush));
+        ID2D1RenderTarget_FillRoundedRectangle(ui_state.render_ctx->d2_render_target, &d2_rounded_rect, (ID2D1Brush *)bg_brush);
+
+        // TODO(felix): cache this!
+        ID2D1SolidColorBrush *border_brush = 0;
+        win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(ui_state.render_ctx->d2_render_target, (D2D_COLOR_F *)&box->style.clr_border, 0, &border_brush));
+
+        ID2D1RenderTarget_DrawRoundedRectangle(ui_state.render_ctx->d2_render_target,
+            &d2_rounded_rect, (ID2D1Brush *)border_brush, border_thickness, ui_state.render_ctx->d2_stroke_style
+        );
+
+        ensure_released_and_null(&border_brush);
+        ensure_released_and_null(&bg_brush);
+    }
 
     if (draw_text) {
         UI_Rect text_rect = box->rect;
         text_rect.left += box->style.margin.x;
+
         // TODO(felix): add parameters for text colour, font size
-        gfx_draw_text(ui_state.arena_frame, ui_state.render_ctx, box->build.str_to_display, text_rect);
+        {
+            D2D1_RECT_F layout_rect = *(D2D1_RECT_F *)(&text_rect);
+            Str16 wstr = str16_from_str8(ui_state.arena_frame, box->build.str_to_display);
+            ID2D1RenderTarget_DrawText(ui_state.render_ctx->d2_render_target,
+                wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, &layout_rect,
+                (ID2D1Brush *)ui_state.render_ctx->d2_brush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, DWRITE_MEASURING_MODE_NATURAL
+            );
+        }
     }
 
     for (UI_Box *child = box->first; child != 0; child = child->next) ui_render_recursive(child);

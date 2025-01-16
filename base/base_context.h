@@ -27,7 +27,7 @@
 #ifndef OS_WINDOWS
     #define OS_WINDOWS 0
 #endif
- 
+
 
 #if defined(__clang__)
     #define COMPILER_CLANG 1
@@ -68,6 +68,11 @@
 #endif
 #ifndef BUILD_DEBUG
     #define BUILD_DEBUG 0
+#endif
+
+
+#if !defined(BASE_GRAPHICS)
+    #define BASE_GRAPHICS 1
 #endif
 
 

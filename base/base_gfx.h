@@ -41,22 +41,12 @@ structdef(Gfx_Render_Ctx) {
     ID2D1StrokeStyle     *d2_stroke_style;
 };
 
-structdef(Gfx_Rounded_Rect) {
-    V4 colour;
-    f32 corner_radius, border_thickness;
-    V4 border_colour;
-    V4 rect;
-};
-
+// TODO(felix): this belongs somewhere else
 structdef(Vertex) { f32 x, y, r, g, b, a; };
 
 #define release(obj) { vcall((IUnknown *)(obj), Release); }
 #define ensure_released_and_null(obj) { if (*(obj) != 0) { release(*(obj)); *(obj) = 0; } }
 #define vcall(struct_ptr, fn_name) (struct_ptr)->lpVtbl->fn_name(struct_ptr)
 #define vcalla(struct_ptr, fn_name, ...) (struct_ptr)->lpVtbl->fn_name((struct_ptr), __VA_ARGS__)
-
-static void gfx_draw_rounded_rect(Gfx_Render_Ctx *ctx, Gfx_Rounded_Rect rounded_rect);
-static void gfx_draw_text(Arena *arena, Gfx_Render_Ctx *ctx, Str8 str, V4 rect);
-static   V2 gfx_str_dimensions(Arena *arena, Gfx_Render_Ctx *ctx, Str8 str);
 
 static LRESULT win32_window_proc(HWND window, u32 message, WPARAM w, LPARAM l);

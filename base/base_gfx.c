@@ -8,49 +8,6 @@ static V2 mouse_pos;
 static bool mouse_left_down, mouse_right_down;
 static bool mouse_left_clicked, mouse_right_clicked;
 
-static void gfx_draw_rounded_rect(Gfx_Render_Ctx *ctx, Gfx_Rounded_Rect rounded_rect) {
-    D2D1_RECT_F d2_layout_rect = *(D2D1_RECT_F *)(&rounded_rect.rect);
-    D2D1_ROUNDED_RECT d2_rounded_rect = {
-        .rect = d2_layout_rect,
-        .radiusX = rounded_rect.corner_radius, .radiusY = rounded_rect.corner_radius,
-    };
-
-    // TODO(felix): cache this!
-    ID2D1SolidColorBrush *bg_brush = 0;
-    win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(ctx->d2_render_target, (D2D1_COLOR_F *)&rounded_rect.colour, 0, &bg_brush));
-    ID2D1RenderTarget_FillRoundedRectangle(ctx->d2_render_target, &d2_rounded_rect, (ID2D1Brush *)bg_brush);
-
-    // TODO(felix): cache this!
-    ID2D1SolidColorBrush *border_brush = 0;
-    win32_assert_hr(ID2D1RenderTarget_CreateSolidColorBrush(ctx->d2_render_target, (D2D_COLOR_F *)&rounded_rect.border_colour, 0, &border_brush));
-
-    ID2D1RenderTarget_DrawRoundedRectangle(ctx->d2_render_target,
-        &d2_rounded_rect, (ID2D1Brush *)border_brush, rounded_rect.border_thickness, ctx->d2_stroke_style
-    );
-
-    ensure_released_and_null(&border_brush);
-    ensure_released_and_null(&bg_brush);
-}
-
-static void gfx_draw_text(Arena *arena, Gfx_Render_Ctx *ctx, Str8 str, V4 rect) {
-    D2D1_RECT_F layout_rect = *(D2D1_RECT_F *)(&rect);
-    Str16 wstr = str16_from_str8(arena, str);
-    ID2D1RenderTarget_DrawText(ctx->d2_render_target,
-        wstr.ptr, (u32)wstr.len, ctx->dw_text_fmt, &layout_rect,
-        (ID2D1Brush *)ctx->d2_brush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, DWRITE_MEASURING_MODE_NATURAL
-    );
-}
-
-static V2 gfx_str_dimensions(Arena *arena, Gfx_Render_Ctx *ctx, Str8 str) {
-    Str16 wstr = str16_from_str8(arena, str);
-    // TODO(felix): cache this! we want to call these functions as little as possible
-    IDWriteFactory_CreateTextLayout(ctx->dw_factory, wstr.ptr, (u32)wstr.len, ctx->dw_text_fmt, window_size.x, window_size.y, &ctx->dw_text_layout);
-    DWRITE_TEXT_METRICS metrics = {0};
-    win32_assert_hr(IDWriteTextLayout_GetMetrics(ctx->dw_text_layout, &metrics));
-    ensure_released_and_null(&ctx->dw_text_layout);
-    return (V2){ .x = metrics.width, .y = metrics.height };
-}
-
 static LRESULT win32_window_proc(HWND window, u32 message, WPARAM w, LPARAM l) {
     switch (message) {
         case WM_CLOSE: DestroyWindow(window); break;

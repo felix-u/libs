@@ -11,9 +11,17 @@ static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
     return v2_add(a, add);
 }
 
+static force_inline V2 v2_max(V2 a, V2 b) { return (V2){ .x = max(a.x, b.x), .y = max(a.y, b.y) }; }
+
+static force_inline V2 v2_min(V2 a, V2 b) { return (V2){ .x = min(a.x, b.x), .y = min(a.y, b.y) }; }
+
 static force_inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
 
 static force_inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
+
+static inline V2 v2_round(V2 v) { return (V2){ .x = roundf(v.x), .y = roundf(v.y) }; }
+
+static inline V2 v2_round_down(V2 v) { return v2_round(v2_sub(v, (V2){ .x = 0.5f, .y = 0.5f })); }
 
 static force_inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v.y * s }; }
 

@@ -4,6 +4,8 @@
 #include "base_linear_algebra.c"
 
 #include "base_io.c"
-#include "base_gfx.c"
 
-#include "base_ui.c"
+#if BASE_GRAPHICS
+    #include "base_gfx.c"
+    #include "base_ui.c"
+#endif

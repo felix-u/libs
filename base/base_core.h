@@ -4,9 +4,18 @@
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
+    #if !BASE_GRAPHICS
+        #define NOGDI
+        #define NOUSER
+    #endif
     #include "windows.h"
+    #define abort() ExitProcess(1) // TODO(felix): is this ok?
     #define _CRT_SECURE_NO_WARNINGS
-    // TODO(felix): these win32_asserts should probably be in base_gfx once that exists (at the very least, win32_assert_d3d_compile should be)
+    #undef near
+    #undef far
+    #undef min
+    #undef max
+    // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
     #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panicf("win32: %", fmt(u64, GetLastError())); } }
     #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panicf("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } }
     #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panicf("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } }
@@ -165,3 +174,8 @@ static void _array_push_slice(struct Arena *arena, Array_void *array, Slice_void
 static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *slice, usize size);
 
 #define array_unused_capacity(array) ((array).cap - (array).len)
+
+#define bit_cast(type) *(type *)&
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))

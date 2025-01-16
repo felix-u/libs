@@ -119,6 +119,7 @@ static void str8_builder_printf_var_args(Str8_Builder *builder, char *fmt_c, va_
         switch (format.type) {
             case format_type_char: str8_builder_push_char(builder, format.value_char); break;
             case format_type_u64: str8_builder_push_u64(builder, format.value_u64); break;
+            case format_type_f32: str8_builder_push_f64(builder, (f64)format.value_f64); break;
             case format_type_f64: str8_builder_push_f64(builder, format.value_f64); break;
             case format_type_cstring: str8_builder_push_str8(builder, str8_from_strc(format.value_cstring)); break;
             case format_type_Str8: str8_builder_push_str8(builder, format.value_Str8); break;
@@ -160,6 +161,7 @@ static void str8_builder_push_f64(Str8_Builder *builder, f64 value) {
         } else exponent = exponent_biased - 1023;
 
         // TODO(felix): rest of ryu algorithm
+        discard(exponent);
     } else {
         // placeholder
         u8 buf[128] = {0};
