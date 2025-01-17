@@ -16,9 +16,9 @@
     #undef min
     #undef max
     // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
-    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panicf("win32: %", fmt(u64, GetLastError())); } }
-    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panicf("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } }
-    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panicf("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } }
+    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } }
+    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } }
+    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } }
 
 #endif // OS
 
@@ -126,12 +126,10 @@ typedef Array(u8) Array_u8;
     typedef Array(Name) Array_##Name; \
     union Name
 
-#define err(s) log_internal("error: " s)
-#define errf(fmt, ...) logf_internal("error: " fmt, __VA_ARGS__)
+#define err(...) log_internal("error: " __VA_ARGS__)
 
-#define panic(s) { panicf("%", fmt(cstring, s)); }
-#define panicf(format, ...) {\
-    logf_internal_with_location(__FILE__, __LINE__, (char *)__func__, "panic: " format, __VA_ARGS__);\
+#define panic(...) {\
+    log_internal_with_location(__FILE__, __LINE__, (char *)__func__, "panic: ", __VA_ARGS__);\
     breakpoint; abort();\
 }
 
@@ -140,6 +138,7 @@ typedef Array(u8) Array_u8;
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
 #define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_get_last_assume_not_empty(s) ((s).ptr[(s).len - 1])
+#define slice_pop(slice) (slice).ptr[--(slice).len]
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
 #define slice_range(slice, beg, end) { .ptr = (void *)((uptr)(slice).ptr + (beg)), .len = (end) - (beg) }
 #define slice_remove(slice_ptr, idx) (slice_ptr)->ptr[idx] = (slice_ptr)->ptr[--(slice_ptr)->len]

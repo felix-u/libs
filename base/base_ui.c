@@ -30,11 +30,11 @@ static UI_Box *ui_border_box(void) {
     return panel;
 }
 
-static inline UI_Box *ui_box(Str8 str) {
+static inline UI_Box *ui_box(String str) {
     assert(str.len != 0 && str.ptr != 0);
 
-    Str8 display_str = str;
-    Str8 hash_str = str;
+    String display_str = str;
+    String hash_str = str;
     {
         usize specifier_beg_i = 0, specifier_end_i = 0;
         enum { before, after, pos_count };
@@ -57,18 +57,18 @@ static inline UI_Box *ui_box(Str8 str) {
                 case 'd': display[pos] = true; break;
                 case ',': {
                     pos += 1;
-                    if (pos != after) panicf("specifier in string '%' has too many commas", fmt(Str8, str));
+                    if (pos != after) panicf("specifier in string '%' has too many commas", fmt(String, str));
                 } break;
                 default: break;
             }
-            panicf("specifier in string '%' never closed with ']'", fmt(Str8, str));
+            panicf("specifier in string '%' never closed with ']'", fmt(String, str));
         }
         goto done_parsing;
 
         compute_specifier: {
             assert(specifier_end_i != 0 || hash[before] || hash[after]);
-            Str8 before_specifier = str8_range(str, 0, specifier_beg_i);
-            Str8 after_specifier = str8_range(str, specifier_end_i + 1, str.len);
+            String before_specifier = string_range(str, 0, specifier_beg_i);
+            String after_specifier = string_range(str, specifier_end_i + 1, str.len);
 
             Array_u8 hash_str_builder = {0};
             arena_alloc_array(ui_state.arena_frame, &hash_str_builder, str.len);
@@ -80,8 +80,8 @@ static inline UI_Box *ui_box(Str8 str) {
             if (display[before]) array_push_slice_assume_capacity(&display_str_builder, &before_specifier);
             if (display[after]) array_push_slice_assume_capacity(&display_str_builder, &after_specifier);
 
-            hash_str = (Str8)slice_from_array(hash_str_builder);
-            display_str = (Str8)slice_from_array(display_str_builder);
+            hash_str = (String)slice_from_array(hash_str_builder);
+            display_str = (String)slice_from_array(display_str_builder);
         }
 
         done_parsing:;
@@ -99,7 +99,7 @@ static inline UI_Box *ui_box(Str8 str) {
 
     V2 str_dimensions = {0};
     {
-        Str16 wstr = str16_from_str8(ui_state.arena_frame, display_str);
+        String16 wstr = string16_from_string(ui_state.arena_frame, display_str);
         // TODO(felix): cache this! we want to call these functions as little as possible
         IDWriteFactory_CreateTextLayout(ui_state.render_ctx->dw_factory,
             wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, window_size.x, window_size.y, &ui_state.render_ctx->dw_text_layout
@@ -111,7 +111,7 @@ static inline UI_Box *ui_box(Str8 str) {
     }
 
     for (UI_Box *match = ui_state.box_hashmap.ptr[key]; match != 0; match = match->next) {
-        if (!str8_eql(hash_str, match->build.str_to_hash)) continue;
+        if (!string_equal(hash_str, match->build.str_to_hash)) continue;
         // TODO(felix): there are fields we need to initialise here that are currently only initialised when allocating a new widget
         // TODO(felix): also, I think, fields that need to be zeroed
         // TODO(felix): need to do some cleanup here to unify control flow
@@ -175,7 +175,7 @@ static void ui_begin_build(void) {
     ui_push_parent(ui_row());
 }
 
-static UI_Interaction ui_buttonS(Str8 str) {
+static UI_Interaction ui_buttonS(String str) {
     UI_Box *button = ui_box(str);
     button->build.flags = ui_box_flag_clickable | ui_box_flag_draw_text | ui_box_flag_draw_border | ui_box_flag_draw_background;
     for_ui_axis (axis) button->build.size[axis].kind = ui_size_kind_text;
@@ -328,7 +328,7 @@ static inline void ui_rect_shift_x(UI_Rect *rect, f32 shift) { rect->left += shi
 static inline void ui_rect_shift_y(UI_Rect *rect, f32 shift) { rect->top += shift; rect->bottom += shift; }
 
 static void ui_render_recursive(UI_Box *box) {
-    assert(!v4_eql(box->target_rect, (V4){0}));
+    assert(!v4_equal(box->target_rect, (V4){0}));
 
     b8 draw_text = box->build.flags & ui_box_flag_draw_text;
     b8 draw_border = box->build.flags & ui_box_flag_draw_border;
@@ -403,7 +403,7 @@ static void ui_render_recursive(UI_Box *box) {
         // TODO(felix): add parameters for text colour, font size
         {
             D2D1_RECT_F layout_rect = *(D2D1_RECT_F *)(&text_rect);
-            Str16 wstr = str16_from_str8(ui_state.arena_frame, box->build.str_to_display);
+            String16 wstr = string16_from_string(ui_state.arena_frame, box->build.str_to_display);
             ID2D1RenderTarget_DrawText(ui_state.render_ctx->d2_render_target,
                 wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, &layout_rect,
                 (ID2D1Brush *)ui_state.render_ctx->d2_brush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, DWRITE_MEASURING_MODE_NATURAL
@@ -422,7 +422,7 @@ static UI_Box *ui_row(void) {
     return row;
 }
 
-static UI_Interaction ui_textS(Str8 str) {
+static UI_Interaction ui_textS(String str) {
     UI_Box *text = ui_box(str);
     text->build.flags = ui_box_flag_draw_text;
     for_ui_axis (axis) text->build.size[axis].kind = ui_size_kind_text;

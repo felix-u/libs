@@ -1,4 +1,4 @@
-// TODO(felix): add slice_eql/slice_compare
+// TODO(felix): add slice_equal/slice_compare
 
 static void slice_copy_explicit_bytes(Arena *arena, Slice_void *dest, Slice_void *src, usize size) {
     dest->ptr = arena_alloc(arena, src->len, size);
@@ -14,10 +14,10 @@ static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_v
     usize slice_len_bytes = slice->len * size;
     for (usize pos = 0; pos + size < slice_len_bytes;) {
         void *this = (char *)slice->ptr + pos;
-        Str8 this_bytes = { .ptr = this, .len = size };
-        Str8 scalar_bytes = { .ptr = scalar, .len = size };
+        String this_bytes = { .ptr = this, .len = size };
+        String scalar_bytes = { .ptr = scalar, .len = size };
 
-        if (!str8_eql(this_bytes, scalar_bytes)) {
+        if (!string_equal(this_bytes, scalar_bytes)) {
             pos += size;
             if (pos + size < slice_len_bytes) continue;
             pos = slice_len_bytes;

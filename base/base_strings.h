@@ -1,12 +1,12 @@
-structdef(Str8) { u8 *ptr; usize len; };
-#define str8c(s)  { .ptr = (u8 *)s, .len = sizeof(s) - 1 }
-#define str8(s) (Str8)str8c(s)
+structdef(String) { u8 *ptr; usize len; };
+#define stringc(s)  { .ptr = (u8 *)s, .len = sizeof(s) - 1 }
+#define string(s) (String)stringc(s)
 
-structdef(Str16) { u16 *ptr; usize len; };
-#define str16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
-#define str16(s) (Str16)str16c(s)
+structdef(String16) { u16 *ptr; usize len; };
+#define string16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
+#define string16(s) (String16)string16c(s)
 
-structdef(Str8_Builder) { u8 *ptr; usize len, cap; Arena *arena; };
+structdef(String_Builder) { u8 *ptr; usize len, cap; Arena *arena; };
 
 structdef(Format) {
     u32 magic; // TODO(felix): remove
@@ -16,7 +16,7 @@ structdef(Format) {
         format_type_f32,
         format_type_f64,
         format_type_cstring,
-        format_type_Str8,
+        format_type_String,
     } type;
     union {
         u8 value_char;
@@ -24,7 +24,7 @@ structdef(Format) {
         f32 value_f32;
         f64 value_f64;
         char *value_cstring;
-        Str8 value_Str8;
+        String value_String;
     };
     u8 base; // TODO(felix)
     bool prefix; // TODO(felix)
@@ -34,8 +34,8 @@ structdef(Format) {
 #define fmt_magic_number 1234567890
 #define fmt(type_, ...) (Format){ .magic = fmt_magic_number, .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
 
-#define strc_printf(arena_ptr, fmt, ...)\
-    (char *)(str8_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
+#define cstring_printf(arena_ptr, fmt, ...)\
+    (char *)(string_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
 
 #define _for_valid_hex_digit(action)\
     action('0', 0x0) action('1', 0x1) action('2', 0x2) action('3', 0x3)\
@@ -50,30 +50,30 @@ const u8 decimal_from_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
-const b8 is_hex_digit_table[256] = {
+const b8 is_hex_digit[256] = {
     #define _make_hex_digit_truth_table(c, val) [c] = true,
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
 
-static usize decimal_from_hex_str8(Str8 s);
+static usize int_from_hex_string(String s);
 
-static char *strc_from_str8(Arena *arena, Str8 s);
+static char *cstring_from_string(Arena *arena, String s);
 
-static bool str8_eql(Str8 s1, Str8 s2);
-static Str8 str8_from_strc(char *s);
-static Str8 str8_from_int_base(Arena *arena, usize _num, u8 base);
-static Str8 str8_printf(Arena *arena, char *fmt, ...);
-static Str8 str8_range(Str8 s, usize beg, usize end);
-static Str8 str8_vprintf(Arena *arena, char *fmt, va_list args);
+static bool string_equal(String s1, String s2);
+static String string_from_cstring(char *s);
+static String string_from_int_base(Arena *arena, usize _num, u8 base);
+static String string_printf(Arena *arena, char *fmt, ...);
+static String string_range(String s, usize beg, usize end);
+static String string_vprintf(Arena *arena, char *fmt, va_list args);
 
-static Str16 str16_from_str8(Arena *arena, Str8 s);
+static String16 string16_from_string(Arena *arena, String s);
 
-static void str8_builder_null_terminate(Str8_Builder *builder);
-static void str8_builder_printf(Str8_Builder *builder, char *fmt, ...);
-static void str8_builder_printf_var_args(Str8_Builder *builder, char *fmt, va_list args);
-static void str8_builder_push_f64(Str8_Builder *builder, f64 value);
-static void str8_builder_push_u64(Str8_Builder *builder, u64 value);
-static void str8_builder_push_char(Str8_Builder *builder, u8 c);
-static void str8_builder_push_str8(Str8_Builder *builder, Str8 str);
-static Str8 str8_from_str8_builder(Str8_Builder builder);
+static void string_builder_null_terminate(String_Builder *builder);
+static void string_builder_printf(String_Builder *builder, char *fmt, ...);
+static void string_builder_printf_var_args(String_Builder *builder, char *fmt, va_list args);
+static void string_builder_push_f64(String_Builder *builder, f64 value);
+static void string_builder_push_u64(String_Builder *builder, u64 value);
+static void string_builder_push_char(String_Builder *builder, u8 c);
+static void string_builder_push_string(String_Builder *builder, String str);
+static String string_from_string_builder(String_Builder builder);
 

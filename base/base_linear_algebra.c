@@ -4,7 +4,7 @@ static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.
 
 static force_inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
 
-static force_inline bool v2_eql(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
+static force_inline bool v2_equal(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
 
 static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
     V2 add = v2_scale(v2_sub(b, a), amount);
@@ -39,7 +39,7 @@ static inline V3 v3_cross(V3 a, V3 b) {
 
 static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-static force_inline bool v3_eql(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
+static force_inline bool v3_equal(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
 
 static force_inline V3 v3_forward_from_view(M4 view) {
     return (V3){ .x = -view.elements[0][2], .y = -view.elements[1][2], .z = -view.elements[2][2] };
@@ -89,7 +89,7 @@ static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.
 
 static inline f32 v4_dot(V4 a, V4 b) { return v3_dot(a.xyz, b.xyz) + a.w * b.w; }
 
-static force_inline bool v4_eql(V4 a, V4 b) {
+static force_inline bool v4_equal(V4 a, V4 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
 }
 

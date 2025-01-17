@@ -27,7 +27,7 @@ enumdef(UI_Box_Flags, u8) {
 };
 
 structdef(UI_Box_Build) {
-    Str8 str_to_hash, str_to_display;
+    String str_to_hash, str_to_display;
     UI_Box_Flags flags;
     UI_Size size[ui_axis_count];
 };
@@ -85,23 +85,23 @@ structdef(UI_State) {
     )
 #define ui_parent(box) ui_defer_loop(ui_push_parent(box), ui_pop_parent())
 
-#define ui_define_fmt_fns(ui_fn_takes_str8_returns_interaction)\
-    static UI_Interaction ui_fn_takes_str8_returns_interaction##f(char *fmt, ...) {\
+#define ui_define_fmt_fns(ui_fn_takes_string_returns_interaction)\
+    static UI_Interaction ui_fn_takes_string_returns_interaction##f(char *fmt, ...) {\
         va_list args; va_start(args, fmt);\
-        Str8 text = str8_vprintf(ui_state.arena_frame, fmt, args);\
+        String text = string_vprintf(ui_state.arena_frame, fmt, args);\
         va_end(args);\
-        return ui_fn_takes_str8_returns_interaction##S(text);\
+        return ui_fn_takes_string_returns_interaction##S(text);\
     }\
     \
-    static inline UI_Interaction ui_fn_takes_str8_returns_interaction(char *strc) {\
-        return ui_fn_takes_str8_returns_interaction##S(str8_from_strc(strc));\
+    static inline UI_Interaction ui_fn_takes_string_returns_interaction(char *cstring) {\
+        return ui_fn_takes_string_returns_interaction##S(string_from_cstring(cstring));\
     }
 
 static          UI_Box *ui_border_box(void);
-static  inline  UI_Box *ui_box(Str8 str);
+static  inline  UI_Box *ui_box(String str);
 static          UI_Box *ui_box_frame_local_not_keyed(void);
 static            void  ui_begin_build(void);
-static  UI_Interaction  ui_buttonS(Str8 str);
+static  UI_Interaction  ui_buttonS(String str);
 static          UI_Box *ui_column(void);
 static            void  ui_compute_layout_dependent_ancestor(UI_Box *box);
 static            void  ui_compute_layout_dependent_descendant(UI_Box *box);
@@ -116,4 +116,4 @@ static inline     void  ui_rect_shift_x(UI_Rect *rect, f32 shift);
 static inline     void  ui_rect_shift_y(UI_Rect *rect, f32 shift);
 static            void  ui_render_recursive(UI_Box *box);
 static          UI_Box *ui_row(void);
-static  UI_Interaction  ui_textS(Str8 str);
+static  UI_Interaction  ui_textS(String str);
