@@ -6,10 +6,13 @@ structdef(String16) { u16 *ptr; usize len; };
 #define string16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
 #define string16(s) (String16)string16c(s)
 
-structdef(String_Builder) { u8 *ptr; usize len, cap; Arena *arena; };
+uniondef(String_Builder) {
+    struct { u8 *ptr; usize len, cap; Arena *arena; };
+    struct { String string; usize cap_; Arena *arena_; };
+    struct { Array_u8 byte_array; Arena *arena__; };
+};
 
 structdef(Format) {
-    u32 magic; // TODO(felix): remove
     enum {
         format_type_char,
         format_type_u64,
@@ -31,8 +34,7 @@ structdef(Format) {
     bool uppercase; // TODO(felix)
 };
 
-#define fmt_magic_number 1234567890
-#define fmt(type_, ...) (Format){ .magic = fmt_magic_number, .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
+#define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
 
 #define cstring_printf(arena_ptr, fmt, ...)\
     (char *)(string_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
@@ -75,5 +77,3 @@ static void string_builder_push_f64(String_Builder *builder, f64 value);
 static void string_builder_push_u64(String_Builder *builder, u64 value);
 static void string_builder_push_char(String_Builder *builder, u8 c);
 static void string_builder_push_string(String_Builder *builder, String str);
-static String string_from_string_builder(String_Builder builder);
-

@@ -46,17 +46,12 @@ static inline void _array_push_assume_capacity(Array_void *array, void *item, us
     array->len = new_len;
 }
 
-static inline usize _next_power_of_2(usize n) {
-    usize result = 1;
-    while (result < n) result *= 2;
-    return result;
-}
-
 static void _array_push_slice(Arena *arena, Array_void *array, Slice_void *slice, usize size) {
     usize new_len = array->len + slice->len;
     if (new_len > array->cap) {
-        usize new_cap = _next_power_of_2(new_len);
-        _arena_realloc_array(arena, array, new_cap, size);
+        usize new_capacity_power_of_2 = 1;
+        while (new_capacity_power_of_2 < new_len) new_capacity_power_of_2 *= 2;
+        _arena_realloc_array(arena, array, new_capacity_power_of_2, size);
         if (array->cap == 0) return;
     }
     memmove((u8 *)array->ptr + (array->len * size), slice->ptr, slice->len * size);

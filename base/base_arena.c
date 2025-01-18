@@ -7,16 +7,14 @@ static Arena arena_init(usize size) {
     return arena;
 }
 
-static void arena_align(Arena *arena, usize align) {
-    usize modulo = arena->offset & (align - 1);
-    if (modulo != 0) arena->offset += align - modulo;
-}
-
 static void *arena_alloc(Arena *arena, usize cap, usize size) {
-    // TODO(felix): asan_poison alignment bytes
-
     usize num_bytes = cap * size;
-    arena_align(arena, arena_default_alignment);
+
+    // TODO(felix): asan_poison alignment bytes
+    usize alignment = 2 * sizeof(void *);
+    usize modulo = arena->offset & (alignment - 1);
+    if (modulo != 0) arena->offset += alignment - modulo;
+
     if (arena->offset + num_bytes > arena->cap) panic("allocation failure");
 
     void *mem = (u8 *)arena->mem + arena->offset;

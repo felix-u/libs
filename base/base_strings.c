@@ -65,7 +65,7 @@ static String string_range(String str, usize beg, usize end) {
 static String string_vprintf(Arena *arena, char *fmt, va_list args) {
     String_Builder builder = { .arena = arena };
     string_builder_printf_var_args(&builder, fmt, args);
-    return string_from_string_builder(builder);
+    return builder.string;
 }
 
 static String16 string16_from_string(Arena *arena, String s) {
@@ -113,7 +113,6 @@ static void string_builder_printf_var_args(String_Builder *builder, char *fmt_c,
         }
 
         Format format = va_arg(args, Format);
-        assert(format.magic == fmt_magic_number);
         switch (format.type) {
             case format_type_char: string_builder_push_char(builder, format.value_char); break;
             case format_type_u64: string_builder_push_u64(builder, format.value_u64); break;
@@ -194,8 +193,4 @@ static void string_builder_push_char(String_Builder *builder, u8 c) {
 
 static void string_builder_push_string(String_Builder *builder, String str) {
     array_push_slice(builder->arena, builder, &str);
-}
-
-static String string_from_string_builder(String_Builder builder) {
-    return (String)slice_from_array(builder);
 }

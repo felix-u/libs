@@ -38,7 +38,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
 
     end:
     CloseHandle(file);
-    return (String)slice_from_array(bytes);
+    return bit_cast(String) bytes.slice;
 }
 
 static void file_write_bytes_to_relative_path(char *path, String bytes) {
@@ -77,8 +77,7 @@ static void print_var_args(char *format, va_list args) {
     String_Builder output = { .arena = &arena };
     string_builder_printf_var_args(&output, format, args);
 
-    // TODO(felix): this should be a union access now that we're using C11
-    String str = string_from_string_builder(output);
+    String str = output.string;
 
     #if OS_WINDOWS
         OutputDebugStringA((char *)str.ptr);

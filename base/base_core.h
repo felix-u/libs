@@ -94,9 +94,13 @@ typedef     uintptr_t  uptr;
 typedef      intptr_t  iptr;
 
 #define Slice(type) struct { type *ptr; usize len; }
+typedef Slice(u8) Slice_u8;
 typedef Slice(void) Slice_void;
 
-#define Array(type) struct { type *ptr; usize len, cap; }
+#define Array(type) union {\
+    struct { type *ptr; usize len, cap; };\
+    struct { Slice_##type slice; usize len_; };\
+}
 typedef Array(void) Array_void;
 typedef Array(u8) Array_u8;
 
@@ -136,7 +140,6 @@ typedef Array(u8) Array_u8;
 #define slice_copy(arena, dest_ptr, src_ptr)\
     slice_copy_explicit_bytes((arena), (Slice_void *)(dest_ptr), (Slice_void *)(src_ptr), sizeof(*(dest_ptr)->ptr))
 #define slice_from_c_array(c_array) { .ptr = c_array, .len = array_count(c_array) }
-#define slice_from_array(a) { .ptr = (a).ptr, .len = (a).len }
 #define slice_get_last_assume_not_empty(s) ((s).ptr[(s).len - 1])
 #define slice_pop(slice) (slice).ptr[--(slice).len]
 #define slice_push(slice, item) (slice).ptr[(slice).len++] = item
