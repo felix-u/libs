@@ -181,3 +181,5 @@ static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *sli
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
+#define clamp_low max
+#define clamp_high min
