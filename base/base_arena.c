@@ -1,52 +1,27 @@
-static Arena arena_init(usize size) {
+static Arena arena_init(usize initial_size_bytes) {
     // TODO(felix): switch to reserve+commit with (virtually) no cap: reserve something like 64gb and commit pages as needed
-    Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size) };
+    Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, initial_size_bytes) };
     if (arena.mem == 0) panic("allocation failure");
-    arena.cap = size;
+    arena.cap = initial_size_bytes;
     asan_poison_memory_region(arena.mem, arena.cap);
     return arena;
 }
 
-static void *arena_alloc(Arena *arena, usize cap, usize size) {
-    usize num_bytes = cap * size;
+static void *arena_make(Arena *arena, usize item_count, usize item_size) {
+    usize byte_count = item_count * item_size;
 
     // TODO(felix): asan_poison alignment bytes
     usize alignment = 2 * sizeof(void *);
     usize modulo = arena->offset & (alignment - 1);
     if (modulo != 0) arena->offset += alignment - modulo;
 
-    if (arena->offset + num_bytes > arena->cap) panic("allocation failure");
+    if (arena->offset + byte_count > arena->cap) panic("allocation failure");
 
     void *mem = (u8 *)arena->mem + arena->offset;
     arena->last_offset = arena->offset;
-    arena->offset += num_bytes;
-    asan_unpoison_memory_region(mem, num_bytes);
+    arena->offset += byte_count;
+    asan_unpoison_memory_region(mem, byte_count);
     return mem;
-}
-
-static void *arena_realloc(Arena *arena, void *mem, usize cap, usize size) {
-    usize num_bytes = cap * size;
-    void *last_allocation = (u8 *)arena->mem + arena->last_offset;
-    if (mem == last_allocation && arena->last_offset + num_bytes <= arena->cap) {
-        arena->offset = arena->last_offset + num_bytes;
-        asan_unpoison_memory_region(mem, num_bytes);
-        return mem;
-    }
-    return arena_alloc(arena, cap, size);
-}
-
-static void _arena_alloc_array(Arena *arena, Array_void *array, usize cap, usize size) {
-    array->ptr = arena_alloc(arena, cap, size);
-    array->len = 0;
-    array->cap = (array->ptr == 0) ? 0 : cap;
-}
-
-static void _arena_realloc_array(Arena *arena, Array_void *array, usize cap, usize size) {
-    void *old_ptr = array->ptr;
-    array->ptr = arena_realloc(arena, array->ptr, cap, size);
-    // memmove instead of memcpy because there is overlap (the ranges are identical) if arena_realloc() didn't need to really realloc
-    memmove(array->ptr, old_ptr, array->len * size);
-    array->cap = cap;
 }
 
 static void arena_deinit(Arena *arena) {

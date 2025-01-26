@@ -11,27 +11,20 @@ structdef(Arena_Temp) {
     usize last_offset;
 };
 
-static void *arena_alloc(Arena *arena, usize cap, usize size);
+static void *arena_make(Arena *arena, usize item_count, usize item_size);
 static void  arena_deinit(Arena *arena);
-static Arena arena_init(usize size);
-static void *arena_realloc(Arena *arena, void *mem, usize cap, usize size);
 
-#define arena_alloc_array(arena_ptr, array_ptr, cap) \
-    _arena_alloc_array(arena_ptr, (Array_void *)(array_ptr), cap, sizeof(*((array_ptr)->ptr)))
-static void _arena_alloc_array(Arena *arena, Array_void *array, usize cap, usize size);
-
-#define arena_realloc_array(arena_ptr, array_ptr, cap) \
-    _arena_realloc_array(arena_ptr, (Array_void *)(array_ptr), cap, sizeof(*((array_ptr)->ptr)))
-static void _arena_realloc_array(Arena *arena, Array_void *array, usize cap, usize size);
+// TODO(felix): remove this function. A zeroed reserve+commit arena will be valid and will grow on demand
+static Arena arena_init(usize initial_size_bytes);
 
 static Arena_Temp arena_temp_begin(Arena *arena);
 static void       arena_temp_end(Arena_Temp arena_temp);
 
 #if BUILD_ASAN
-    #define asan_poison_memory_region(addr, size)   __asan_poison_memory_region(addr, size)
-    #define asan_unpoison_memory_region(addr, size) __asan_unpoison_memory_region(addr, size)
+    #define asan_poison_memory_region(address, byte_count)   __asan_poison_memory_region(address, byte_count)
+    #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
     #include <sanitizer/asan_interface.h>
 #else
-    #define asan_poison_memory_region(addr, size)   { discard(addr); discard(size); }
-    #define asan_unpoison_memory_region(addr, size) { discard(addr); discard(size); }
+    #define asan_poison_memory_region(address, byte_count)   { discard(address); discard(byte_count); }
+    #define asan_unpoison_memory_region(address, byte_count) { discard(address); discard(byte_count); }
 #endif // BUILD_ASAN

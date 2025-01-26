@@ -21,7 +21,7 @@ static String string_from_cstring(char *s) {
 }
 
 static char *cstring_from_string(Arena *arena, String s) {
-    char *cstring = arena_alloc(arena, s.len + 1, sizeof(char));
+    char *cstring = arena_make(arena, s.len + 1, sizeof(char));
     for (usize i = 0; i < s.len; i += 1) cstring[i] = s.ptr[i];
     cstring[s.len] = '\0';
     return cstring;
@@ -37,7 +37,7 @@ static String string_from_int_base(Arena *arena, usize _num, u8 base) {
         str.len += 1;
     } while (num > 0);
 
-    str.ptr = arena_alloc(arena, str.len, sizeof(u8));
+    str.ptr = arena_make(arena, str.len, sizeof(u8));
 
     num = _num;
     for (i64 i = str.len - 1; i >= 0; i -= 1) {
@@ -65,21 +65,16 @@ static String string_range(String str, usize beg, usize end) {
 static String string_vprintf(Arena *arena, char *fmt, va_list args) {
     String_Builder builder = { .arena = arena };
     string_builder_printf_var_args(&builder, fmt, args);
-    return builder.string;
+    return bit_cast(String) builder;
 }
 
 static String16 string16_from_string(Arena *arena, String s) {
     String16 wstr = {
-        .ptr = arena_alloc(arena, s.len, sizeof(u16)),
+        .ptr = arena_make(arena, s.len, sizeof(u16)),
         .len = MultiByteToWideChar(CP_UTF8, 0, (char *)s.ptr, (int)s.len, wstr.ptr, (int)s.len),
     };
     win32_assert_not_0(wstr.len);
     return wstr;
-}
-
-static void string_builder_null_terminate(String_Builder *builder) {
-    u8 null_terminator = 0;
-    array_push(builder->arena, builder, &null_terminator);
 }
 
 static void string_builder_printf(String_Builder *builder, char *fmt, ...) {
@@ -89,6 +84,8 @@ static void string_builder_printf(String_Builder *builder, char *fmt, ...) {
     va_end(args);
 }
 
+// TODO(felix): in debug mode, magic number to catch variadic arguments which are not Format structs
+// TODO(felix): special format argument to mark end of va_list
 static void string_builder_printf_var_args(String_Builder *builder, char *fmt_c, va_list args) {
     String fmt_str = string_from_cstring(fmt_c);
     assert(fmt_str.len > 0);
@@ -105,12 +102,6 @@ static void string_builder_printf_var_args(String_Builder *builder, char *fmt_c,
         assert(fmt_str.ptr[i] == '%');
 
         if (i > beg_i) string_builder_push_string(builder, string_range(fmt_str, beg_i, i));
-
-        if (i + 1 < fmt_str.len && fmt_str.ptr[i + 1] == '%') {
-            string_builder_push_char(builder, '%');
-            i += 1;
-            continue;
-        }
 
         Format format = va_arg(args, Format);
         switch (format.type) {
@@ -187,10 +178,9 @@ static void string_builder_push_u64(String_Builder *builder, u64 value) {
 }
 
 static void string_builder_push_char(String_Builder *builder, u8 c) {
-    // TODO(felix): might be worth looking into array_push and making a fast path for single-item pushes
-    array_push(builder->arena, builder, &c);
+    array_push(builder, &c);
 }
 
 static void string_builder_push_string(String_Builder *builder, String str) {
-    array_push_slice(builder->arena, builder, &str);
+    array_push_slice(builder, &str);
 }

@@ -6,11 +6,7 @@ structdef(String16) { u16 *ptr; usize len; };
 #define string16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
 #define string16(s) (String16)string16c(s)
 
-uniondef(String_Builder) {
-    struct { u8 *ptr; usize len, cap; Arena *arena; };
-    struct { String string; usize cap_; Arena *arena_; };
-    struct { Array_u8 byte_array; Arena *arena__; };
-};
+typedef Array_u8 String_Builder;
 
 structdef(Format) {
     enum {
@@ -70,7 +66,6 @@ static String string_vprintf(Arena *arena, char *fmt, va_list args);
 
 static String16 string16_from_string(Arena *arena, String s);
 
-static void string_builder_null_terminate(String_Builder *builder);
 static void string_builder_printf(String_Builder *builder, char *fmt, ...);
 static void string_builder_printf_var_args(String_Builder *builder, char *fmt, va_list args);
 static void string_builder_push_f64(String_Builder *builder, f64 value);

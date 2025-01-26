@@ -13,7 +13,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
         return (String){0};
     }
 
-    Array_u8 bytes = {0};
+    Array_u8 bytes = { .arena = arena };
 
     usize file_size = 0;
     if (!GetFileSizeEx(file, (PLARGE_INTEGER)&file_size)) {
@@ -26,7 +26,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
         goto end;
     }
 
-    arena_alloc_array(arena, &bytes, file_size);
+    array_ensure_capacity(&bytes, file_size);
 
     u32 num_bytes_read = 0;
     if (!ReadFile(file, bytes.ptr, (u32)file_size, (LPDWORD)&num_bytes_read, 0)) {
@@ -38,7 +38,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
 
     end:
     CloseHandle(file);
-    return bit_cast(String) bytes.slice;
+    return bit_cast(String) bytes;
 }
 
 static void file_write_bytes_to_relative_path(char *path, String bytes) {
@@ -77,7 +77,7 @@ static void print_var_args(char *format, va_list args) {
     String_Builder output = { .arena = &arena };
     string_builder_printf_var_args(&output, format, args);
 
-    String str = output.string;
+    String str = bit_cast(String) output;
 
     #if OS_WINDOWS
         OutputDebugStringA((char *)str.ptr);

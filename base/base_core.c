@@ -1,66 +1,49 @@
 // TODO(felix): add slice_equal/slice_compare
 
-static void slice_copy_explicit_bytes(Arena *arena, Slice_void *dest, Slice_void *src, usize size) {
-    dest->ptr = arena_alloc(arena, src->len, size);
-    memcpy(dest->ptr, src->ptr, src->len * size);
-    dest->len = src->len;
-}
+static void array_ensure_capacity_explicit_item_size(Array_void *array, usize item_count, usize item_size, bool non_zero) {
+    if (array->cap >= item_count) return;
 
-// TODO: simplify. current complexity is due to making valid capture to end of slice if end of slice is hit with no match.
-// I think this makes sense - e.g. when splitting lines of a file, there may not be a newline between the last line and EOF.
-static bool slice_split_scalar_explicit(Slice_void *slice, void *scalar, Slice_void *capture, usize size) {
-    if (slice == 0 || scalar == 0 || capture == 0 || size == 0) return false;
+    // TODO(felix): should this be a power of 2?
+    usize new_capacity = clamp_low(1, array->cap * 2);
+    while (new_capacity < item_count) new_capacity *= 2;
 
-    usize slice_len_bytes = slice->len * size;
-    for (usize pos = 0; pos + size < slice_len_bytes;) {
-        void *this = (char *)slice->ptr + pos;
-        String this_bytes = { .ptr = this, .len = size };
-        String scalar_bytes = { .ptr = scalar, .len = size };
+    u8 *new_memory = arena_make(array->arena, item_count, item_size);
+    memcpy(new_memory, array->ptr, array->len * item_size);
 
-        if (!string_equal(this_bytes, scalar_bytes)) {
-            pos += size;
-            if (pos + size < slice_len_bytes) continue;
-            pos = slice_len_bytes;
-            *capture = (Slice_void)slice_range(*slice, 0, pos / size);
-            *slice = (Slice_void){0};
-        } else {
-            *capture = (Slice_void)slice_range(*slice, 0, pos / size);
-            *slice = (Slice_void)slice_range(*slice, pos / size + 1, slice->len);
-        }
-
-        return true;
+    if (!non_zero) {
+        usize old_capacity = array->cap;
+        usize growth_byte_count = item_size * (new_capacity - old_capacity);
+        u8 *beginning_of_new_memory = new_memory + (item_size * old_capacity);
+        memset(beginning_of_new_memory, 0, growth_byte_count);
     }
 
-    return false;
+    array->ptr = new_memory;
+    array->cap = new_capacity;
 }
 
-static inline void _array_push(Arena *arena, Array_void *array, void *item, usize size) {
+static inline void array_push_explicit_item_size(Array_void *array, void *item, usize item_size) {
     Slice_void slice = { .ptr = item, .len = 1 };
-    _array_push_slice(arena, array, &slice, size);
+    array_push_slice_explicit_item_size(array, &slice, item_size);
 }
 
-static inline void _array_push_assume_capacity(Array_void *array, void *item, usize size) {
+static inline void array_push_explicit_item_size_assume_capacity(Array_void *array, void *item, usize item_size) {
     usize new_len = array->len + 1;
     assert(new_len <= array->cap);
-    memmove((u8 *)array->ptr + (array->len * size), item, size);
+    memmove((u8 *)array->ptr + (array->len * item_size), item, item_size);
     array->len = new_len;
 }
 
-static void _array_push_slice(Arena *arena, Array_void *array, Slice_void *slice, usize size) {
+static void array_push_slice_explicit_item_size(Array_void *array, Slice_void *slice, usize item_size) {
+    assert(array->arena != 0);
     usize new_len = array->len + slice->len;
-    if (new_len > array->cap) {
-        usize new_capacity_power_of_2 = 1;
-        while (new_capacity_power_of_2 < new_len) new_capacity_power_of_2 *= 2;
-        _arena_realloc_array(arena, array, new_capacity_power_of_2, size);
-        if (array->cap == 0) return;
-    }
-    memmove((u8 *)array->ptr + (array->len * size), slice->ptr, slice->len * size);
+    array_ensure_capacity_explicit_item_size(array, new_len, item_size, false);
+    memmove((u8 *)array->ptr + (array->len * item_size), slice->ptr, slice->len * item_size);
     array->len = new_len;
 }
 
-static void _array_push_slice_assume_capacity(Array_void *array, Slice_void *slice, usize size) {
+static void array_push_slice_explicit_item_size_assume_capacity(Array_void *array, Slice_void *slice, usize item_size) {
     usize new_len = array->len + slice->len;
     assert(new_len <= array->cap);
-    memmove((u8 *)array->ptr + (array->len * size), slice->ptr, slice->len * size);
+    memmove((u8 *)array->ptr + (array->len * item_size), slice->ptr, slice->len * item_size);
     array->len = new_len;
 }
