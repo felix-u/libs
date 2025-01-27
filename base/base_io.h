@@ -1,5 +1,5 @@
 static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_bytes);
-static void file_write_bytes_to_relative_path(char *path, String bytes);
+static bool file_write_bytes_to_relative_path(char *path, String bytes);
 
 #define log_info(...) log_internal("info: " __VA_ARGS__)
 #define log_internal(...) log_internal_with_location(__FILE__, __LINE__, (char *)__func__, __VA_ARGS__)

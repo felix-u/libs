@@ -41,10 +41,22 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
     return bit_cast(String) bytes;
 }
 
-static void file_write_bytes_to_relative_path(char *path, String bytes) {
-    discard(path);
-    discard(bytes);
-    panic("TODO");
+static bool file_write_bytes_to_relative_path(char *path, String bytes) {
+    usize dword_max = UINT32_MAX;
+    assert(bytes.count <= dword_max);
+
+    // NOTE(felix): not sure about this. See https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+    DWORD share_mode = 0;
+    HANDLE file_handle = CreateFileA(path, GENERIC_WRITE, share_mode, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        err("unable to open file '%'", fmt(cstring, path));
+        return false;
+    }
+
+    bool ok = WriteFile(file_handle, bytes.data, (DWORD)bytes.count, 0, 0);
+
+    CloseHandle(file_handle);
+    return ok;
 }
 
 static void log_internal_with_location(char *file, usize line, char *func, char *format, ...) {
