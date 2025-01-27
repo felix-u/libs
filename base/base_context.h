@@ -39,7 +39,7 @@
         #error not sure how we got here, but MSVC on a non-Windows OS is unsupported
     #endif
 #else
-    #define COMPILER_STD 1
+    #define COMPILER_STANDARD 1
 #endif // COMPILER_...
 
 #ifndef COMPILER_CLANG

@@ -1,7 +1,7 @@
 static usize int_from_hex_string(String s) {
-    usize result = 0, magnitude = s.len;
-    for (usize i = 0; i < s.len; i += 1, magnitude -= 1) {
-        usize hex_digit = decimal_from_hex_digit_table[s.ptr[i]];
+    usize result = 0, magnitude = s.count;
+    for (usize i = 0; i < s.count; i += 1, magnitude -= 1) {
+        usize hex_digit = decimal_from_hex_digit_table[s.data[i]];
         for (usize j = 1; j < magnitude; j += 1) hex_digit *= 16;
         result += hex_digit;
     }
@@ -9,21 +9,21 @@ static usize int_from_hex_string(String s) {
 }
 
 static bool string_equal(String s1, String s2) {
-    if (s1.len != s2.len) return false;
-    return memcmp(s1.ptr, s2.ptr, s1.len) == 0;
+    if (s1.count != s2.count) return false;
+    return memcmp(s1.data, s2.data, s1.count) == 0;
 }
 
 static String string_from_cstring(char *s) {
     if (s == NULL) return (String){ 0 };
-    usize len = 0;
-    while (s[len] != '\0') len += 1;
-    return (String){ .ptr = (u8 *)s, .len = len };
+    usize count = 0;
+    while (s[count] != '\0') count += 1;
+    return (String){ .data = (u8 *)s, .count = count };
 }
 
 static char *cstring_from_string(Arena *arena, String s) {
-    char *cstring = arena_make(arena, s.len + 1, sizeof(char));
-    for (usize i = 0; i < s.len; i += 1) cstring[i] = s.ptr[i];
-    cstring[s.len] = '\0';
+    char *cstring = arena_make(arena, s.count + 1, sizeof(char));
+    for (usize i = 0; i < s.count; i += 1) cstring[i] = s.data[i];
+    cstring[s.count] = '\0';
     return cstring;
 }
 
@@ -34,14 +34,14 @@ static String string_from_int_base(Arena *arena, usize _num, u8 base) {
 
     do {
         num /= base;
-        str.len += 1;
+        str.count += 1;
     } while (num > 0);
 
-    str.ptr = arena_make(arena, str.len, sizeof(u8));
+    str.data = arena_make(arena, str.count, sizeof(u8));
 
     num = _num;
-    for (i64 i = str.len - 1; i >= 0; i -= 1) {
-        str.ptr[i] = (num % base) + '0';
+    for (i64 i = str.count - 1; i >= 0; i -= 1) {
+        str.data[i] = (num % base) + '0';
         num /= base;
     }
 
@@ -57,9 +57,9 @@ static String string_printf(Arena *arena, char *format, ...) {
 }
 
 static String string_range(String str, usize beg, usize end) {
-    assert(end <= str.len);
+    assert(end <= str.count);
     assert(beg < end);
-    return (String){ .ptr = str.ptr + beg, .len = end - beg };
+    return (String){ .data = str.data + beg, .count = end - beg };
 }
 
 static String string_vprintf(Arena *arena, char *fmt, va_list args) {
@@ -70,10 +70,10 @@ static String string_vprintf(Arena *arena, char *fmt, va_list args) {
 
 static String16 string16_from_string(Arena *arena, String s) {
     String16 wstr = {
-        .ptr = arena_make(arena, s.len, sizeof(u16)),
-        .len = MultiByteToWideChar(CP_UTF8, 0, (char *)s.ptr, (int)s.len, wstr.ptr, (int)s.len),
+        .data = arena_make(arena, s.count, sizeof(u16)),
+        .count = MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
     };
-    win32_assert_not_0(wstr.len);
+    win32_assert_not_0(wstr.count);
     return wstr;
 }
 
@@ -88,18 +88,18 @@ static void string_builder_printf(String_Builder *builder, char *fmt, ...) {
 // TODO(felix): special format argument to mark end of va_list
 static void string_builder_printf_var_args(String_Builder *builder, char *fmt_c, va_list args) {
     String fmt_str = string_from_cstring(fmt_c);
-    assert(fmt_str.len > 0);
+    assert(fmt_str.count > 0);
 
-    for (usize i = 0; i < fmt_str.len; i += 1) {
+    for (usize i = 0; i < fmt_str.count; i += 1) {
         usize beg_i = i;
-        while (fmt_str.ptr[i] != '%' && i < fmt_str.len) i += 1;
+        while (fmt_str.data[i] != '%' && i < fmt_str.count) i += 1;
 
-        if (i == fmt_str.len) {
+        if (i == fmt_str.count) {
             string_builder_push_string(builder, string_range(fmt_str, beg_i, i));
             return;
         }
 
-        assert(fmt_str.ptr[i] == '%');
+        assert(fmt_str.data[i] == '%');
 
         if (i > beg_i) string_builder_push_string(builder, string_range(fmt_str, beg_i, i));
 
@@ -152,7 +152,7 @@ static void string_builder_push_f64(String_Builder *builder, f64 value) {
     } else {
         // placeholder
         u8 buf[128] = {0};
-        String printed = { .ptr = buf, .len = snprintf((char *)buf, sizeof(buf), "%.2f", value) };
+        String printed = { .data = buf, .count = snprintf((char *)buf, sizeof(buf), "%.2f", value) };
         string_builder_push_string(builder, printed);
     }
 }
@@ -173,7 +173,7 @@ static void string_builder_push_u64(String_Builder *builder, u64 value) {
         buf_mem[buf_index] = (value % 10) + '0';
     }
 
-    String decimal = { .ptr = buf_mem + buf_index, .len = (20 - buf_index) };
+    String decimal = { .data = buf_mem + buf_index, .count = (20 - buf_index) };
     string_builder_push_string(builder, decimal);
 }
 

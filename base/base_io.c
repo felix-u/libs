@@ -29,12 +29,12 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
     array_ensure_capacity(&bytes, file_size);
 
     u32 num_bytes_read = 0;
-    if (!ReadFile(file, bytes.ptr, (u32)file_size, (LPDWORD)&num_bytes_read, 0)) {
+    if (!ReadFile(file, bytes.data, (u32)file_size, (LPDWORD)&num_bytes_read, 0)) {
         err("unable to read bytes of file '%' after opening", fmt(cstring, path));
         goto end;
     }
     assert(file_size == num_bytes_read);
-    bytes.len = file_size;
+    bytes.count = file_size;
 
     end:
     CloseHandle(file);
@@ -80,15 +80,15 @@ static void print_var_args(char *format, va_list args) {
     String str = bit_cast(String) output;
 
     #if OS_WINDOWS
-        OutputDebugStringA((char *)str.ptr);
+        OutputDebugStringA((char *)str.data);
 
         // TODO(felix): stderr support
         HANDLE console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
         assert(console_handle != INVALID_HANDLE_VALUE);
 
         u32 num_chars_written = 0;
-        assert(str.len <= UINT32_MAX);
-        assert(WriteConsole(console_handle, str.ptr, (u32)str.len, (LPDWORD)&num_chars_written, 0));
+        assert(str.count <= UINT32_MAX);
+        assert(WriteConsole(console_handle, str.data, (u32)str.count, (LPDWORD)&num_chars_written, 0));
         discard(num_chars_written);
     #else
         #error "unimplemented"

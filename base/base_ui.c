@@ -17,8 +17,8 @@
 static UI_Box *ui_box_map_mem[ui_box_map_size];
 
 static Array_UI_Box_Ptr ui_box_hashmap = {
-    .ptr = ui_box_map_mem,
-    .cap = ui_box_map_size,
+    .data = ui_box_map_mem,
+    .capacity = ui_box_map_size,
 };
 
 static UI_State ui_state;
@@ -31,7 +31,7 @@ static UI_Box *ui_border_box(void) {
 }
 
 static inline UI_Box *ui_box(String str) {
-    assert(str.len != 0 && str.ptr != 0);
+    assert(str.count != 0 && str.data != 0);
 
     String display_str = str;
     String hash_str = str;
@@ -41,17 +41,17 @@ static inline UI_Box *ui_box(String str) {
         bool hash[pos_count] = {0};
         bool display[pos_count] = {0};
 
-        for (usize i = 0; i < str.len; i += 1) {
-            if (str.ptr[i] != '#') continue;
+        for (usize i = 0; i < str.count; i += 1) {
+            if (str.data[i] != '#') continue;
 
             i += 1;
-            if (i == str.len) break;
-            if (str.ptr[i] != '[') continue;
+            if (i == str.count) break;
+            if (str.data[i] != '[') continue;
 
             specifier_beg_i = i - 1;
             usize pos = before;
 
-            for (; i < str.len; i += 1) switch (str.ptr[i]) {
+            for (; i < str.count; i += 1) switch (str.data[i]) {
                 case ']': specifier_end_i = i; goto compute_specifier;
                 case 'h': hash[pos] = true; break;
                 case 'd': display[pos] = true; break;
@@ -68,15 +68,15 @@ static inline UI_Box *ui_box(String str) {
         compute_specifier: {
             assert(specifier_end_i != 0 || hash[before] || hash[after]);
             String before_specifier = string_range(str, 0, specifier_beg_i);
-            String after_specifier = string_range(str, specifier_end_i + 1, str.len);
+            String after_specifier = string_range(str, specifier_end_i + 1, str.count);
 
             Array_u8 hash_str_builder = {0};
-            arena_alloc_array(ui_state.arena_frame, &hash_str_builder, str.len);
+            arena_alloc_array(ui_state.arena_frame, &hash_str_builder, str.count);
             if (hash[before]) array_push_slice_assume_capacity(&hash_str_builder, &before_specifier);
             if (hash[after]) array_push_slice_assume_capacity(&hash_str_builder, &after_specifier);
 
             Array_u8 display_str_builder = {0};
-            arena_alloc_array(ui_state.arena_frame, &display_str_builder, str.len);
+            arena_alloc_array(ui_state.arena_frame, &display_str_builder, str.count);
             if (display[before]) array_push_slice_assume_capacity(&display_str_builder, &before_specifier);
             if (display[after]) array_push_slice_assume_capacity(&display_str_builder, &after_specifier);
 
@@ -87,22 +87,22 @@ static inline UI_Box *ui_box(String str) {
         done_parsing:;
     }
 
-    assert(display_str.len != 0 && display_str.ptr != 0);
-    assert(hash_str.len != 0 && hash_str.ptr != 0);
+    assert(display_str.count != 0 && display_str.data != 0);
+    assert(hash_str.count != 0 && hash_str.data != 0);
 
     // djb2 hash
     usize key = 5381;
-    for (usize i = 0; i < hash_str.len; i += 1) {
-        key = ((key << 5) + key) + hash_str.ptr[i];
+    for (usize i = 0; i < hash_str.count; i += 1) {
+        key = ((key << 5) + key) + hash_str.data[i];
     }
-    key %= ui_state.box_hashmap.cap;
+    key %= ui_state.box_hashmap.capacity;
 
     V2 str_dimensions = {0};
     {
         String16 wstr = string16_from_string(ui_state.arena_frame, display_str);
         // TODO(felix): cache this! we want to call these functions as little as possible
         IDWriteFactory_CreateTextLayout(ui_state.render_ctx->dw_factory,
-            wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, window_size.x, window_size.y, &ui_state.render_ctx->dw_text_layout
+            wstr.data, (u32)wstr.count, ui_state.render_ctx->dw_text_fmt, window_size.x, window_size.y, &ui_state.render_ctx->dw_text_layout
         );
         DWRITE_TEXT_METRICS metrics = {0};
         win32_assert_hr(IDWriteTextLayout_GetMetrics(ui_state.render_ctx->dw_text_layout, &metrics));
@@ -110,7 +110,7 @@ static inline UI_Box *ui_box(String str) {
         str_dimensions = (V2){ .x = metrics.width, .y = metrics.height };
     }
 
-    for (UI_Box *match = ui_state.box_hashmap.ptr[key]; match != 0; match = match->next) {
+    for (UI_Box *match = ui_state.box_hashmap.data[key]; match != 0; match = match->next) {
         if (!string_equal(hash_str, match->build.str_to_hash)) continue;
         // TODO(felix): there are fields we need to initialise here that are currently only initialised when allocating a new widget
         // TODO(felix): also, I think, fields that need to be zeroed
@@ -123,7 +123,7 @@ static inline UI_Box *ui_box(String str) {
 
     // TODO(felix): check freelist in ui_state before allocating new memory. To populate said freelist, we'll need to prune the hashmap every frame.
     UI_Box *new = arena_alloc(ui_state.arena_persistent, 1, sizeof(UI_Box));
-    ui_state.box_hashmap.ptr[key] = new;
+    ui_state.box_hashmap.data[key] = new;
 
     // TODO(felix): I think the new style should be applied even above, in the case where the widget already exists
     UI_Box_Style target_style = {
@@ -155,21 +155,21 @@ static void ui_begin_build(void) {
     ui_state.current_parent = 0;
     ui_state.root = 0;
 
-    ui_state.style_stack.pad.len = 0;
+    ui_state.style_stack.pad.count = 0;
     V2 default_pad = v2_scale((V2){ .x = 5.f, .y = 2.5f }, dpi_scale);
     array_push(ui_state.arena_persistent, &ui_state.style_stack.pad, &default_pad);
 
-    ui_state.style_stack.margin.len = 0;
+    ui_state.style_stack.margin.count = 0;
     V2 default_margin = v2_scale((V2){ .x = 5.f, .y = 5.f }, dpi_scale);
     array_push(ui_state.arena_persistent, &ui_state.style_stack.margin, &default_margin);
 
-    ui_state.style_stack.clr_fg.len = 0;
+    ui_state.style_stack.clr_fg.count = 0;
     array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_fg, (&(V4){ .r = 1.f, .g = 0, .b = 0, .a = 1.f }));
 
-    ui_state.style_stack.clr_bg.len = 0;
+    ui_state.style_stack.clr_bg.count = 0;
     array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_bg, &(V4){0});
 
-    ui_state.style_stack.clr_border.len = 0;
+    ui_state.style_stack.clr_border.count = 0;
     array_push(ui_state.arena_persistent, &ui_state.style_stack.clr_border, &(V4){ .a = 0.7f });
 
     ui_push_parent(ui_row());
@@ -405,7 +405,7 @@ static void ui_render_recursive(UI_Box *box) {
             D2D1_RECT_F layout_rect = *(D2D1_RECT_F *)(&text_rect);
             String16 wstr = string16_from_string(ui_state.arena_frame, box->build.str_to_display);
             ID2D1RenderTarget_DrawText(ui_state.render_ctx->d2_render_target,
-                wstr.ptr, (u32)wstr.len, ui_state.render_ctx->dw_text_fmt, &layout_rect,
+                wstr.data, (u32)wstr.count, ui_state.render_ctx->dw_text_fmt, &layout_rect,
                 (ID2D1Brush *)ui_state.render_ctx->d2_brush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, DWRITE_MEASURING_MODE_NATURAL
             );
         }

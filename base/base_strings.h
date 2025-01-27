@@ -1,9 +1,9 @@
-structdef(String) { u8 *ptr; usize len; };
-#define stringc(s)  { .ptr = (u8 *)s, .len = sizeof(s) - 1 }
+structdef(String) { u8 *data; usize count; };
+#define stringc(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
 #define string(s) (String)stringc(s)
 
-structdef(String16) { u16 *ptr; usize len; };
-#define string16c(s) { .ptr = (u16 *)s, .len = sizeof(s) / sizeof(u16) - 1 }
+structdef(String16) { u16 *data; usize count; };
+#define string16c(s) { .data = (u16 *)s, .count = sizeof(s) / sizeof(u16) - 1 }
 #define string16(s) (String16)string16c(s)
 
 typedef Array_u8 String_Builder;
@@ -33,7 +33,7 @@ structdef(Format) {
 #define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
 
 #define cstring_printf(arena_ptr, fmt, ...)\
-    (char *)(string_printf(arena_ptr, fmt "\0", __VA_ARGS__).ptr)
+    (char *)(string_printf(arena_ptr, fmt "\0", __VA_ARGS__).data)
 
 #define _for_valid_hex_digit(action)\
     action('0', 0x0) action('1', 0x1) action('2', 0x2) action('3', 0x3)\
