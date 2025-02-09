@@ -61,7 +61,7 @@ static bool string_equal(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, usize _num, u8 base);
 static String string_printf(Arena *arena, char *fmt, ...);
-static String string_range(String s, usize beg, usize end);
+static String string_range(String string, usize start, usize end);
 static String string_vprintf(Arena *arena, char *fmt, va_list args);
 
 static String16 string16_from_string(Arena *arena, String s);

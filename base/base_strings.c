@@ -56,10 +56,11 @@ static String string_printf(Arena *arena, char *format, ...) {
     return result;
 }
 
-static String string_range(String str, usize beg, usize end) {
-    assert(end <= str.count);
-    assert(beg < end);
-    return (String){ .data = str.data + beg, .count = end - beg };
+static String string_range(String string, usize start, usize end) {
+    assert(end <= string.count);
+    assert(start < end);
+    String result = { .data = string.data + start, .count = end - start };
+    return result;
 }
 
 static String string_vprintf(Arena *arena, char *fmt, va_list args) {
