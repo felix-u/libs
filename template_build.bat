@@ -10,8 +10,8 @@ if not "%release%"=="1"                    set debug=1
 set dir_deps=..\deps
 set include_paths=-I%dir_deps%
 
-set cl_common=cl -nologo -FC -diagnostics:column -std:c11 %include_paths%
-set clang_common=clang -pedantic -Wno-microsoft -std=c11 %include_paths%
+set cl_common=cl -nologo -FC -diagnostics:column -std:c11 -MT %include_paths%
+set clang_common=clang -pedantic -Wno-microsoft -std=c11 -MT %include_paths%
 set cl_link=-link -incremental:no user32.lib d3d11.lib dxguid.lib dxgi.lib d3dcompiler.lib
 set clang_link=-luser32 -ld3d11 -ldxguid -ldxgi -ld3dcompiler
 set cl_debug=%cl_common% -W4 -WX -Z7 -DBUILD_DEBUG=1 -fsanitize=address
