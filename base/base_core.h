@@ -198,3 +198,4 @@ static void array_push_slice_explicit_item_size_assume_capacity(Array_void *arra
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define clamp_low max
 #define clamp_high min
+#define clamp(value, low, high) clamp_high(clamp_low(value, low), high)

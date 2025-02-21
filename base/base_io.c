@@ -66,12 +66,16 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
             goto end;
         }
 
+        rewind(file_handle);
+
+        array_ensure_capacity(&bytes, file_size);
+
         usize num_bytes_read = fread(bytes.data, 1, file_size, file_handle);
+        bytes.count = num_bytes_read;
         if (num_bytes_read != file_size) {
-            err("unable to read entire file '%'", fmt(cstring, path));
+            err("unable to read entire file '%'; could only read %/% bytes", fmt(cstring, path), fmt(u64, num_bytes_read), fmt(u64, file_size));
             goto end;
         }
-        bytes.count = file_size;
 
         end:
         fclose(file_handle);
