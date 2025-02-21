@@ -49,7 +49,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
 
         int ok = 0;
         if (fseek(file_handle, 0, SEEK_END) != ok) {
-            err("unable to seek file '%'", fmt(cstring, path)); 
+            err("unable to seek file '%'", fmt(cstring, path));
             goto end;
         }
 
@@ -161,22 +161,23 @@ static void print_var_args(char *format, va_list args) {
     String_Builder output = { .arena = &arena };
     string_builder_print_var_args(&output, format, args);
 
-    String str = bit_cast(String) output;
+    string_builder_null_terminate(&output);
+    String string = bit_cast(String) output;
 
     #if OS_WINDOWS
-        OutputDebugStringA((char *)str.data);
+        OutputDebugStringA((char *)string.data);
 
         // TODO(felix): stderr support
         HANDLE console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
         assert(console_handle != INVALID_HANDLE_VALUE);
 
         u32 num_chars_written = 0;
-        assert(str.count <= UINT32_MAX);
-        assert(WriteConsole(console_handle, str.data, (u32)str.count, (LPDWORD)&num_chars_written, 0));
+        assert(string.count <= UINT32_MAX);
+        assert(WriteConsole(console_handle, string.data, (u32)string.count, (LPDWORD)&num_chars_written, 0));
         discard(num_chars_written);
     #elif OS_LINUX
         int stdout_handle = 1;
-        isize bytes_written = write(stdout_handle, str.data, str.count);
+        isize bytes_written = write(stdout_handle, string.data, string.count);
         discard(bytes_written);
     #else
         #error "unimplemented"

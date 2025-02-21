@@ -73,7 +73,7 @@ static String16 string16_from_string(Arena *arena, String s) {
     #if OS_WINDOWS
         String16 wstr = {
             .data = arena_make(arena, s.count, sizeof(u16)),
-            .count = MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
+            .count = (usize)MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
         };
         win32_assert_not_0(wstr.count);
         return wstr;
@@ -125,48 +125,63 @@ static void string_builder_print_var_args(String_Builder *builder, char *fmt_c, 
 }
 
 static void string_builder_push_f32(String_Builder *builder, f32 value) {
-    // TODO(felix): actual implementation
-    string_builder_push_f64(builder, (f64)value);
+    bool actually_implemented = false; // TODO(felix)
+    if (actually_implemented) {
+        // TODO(felix)
+    } else string_builder_push_f64(builder, (f64)value);
 }
 
 static void string_builder_push_f64(String_Builder *builder, f64 value) {
     // References:
-    // https://dl.acm.org/doi/pdf/10.1145/3360595
+    // https://github.com/nothings/stb/blob/master/stb_sprintf.h
     // https://en.wikipedia.org/wiki/Double-precision_floating-point_format
-    bool is_ryu_implemented = false;
+    // https://dl.acm.org/doi/pdf/10.1145/3360595
+    //
+    // Most valuable:
+    // https://github.com/charlesnicholson/nanoprintf
+    // http://0x80.pl/notesen/2015-12-29-float-to-string.html
+    // TODO(felix): implement this properly! ^
 
-    if (is_ryu_implemented) {
-        u64 bits = *(u64 *)&value;
-        i64 exponent_biased = (bits >> 52) & 0x7ff;
-        u64 mantissa = bits & 0x000fffffffffffff;
+    u64 bits = bit_cast(u64) value;
+    i64 biased_exponent = (bits >> 52) & 0x7ff;
+    u64 mantissa_mask = UINT64_MAX >> 12;
+    u64 mantissa = bits & mantissa_mask;
 
-        b8 is_negative = (b8)(bits >> 63);
-        if (is_negative) string_builder_push_char(builder, '-');
+    u8 is_negative = (u8)(bits >> 63);
+    if (is_negative) string_builder_push_char(builder, '-');
 
-        if (exponent_biased == 0x7ff) {
-            String string = (mantissa == 0) ? string("Infinity") : string("NaN");
-            string_builder_push_string(builder, string);
-            return;
-        }
+    if (biased_exponent == 0x7ff) {
+        String string = (mantissa == 0) ? string("Infinity") : string("NaN");
+        string_builder_push_string(builder, string);
+        return;
+    }
 
-        i64 exponent;
-        if (exponent_biased == 0) {
-            if (mantissa == 0) {
-                if (is_negative) string_builder_push_char(builder, '-');
-                string_builder_push_char(builder, '0');
-                return;
-            }
-            mantissa |= (u64)1 << 52;
-            exponent = -1022;
-        } else exponent = exponent_biased - 1023;
+    if (biased_exponent == 0 && mantissa == 0) {
+        string_builder_push_char(builder, '0');
+        return;
+    }
 
-        // TODO(felix): rest of ryu algorithm
-        discard(exponent);
-    } else {
-        // placeholder
-        u8 buf[128] = {0};
-        String printed = { .data = buf, .count = (usize)snprintf((char *)buf, sizeof(buf), "%.2f", value) };
-        string_builder_push_string(builder, printed);
+    // TODO(felix): this can only represent integer parts up to UINT64_MAX!
+    f64 absolute_value = is_negative ? -value : value;
+    if (absolute_value > (f64)UINT64_MAX) {
+        string_builder_push_string(builder, string("(...)"));
+        return;
+    }
+
+    string_builder_push_u64(builder, (usize)absolute_value);
+
+    string_builder_push_char(builder, '.');
+
+    f64 fraction = absolute_value;
+
+    // TODO(felix): add ability to configure in format argument
+    usize precision = 2;
+
+    for (usize i = 0; i < precision; i += 1) {
+        fraction -= (f64)(usize)fraction;
+        fraction *= 10.f;
+        u8 fraction_as_char = (u8)fraction + '0';
+        string_builder_push_char(builder, fraction_as_char);
     }
 }
 
@@ -204,4 +219,9 @@ static void string_builder_push_char(String_Builder *builder, u8 c) {
 
 static void string_builder_push_string(String_Builder *builder, String str) {
     array_push_slice(builder, &str);
+}
+
+static void string_builder_null_terminate(String_Builder *builder) {
+    array_ensure_capacity(builder, builder->count + 1);
+    builder->data[builder->count] = 0;
 }

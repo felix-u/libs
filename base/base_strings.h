@@ -50,7 +50,7 @@ const u8 decimal_from_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
-const b8 is_hex_digit[256] = {
+const bool is_hex_digit[256] = {
     #define _make_hex_digit_truth_table(c, val) [c] = true,
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
@@ -76,3 +76,4 @@ static void string_builder_push_V2(String_Builder *builder, V2 value);
 static void string_builder_push_u64(String_Builder *builder, u64 value);
 static void string_builder_push_char(String_Builder *builder, u8 c);
 static void string_builder_push_string(String_Builder *builder, String str);
+static void string_builder_null_terminate(String_Builder *builder);

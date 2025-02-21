@@ -81,8 +81,6 @@
 
 // TODO(felix): no dependency on C stdlib!
     #include <math.h> // TODO(felix): look into
-    #include <stdio.h> // TODO(felix): finish implementation of ryu float print algorithm
-    // TODO(felix): everywhere: replace mem_ functions with intrinsics
 
 #define bool _Bool
 #define true 1
@@ -97,16 +95,18 @@ typedef   int8_t  i8;
 typedef  int16_t i16;
 typedef  int32_t i32;
 typedef  int64_t i64;
-typedef       u8  b8;
-typedef      u16 b16;
-typedef      u32 b32;
-typedef      u64 b64;
 typedef    float f32;
 typedef   double f64;
 
 typedef unsigned char uchar;
 typedef        size_t usize;
-typedef       ssize_t isize;
+#if OS_WINDOWS
+    typedef SSIZE_T isize; // TODO(felix): is this from windows.h? should I use ptrdiff_t or intptr_t instead?
+#elif OS_LINUX
+    typedef ssize_t isize;
+#else
+    #error "haven't figured out an isize typedef for this OS yet"
+#endif
 typedef     uintptr_t upointer;
 typedef      intptr_t ipointer;
 
