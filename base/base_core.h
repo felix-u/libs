@@ -12,6 +12,7 @@
     // TODO(felix): which of these can be removed in favour of doing direct syscalls?
         #include <fcntl.h>
         #include <unistd.h>
+    #include <stdio.h> // TODO(felix): only needed for FILE. remove!
 
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN

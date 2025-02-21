@@ -179,7 +179,7 @@ static void string_builder_push_f64(String_Builder *builder, f64 value) {
 
     for (usize i = 0; i < precision; i += 1) {
         fraction -= (f64)(usize)fraction;
-        fraction *= 10.f;
+        fraction *= 10.0;
         u8 fraction_as_char = (u8)fraction + '0';
         string_builder_push_char(builder, fraction_as_char);
     }
