@@ -1,6 +1,13 @@
 static Arena arena_init(usize initial_size_bytes) {
     // TODO(felix): switch to reserve+commit with (virtually) no cap: reserve something like 64gb and commit pages as needed
-    Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, initial_size_bytes) };
+    #if OS_WINDOWS
+        Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, initial_size_bytes) };
+    #elif OS_LINUX
+        Arena arena = { .mem = calloc(initial_size_bytes, 1) };
+    #else
+        #error "unsupported OS"
+    #endif
+
     if (arena.mem == 0) panic("allocation failure");
     arena.cap = initial_size_bytes;
     asan_poison_memory_region(arena.mem, arena.cap);
@@ -26,7 +33,16 @@ static void *arena_make(Arena *arena, usize item_count, usize item_size) {
 
 static void arena_deinit(Arena *arena) {
     asan_poison_memory_region(arena->mem, arena->cap);
-    HeapFree(GetProcessHeap(), 0, arena->mem);
+
+    #if OS_WINDOWS
+        HeapFree(GetProcessHeap(), 0, arena->mem);
+    #elif OS_LINUX
+        free(arena->mem);
+    #else
+        #error "unsupported OS"
+    #endif
+
+    arena->mem = 0;
     arena->offset = 0;
     arena->cap = 0;
 }

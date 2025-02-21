@@ -1,5 +1,17 @@
+#include <stdarg.h> // TODO(felix): look into removing
+#include <stdint.h> // TODO(felix): look into removing
+#include <stddef.h> // TODO(felix): look into removing
+
 #if OS_EMSCRIPTEN
     #error "emscripten not yet supported!"
+
+#elif OS_LINUX
+    void abort(void); // TODO(felix): own implementation to not depend on libc
+    void *calloc(size_t item_count, size_t item_size); // TODO(felix): remove once using virtual alloc arena
+    void free(void *pointer); // TODO(felix): remove once using virtual alloc arena
+    // TODO(felix): which of these can be removed in favour of doing direct syscalls?
+        #include <fcntl.h>
+        #include <unistd.h>
 
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
@@ -23,17 +35,23 @@
 #endif // OS
 
 
+#if COMPILER_CLANG || COMPILER_GCC // they share many builtins
+    #define builtin_unreachable __builtin_unreachable()
+    #define force_inline inline __attribute__((always_inline))
+    #define memcmp __builtin_memcmp
+    #define memcpy __builtin_memcpy
+    #define memmove __builtin_memmove
+    #define memset __builtin_memset
+#endif
+
+
 #if COMPILER_CLANG
     #define builtin_assume(expr) __builtin_assume(expr)
     #define breakpoint __builtin_debugtrap()
-    #define builtin_unreachable __builtin_unreachable()
-    #define force_inline inline __attribute__((always_inline))
 
 #elif COMPILER_GCC
     #define builtin_assume(expr) { if (!(expr)) unreachable; }
     #define breakpoint __builtin_trap()
-    #define builtin_unreachable __builtin_unreachable()
-    #define force_inline inline __attribute__((always_inline))
 
 #elif COMPILER_MSVC
     #define builtin_assume(expr) __assume(expr)
@@ -42,6 +60,7 @@
     #define force_inline inline __forceinline
 
 #elif COMPILER_STANDARD
+    // NOTE(felix): probably broken in many ways. Getting this working with a non-major compiler is not a priority
     #include <assert.h>
     #define builtin_assume(expr) assert(expr)
     #define breakpoint builtin_assume(false)
@@ -62,7 +81,6 @@
 
 // TODO(felix): no dependency on C stdlib!
     #include <math.h> // TODO(felix): look into
-    #include <stdint.h> // TODO(felix): look into
     #include <stdio.h> // TODO(felix): finish implementation of ryu float print algorithm
     // TODO(felix): everywhere: replace mem_ functions with intrinsics
 
@@ -88,9 +106,9 @@ typedef   double f64;
 
 typedef unsigned char uchar;
 typedef        size_t usize;
-typedef      intptr_t isize;
-typedef     uintptr_t  upointer;
-typedef      intptr_t  ipointer;
+typedef       ssize_t isize;
+typedef     uintptr_t upointer;
+typedef      intptr_t ipointer;
 
 #define Slice(type) struct { type *data; usize count; }
 typedef Slice(u8) Slice_u8;

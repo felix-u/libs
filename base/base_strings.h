@@ -14,6 +14,7 @@ structdef(Format) {
         format_type_u64,
         format_type_f32,
         format_type_f64,
+        format_type_V2,
         format_type_cstring,
         format_type_String,
     } type;
@@ -22,6 +23,7 @@ structdef(Format) {
         u64 value_u64;
         f32 value_f32;
         f64 value_f64;
+        V2 value_V2;
         char *value_cstring;
         String value_String;
     };
@@ -32,8 +34,8 @@ structdef(Format) {
 
 #define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
 
-#define cstring_printf(arena_ptr, fmt, ...)\
-    (char *)(string_printf(arena_ptr, fmt "\0", __VA_ARGS__).data)
+#define cstring_print(arena_ptr, fmt, ...)\
+    (char *)(string_print(arena_ptr, fmt "\0", __VA_ARGS__).data)
 
 #define _for_valid_hex_digit(action)\
     action('0', 0x0) action('1', 0x1) action('2', 0x2) action('3', 0x3)\
@@ -60,15 +62,17 @@ static char *cstring_from_string(Arena *arena, String s);
 static bool string_equal(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, usize _num, u8 base);
-static String string_printf(Arena *arena, char *fmt, ...);
+static String string_print(Arena *arena, char *fmt, ...);
 static String string_range(String string, usize start, usize end);
-static String string_vprintf(Arena *arena, char *fmt, va_list args);
+static String string_vprint(Arena *arena, char *fmt, va_list args);
 
 static String16 string16_from_string(Arena *arena, String s);
 
-static void string_builder_printf(String_Builder *builder, char *fmt, ...);
-static void string_builder_printf_var_args(String_Builder *builder, char *fmt, va_list args);
+static void string_builder_print(String_Builder *builder, char *fmt, ...);
+static void string_builder_print_var_args(String_Builder *builder, char *fmt, va_list args);
+static void string_builder_push_f32(String_Builder *builder, f32 value);
 static void string_builder_push_f64(String_Builder *builder, f64 value);
+static void string_builder_push_V2(String_Builder *builder, V2 value);
 static void string_builder_push_u64(String_Builder *builder, u64 value);
 static void string_builder_push_char(String_Builder *builder, u8 c);
 static void string_builder_push_string(String_Builder *builder, String str);
