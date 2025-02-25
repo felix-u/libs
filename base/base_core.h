@@ -3,7 +3,11 @@
 #include <stddef.h> // TODO(felix): look into removing
 
 #if OS_EMSCRIPTEN
-    #error "emscripten not yet supported!"
+    // TODO(felix): idk
+    #include<stdlib.h>
+    #include<stdio.h>
+    #include <fcntl.h>
+    #include <unistd.h>
 
 #elif OS_LINUX
     void abort(void); // TODO(felix): own implementation to not depend on libc
@@ -13,6 +17,15 @@
         #include <fcntl.h>
         #include <unistd.h>
     #include <stdio.h> // TODO(felix): only needed for FILE. remove!
+
+#elif OS_MACOS
+    // TODO(felix): same notes as above
+    void abort(void);
+    void *calloc(size_t item_count, size_t item_size);
+    void free(void *pointer);
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <stdio.h>
 
 #elif OS_WINDOWS
     #define WIN32_LEAN_AND_MEAN
@@ -105,6 +118,10 @@ typedef        size_t usize;
     typedef SSIZE_T isize; // TODO(felix): is this from windows.h? should I use ptrdiff_t or intptr_t instead?
 #elif OS_LINUX
     typedef ssize_t isize;
+#elif OS_MACOS
+    typedef i64 isize;
+#elif OS_EMSCRIPTEN
+    typedef i64 isize;
 #else
     #error "haven't figured out an isize typedef for this OS yet"
 #endif

@@ -60,7 +60,10 @@ static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount);
 
 static force_inline V2   v2_add(V2 a, V2 b);
 static force_inline V2   v2_div(V2 a, V2 b);
+static       inline f32  v2_dot(V2 a, V2 b);
 static force_inline bool v2_equal(V2 a, V2 b);
+static       inline f32  v2_len(V2 v);
+static       inline f32  v2_len_squared(V2 v);
 static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
 static force_inline V2   v2_max(V2 a, V2 b);
 static force_inline V2   v2_min(V2 a, V2 b);

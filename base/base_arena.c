@@ -2,7 +2,7 @@ static Arena arena_init(usize initial_size_bytes) {
     // TODO(felix): switch to reserve+commit with (virtually) no cap: reserve something like 64gb and commit pages as needed
     #if OS_WINDOWS
         Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, initial_size_bytes) };
-    #elif OS_LINUX
+    #elif OS_LINUX || OS_MACOS || OS_EMSCRIPTEN
         Arena arena = { .mem = calloc(initial_size_bytes, 1) };
     #else
         #error "unsupported OS"
@@ -36,7 +36,7 @@ static void arena_deinit(Arena *arena) {
 
     #if OS_WINDOWS
         HeapFree(GetProcessHeap(), 0, arena->mem);
-    #elif OS_LINUX
+    #elif OS_LINUX || OS_MACOS || OS_EMSCRIPTEN
         free(arena->mem);
     #else
         #error "unsupported OS"

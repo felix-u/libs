@@ -39,7 +39,7 @@ static String file_read_bytes_relative_path(Arena *arena, char *path, usize max_
         end:
         CloseHandle(file);
         return bit_cast(String) bytes;
-    #elif OS_LINUX
+    #elif OS_LINUX || OS_MACOS || OS_EMSCRIPTEN
         // TODO(felix): use open & read instead of the libc filesystem API
         FILE *file_handle = fopen(path, "rb");
         if (file_handle == 0) {
@@ -105,7 +105,7 @@ static bool file_write_bytes_to_relative_path(char *path, String bytes) {
 
         CloseHandle(file_handle);
         return ok;
-    #elif OS_LINUX
+    #elif OS_LINUX || OS_MACOS || OS_EMSCRIPTEN
         // TODO(felix): use syscalls instead of libc filesystem API
 
         int open_flags = O_WRONLY | O_CREAT | O_TRUNC;
@@ -179,7 +179,7 @@ static void print_var_args(char *format, va_list args) {
         assert(string.count <= UINT32_MAX);
         assert(WriteConsole(console_handle, string.data, (u32)string.count, (LPDWORD)&num_chars_written, 0));
         discard(num_chars_written);
-    #elif OS_LINUX
+    #elif OS_LINUX || OS_MACOS || OS_EMSCRIPTEN
         int stdout_handle = 1;
         isize bytes_written = write(stdout_handle, string.data, string.count);
         discard(bytes_written);

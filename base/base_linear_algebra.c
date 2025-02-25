@@ -4,7 +4,13 @@ static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.
 
 static force_inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
 
+static inline f32 v2_dot(V2 a, V2 b) { return a.x * b.x + a.y * b.y; }
+
 static force_inline bool v2_equal(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
+
+static inline f32 v2_len(V2 v) { return sqrtf(v2_len_squared(v)); }
+
+static inline f32 v2_len_squared(V2 v) { return v2_dot(v, v); }
 
 static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
     V2 add = v2_scale(v2_sub(b, a), amount);

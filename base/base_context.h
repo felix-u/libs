@@ -8,7 +8,7 @@
 #elif defined(__linux__) || defined(__gnu_linux__)
     #define OS_LINUX 1
 #elif defined(__APPLE__) && defined(__MACH__)
-    #define OS_MACOS
+    #define OS_MACOS 1
 #elif defined(_WIN32)
     #define OS_WINDOWS 1
 #else
