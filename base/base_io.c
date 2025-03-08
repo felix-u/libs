@@ -141,8 +141,10 @@ static void log_internal_with_location(char *file, usize line, char *func, char 
     print_var_args(format, args);
     va_end(args);
 
+    print("\n");
+
     #if BUILD_DEBUG
-        print("\n%:%:%(): first logged here\n", fmt(cstring, file), fmt(u64, line), fmt(cstring, func));
+        print("%:%:%(): first logged here\n", fmt(cstring, file), fmt(u64, line), fmt(cstring, func));
     #else
         discard(file); discard(line); discard(func);
     #endif

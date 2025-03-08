@@ -52,6 +52,9 @@
 #if COMPILER_CLANG || COMPILER_GCC // they share many builtins
     #define builtin_unreachable __builtin_unreachable()
     #define force_inline inline __attribute__((always_inline))
+    #if COMPILER_GCC && !BUILD_RELEASE // TODO(felix): can I avoid this by using nonstandard names for my mem_ defines?
+        #include <string.h>
+    #endif
     #define memcmp __builtin_memcmp
     #define memcpy __builtin_memcpy
     #define memmove __builtin_memmove
@@ -86,9 +89,11 @@
 
 #if BUILD_DEBUG
     #define assert(expr) { if(!(expr)) panic("failed assertion `"#expr"`"); }
+    #define ensure(expression) assert(expression)
     #define unreachable panic("reached unreachable code")
 #else
     #define assert(expr) builtin_assume(expr)
+    #define ensure(expression) { if (!(expression)) panic("fatal condition"); }
     #define unreachable builtin_unreachable
 #endif // BUILD_DEBUG
 
