@@ -42,9 +42,9 @@
     #undef min
     #undef max
     // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
-    #define win32_assert_not_0(win32_fn_result) { if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } }
-    #define win32_assert_hr(hresult) { HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } }
-    #define win32_assert_d3d_compile(hresult, err_blob) { if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } }
+    #define win32_assert_not_0(win32_fn_result) statement_macro( if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } )
+    #define win32_assert_hr(hresult) statement_macro( HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } )
+    #define win32_assert_d3d_compile(hresult, err_blob) statement_macro( if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } )
 
 #endif // OS
 
@@ -168,19 +168,22 @@ typedef Array(u8) Array_u8;
     typedef Array(Name) Array_##Name; \
     union Name
 
-#define err(...) log_internal("error: " __VA_ARGS__)
+#define log_error(...) log_internal("error: " __VA_ARGS__)
 
 #define panic(...) {\
     log_internal_with_location(__FILE__, __LINE__, (char *)__func__, "panic: " __VA_ARGS__);\
     breakpoint; abort();\
 }
 
+#define statement_macro(...) do { __VA_ARGS__ } while (0)
+
+// TODO(felix): a number of these would benefit from assert-as-expression using comma operator
 #define slice_from_c_array(c_array) { .data = c_array, .count = array_count(c_array) }
 #define slice_get_last_assume_not_empty(s) ((s).data[(s).count - 1])
 #define slice_pop(slice) (slice).data[--(slice).count]
 #define slice_range(slice, beg, end) { .data = (void *)((uptr)(slice).data + (beg)), .count = (end) - (beg) }
-#define slice_remove(slice_pointer, idx) (slice_pointer)->data[idx] = (slice_pointer)->data[--(slice_pointer)->count]
-#define slice_size(slice) ((slice).count * sizeof(*((slice).data)))
+#define slice_swap_remove(slice_pointer, idx) (slice_pointer)->data[idx] = (slice_pointer)->data[--(slice_pointer)->count]
+#define slice_as_bytes(slice) (String){ .data = (u8 *)(slice).data, .count = sizeof(*((slice).data)) * (slice).count }
 
 #define array_ensure_capacity_non_zero(array_pointer, item_count) \
     array_ensure_capacity_explicit_item_size((Array_void *)(array_pointer), item_count, sizeof(*((array_pointer)->data)), true)
@@ -190,26 +193,28 @@ static void array_ensure_capacity_explicit_item_size(Array_void *array, usize it
 
 #define array_from_slice(s) { .data = (s).data, .count = (s).count, .capacity = (s).count }
 
-#define array_push(array_pointer, item_ptr) \
-    array_push_explicit_item_size((Array_void *)(array_pointer), item_ptr, sizeof(*(item_ptr)))
+#define array_push(array_pointer, item_pointer) statement_macro( \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer))); \
+    array_push_explicit_item_size((Array_void *)(array_pointer), item_pointer, sizeof(*(item_pointer))); \
+)
 static inline void array_push_explicit_item_size(Array_void *array, void *item, usize item_size);
 
-#define array_push_assume_capacity(array_pointer, item_ptr) \
-    array_push_explicit_item_size_assume_capacity((Array_void *)(array_pointer), item_ptr, sizeof(*(item_ptr)))
+#define array_push_assume_capacity(array_pointer, item_pointer) statement_macro( \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer))); \
+    array_push_explicit_item_size_assume_capacity((Array_void *)(array_pointer), item_pointer, sizeof(*(item_pointer))); \
+)
 static inline void array_push_explicit_item_size_assume_capacity(Array_void *array, void *item, usize item_size);
 
-#define array_push_slice(array_pointer, slice_pointer) \
-    array_push_slice_explicit_item_size(\
-        (Array_void *)(array_pointer),\
-        (Slice_void *)(slice_pointer),\
-        sizeof(*((array_pointer)->data))\
-    )
+#define array_push_slice(array_pointer, slice_pointer) statement_macro( \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data))); \
+    array_push_slice_explicit_item_size((Array_void *)(array_pointer), (Slice_void *)(slice_pointer), sizeof(*((array_pointer)->data))); \
+)
 static void array_push_slice_explicit_item_size(Array_void *array, Slice_void *slice, usize item_size);
 
-#define array_push_slice_assume_capacity(array_pointer, slice_pointer) \
-    array_push_slice_explicit_item_size_assume_capacity(\
-        (Array_void *)(array_pointer), (Slice_void *)(slice_pointer), sizeof(*((array_pointer)->data))\
-    )
+#define array_push_slice_assume_capacity(array_pointer, slice_pointer) statement_macro( \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data))); \
+    array_push_slice_explicit_item_size_assume_capacity((Array_void *)(array_pointer), (Slice_void *)(slice_pointer), sizeof(*((array_pointer)->data))); \
+)
 static void array_push_slice_explicit_item_size_assume_capacity(Array_void *array, Slice_void *slice, usize item_size);
 
 #define array_unused_capacity(array) ((array).capacity - (array).count)

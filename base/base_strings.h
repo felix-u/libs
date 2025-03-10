@@ -9,9 +9,14 @@ structdef(String16) { u16 *data; usize count; };
 typedef Array_u8 String_Builder;
 
 structdef(Format) {
+    #if BUILD_DEBUG
+        u32 magic_value_for_debug;
+    #endif
     enum {
+        format_type_bool,
         format_type_char,
-        format_type_u64,
+        format_type_u8, format_type_u16, format_type_u32, format_type_u64, format_type_usize,
+        // TODO(felix): signed ints
         format_type_f32,
         format_type_f64,
         format_type_V2,
@@ -19,8 +24,10 @@ structdef(Format) {
         format_type_String,
     } type;
     union {
+        bool value_bool;
         u8 value_char;
-        u64 value_u64;
+        u8 value_u8; u16 value_u16; u32 value_u32; u64 value_u64; usize value_usize;
+        // TODO(felix): signed ints
         f32 value_f32;
         f64 value_f64;
         V2 value_V2;
@@ -32,7 +39,14 @@ structdef(Format) {
     bool uppercase; // TODO(felix)
 };
 
-#define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
+#define format_magic_value_for_debug 0xfeffec // why not? this is the background colour of the acme editor from plan9
+
+#if BUILD_DEBUG
+    #define fmt(type_, ...) (Format){ .magic_value_for_debug = format_magic_value_for_debug,\
+                                      .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
+#else
+    #define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
+#endif
 
 #define cstring_print(arena_ptr, fmt, ...)\
     (char *)(string_print(arena_ptr, fmt "\0", __VA_ARGS__).data)
@@ -59,7 +73,7 @@ static usize int_from_hex_string(String s);
 
 static char *cstring_from_string(Arena *arena, String s);
 
-static bool string_equal(String s1, String s2);
+static bool   string_equal(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, usize _num, u8 base);
 static String string_print(Arena *arena, char *fmt, ...);
@@ -70,10 +84,7 @@ static String16 string16_from_string(Arena *arena, String s);
 
 static void string_builder_print(String_Builder *builder, char *fmt, ...);
 static void string_builder_print_var_args(String_Builder *builder, char *fmt, va_list args);
-static void string_builder_push_f32(String_Builder *builder, f32 value);
-static void string_builder_push_f64(String_Builder *builder, f64 value);
-static void string_builder_push_V2(String_Builder *builder, V2 value);
-static void string_builder_push_u64(String_Builder *builder, u64 value);
-static void string_builder_push_char(String_Builder *builder, u8 c);
-static void string_builder_push_string(String_Builder *builder, String str);
-static void string_builder_null_terminate(String_Builder *builder);
+
+#define string_builder_push(builder, type_, ...) string_builder_push_format(builder, fmt(type_, __VA_ARGS__))
+static void string_builder_push_format(String_Builder *builder, Format format);
+static inline void string_builder_null_terminate(String_Builder *builder);

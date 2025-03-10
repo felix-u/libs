@@ -25,6 +25,6 @@ static void       arena_temp_end(Arena_Temp arena_temp);
     #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
     #include <sanitizer/asan_interface.h>
 #else
-    #define asan_poison_memory_region(address, byte_count)   { discard(address); discard(byte_count); }
-    #define asan_unpoison_memory_region(address, byte_count) { discard(address); discard(byte_count); }
+    #define asan_poison_memory_region(address, byte_count)   statement_macro( discard(address); discard(byte_count); )
+    #define asan_unpoison_memory_region(address, byte_count) statement_macro( discard(address); discard(byte_count); )
 #endif // BUILD_ASAN

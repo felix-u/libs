@@ -44,8 +44,8 @@ structdef(Gfx_Render_Ctx) {
 // TODO(felix): this belongs somewhere else
 structdef(Vertex) { f32 x, y, r, g, b, a; };
 
-#define release(obj) { vcall((IUnknown *)(obj), Release); }
-#define ensure_released_and_null(obj) { if (*(obj) != 0) { release(*(obj)); *(obj) = 0; } }
+#define release(obj) vcall((IUnknown *)(obj), Release);
+#define ensure_released_and_null(obj) statement_macro( if (*(obj) != 0) { release(*(obj)); *(obj) = 0; } )
 #define vcall(struct_ptr, fn_name) (struct_ptr)->lpVtbl->fn_name(struct_ptr)
 #define vcalla(struct_ptr, fn_name, ...) (struct_ptr)->lpVtbl->fn_name((struct_ptr), __VA_ARGS__)
 
