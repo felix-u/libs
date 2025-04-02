@@ -17,6 +17,8 @@ static void  arena_deinit(Arena *arena);
 // TODO(felix): remove this function. A zeroed reserve+commit arena will be valid and will grow on demand
 static Arena arena_init(usize initial_size_bytes);
 
+static String arena_push(Arena *arena, String bytes);
+
 static Arena_Temp arena_temp_begin(Arena *arena);
 static void       arena_temp_end(Arena_Temp arena_temp);
 

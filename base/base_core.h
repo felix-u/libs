@@ -33,18 +33,19 @@
     #if !BASE_GRAPHICS
         #define NOGDI
         #define NOUSER
+        #define NOMINMAX
+        #define abort() ExitProcess(1) // TODO(felix): remove this
+        // #undef near
+        // #undef far // TODO(felix): figure out what to do with this - needed by combaseapi.h
     #endif
     #include "windows.h"
-    #define abort() ExitProcess(1) // TODO(felix): is this ok?
     #define _CRT_SECURE_NO_WARNINGS
-    #undef near
-    #undef far
     #undef min
     #undef max
     // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
-    #define win32_assert_not_0(win32_fn_result) statement_macro( if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } )
-    #define win32_assert_hr(hresult) statement_macro( HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(u64, hr_, .base = 16, .prefix = true, .uppercase = true)); } )
-    #define win32_assert_d3d_compile(hresult, err_blob) statement_macro( if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } )
+    #define win32_ensure_not_0(win32_fn_result) statement_macro( if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } )
+    #define win32_ensure_hr(hresult) statement_macro( HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(i32, hr_, .base = 16, .prefix = true, .uppercase = true)); } )
+    #define win32_ensure_d3d_compile(hresult, err_blob) statement_macro( if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } )
 
 #endif // OS
 
@@ -168,6 +169,18 @@ typedef Array(u8) Array_u8;
     typedef Array(Name) Array_##Name; \
     union Name
 
+
+structdef(String) { u8 *data; usize count; };
+#define stringc(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
+#define string(s) (String)stringc(s)
+
+structdef(String16) { u16 *data; usize count; };
+#define string16c(s) { .data = (u16 *)s, .count = sizeof(s) / sizeof(u16) - 1 }
+#define string16(s) (String16)string16c(s)
+
+typedef Array_u8 String_Builder;
+
+
 #define log_error(...) log_internal("error: " __VA_ARGS__)
 
 #define panic(...) {\
@@ -180,10 +193,13 @@ typedef Array(u8) Array_u8;
 // TODO(felix): a number of these would benefit from assert-as-expression using comma operator
 #define slice_from_c_array(c_array) { .data = c_array, .count = array_count(c_array) }
 #define slice_get_last_assume_not_empty(s) ((s).data[(s).count - 1])
-#define slice_pop(slice) (slice).data[--(slice).count]
+#define slice_pop_assume_not_empty(slice) (slice).data[--(slice).count]
 #define slice_range(slice, beg, end) { .data = (void *)((uptr)(slice).data + (beg)), .count = (end) - (beg) }
 #define slice_swap_remove(slice_pointer, idx) (slice_pointer)->data[idx] = (slice_pointer)->data[--(slice_pointer)->count]
 #define slice_as_bytes(slice) (String){ .data = (u8 *)(slice).data, .count = sizeof(*((slice).data)) * (slice).count }
+
+#define array_from_c_array_c(type, capacity_) { .data = (type[capacity_]){0}, .capacity = capacity_ }
+#define array_from_c_array(type, capacity_) ((Array_##type)array_from_c_array_c(type, capacity_))
 
 #define array_ensure_capacity_non_zero(array_pointer, item_count) \
     array_ensure_capacity_explicit_item_size((Array_void *)(array_pointer), item_count, sizeof(*((array_pointer)->data)), true)
@@ -194,25 +210,25 @@ static void array_ensure_capacity_explicit_item_size(Array_void *array, usize it
 #define array_from_slice(s) { .data = (s).data, .count = (s).count, .capacity = (s).count }
 
 #define array_push(array_pointer, item_pointer) statement_macro( \
-    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer))); \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer)), "item size must match array item size"); \
     array_push_explicit_item_size((Array_void *)(array_pointer), item_pointer, sizeof(*(item_pointer))); \
 )
 static inline void array_push_explicit_item_size(Array_void *array, void *item, usize item_size);
 
 #define array_push_assume_capacity(array_pointer, item_pointer) statement_macro( \
-    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer))); \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*(item_pointer)), "item size must match array item size"); \
     array_push_explicit_item_size_assume_capacity((Array_void *)(array_pointer), item_pointer, sizeof(*(item_pointer))); \
 )
 static inline void array_push_explicit_item_size_assume_capacity(Array_void *array, void *item, usize item_size);
 
 #define array_push_slice(array_pointer, slice_pointer) statement_macro( \
-    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data))); \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data)), "slice item size must match array item size"); \
     array_push_slice_explicit_item_size((Array_void *)(array_pointer), (Slice_void *)(slice_pointer), sizeof(*((array_pointer)->data))); \
 )
 static void array_push_slice_explicit_item_size(Array_void *array, Slice_void *slice, usize item_size);
 
 #define array_push_slice_assume_capacity(array_pointer, slice_pointer) statement_macro( \
-    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data))); \
+    static_assert(sizeof(*((array_pointer)->data)) == sizeof(*((slice_pointer)->data)), "slice item size must match array item size"); \
     array_push_slice_explicit_item_size_assume_capacity((Array_void *)(array_pointer), (Slice_void *)(slice_pointer), sizeof(*((array_pointer)->data))); \
 )
 static void array_push_slice_explicit_item_size_assume_capacity(Array_void *array, Slice_void *slice, usize item_size);
@@ -221,8 +237,13 @@ static void array_push_slice_explicit_item_size_assume_capacity(Array_void *arra
 
 #define bit_cast(type) *(type *)&
 
-#define min(a, b) ((a) < (b) ? (a) : (b))
-#define max(a, b) ((a) > (b) ? (a) : (b))
-#define clamp_low max
-#define clamp_high min
+// TODO(felix): figure out how to solve min() and max() conflicting with windows headers, even when BASE_GRAPHICS is 1
+#define min__(a, b) ((a) < (b) ? (a) : (b))
+#define max__(a, b) ((a) > (b) ? (a) : (b))
+#define clamp_low max__
+#define clamp_high min__
 #define clamp(value, low, high) clamp_high(clamp_low(value, low), high)
+
+#define swap(type, a, b) statement_macro( \
+    type temp_a__ = *(a); *(a) = *(b); *(b) = temp_a__; \
+)

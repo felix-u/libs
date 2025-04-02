@@ -1,13 +1,3 @@
-structdef(String) { u8 *data; usize count; };
-#define stringc(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
-#define string(s) (String)stringc(s)
-
-structdef(String16) { u16 *data; usize count; };
-#define string16c(s) { .data = (u16 *)s, .count = sizeof(s) / sizeof(u16) - 1 }
-#define string16(s) (String16)string16c(s)
-
-typedef Array_u8 String_Builder;
-
 structdef(Format) {
     #if BUILD_DEBUG
         u32 magic_value_for_debug;
@@ -16,7 +6,7 @@ structdef(Format) {
         format_type_bool,
         format_type_char,
         format_type_u8, format_type_u16, format_type_u32, format_type_u64, format_type_usize,
-        // TODO(felix): signed ints
+        format_type_i8, format_type_i16, format_type_i32, format_type_i64, format_type_isize,
         format_type_f32,
         format_type_f64,
         format_type_V2,
@@ -27,7 +17,7 @@ structdef(Format) {
         bool value_bool;
         u8 value_char;
         u8 value_u8; u16 value_u16; u32 value_u32; u64 value_u64; usize value_usize;
-        // TODO(felix): signed ints
+        i8 value_i8; i16 value_i16; i32 value_i32; i64 value_i64; isize value_isize;
         f32 value_f32;
         f64 value_f64;
         V2 value_V2;

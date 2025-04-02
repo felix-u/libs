@@ -4,7 +4,7 @@ uniondef(V2) {
     struct { f32 left, right; };
     struct { f32 width, height; };
 
-    f32 elements[2];
+    f32 items[2];
 };
 
 uniondef(V3) {
@@ -19,7 +19,7 @@ uniondef(V3) {
     struct { V2 rg; f32 _4; };
     struct { f32 _5; V2 gb; };
 
-    f32 elements[3];
+    f32 items[3];
 };
 
 uniondef(V4) {
@@ -39,22 +39,24 @@ uniondef(V4) {
     struct { f32 _a; V3 yzw; };
     struct { f32 _b; V3 gba; };
 
-    f32 elements[4];
+    f32 items[4];
 };
 
 typedef V4 Quat;
 
 uniondef(M3) {
-    f32 elements[3][3];
+    f32 items[3][3];
     V3 columns[3];
 };
 
 uniondef(M4) {
-    f32 elements[4][4];
+    f32 items[4][4];
     V4 columns[4];
 };
 
 #define vector_pi_f32 3.14159265358979f
+
+static force_inline f32 radians_from_degrees(f32 degrees);
 
 static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount);
 
@@ -68,7 +70,9 @@ static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
 static force_inline V2   v2_max(V2 a, V2 b);
 static force_inline V2   v2_min(V2 a, V2 b);
 static force_inline V2   v2_mul(V2 a, V2 b);
+static       inline V2   v2_norm(V2 v);
 static force_inline V2   v2_reciprocal(V2 v);
+static       inline V2   v2_rotate(V2 v, f32 angle_radians);
 static       inline V2   v2_round(V2 v);
 static       inline V2   v2_round_down(V2 v);
 static force_inline V2   v2_scale(V2 v, f32 s);

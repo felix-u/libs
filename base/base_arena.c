@@ -15,7 +15,9 @@ static Arena arena_init(usize initial_size_bytes) {
 }
 
 static void *arena_make(Arena *arena, usize item_count, usize item_size) {
+    assert(item_size > 0);
     usize byte_count = item_count * item_size;
+    if (byte_count == 0) return 0;
 
     // TODO(felix): asan_poison alignment bytes
     usize alignment = 2 * sizeof(void *);
@@ -45,6 +47,13 @@ static void arena_deinit(Arena *arena) {
     arena->mem = 0;
     arena->offset = 0;
     arena->cap = 0;
+}
+
+static String arena_push(Arena *arena, String bytes) {
+    u8 *bytes_on_arena = arena_make(arena, bytes.count, sizeof(*bytes.data));
+    memcpy(bytes_on_arena, bytes.data, bytes.count);
+    String result = { .data = bytes_on_arena, .count = bytes.count };
+    return result;
 }
 
 static Arena_Temp arena_temp_begin(Arena *arena) {

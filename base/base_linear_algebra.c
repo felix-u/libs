@@ -1,3 +1,5 @@
+static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * vector_pi_f32 / 180.f; }
+
 static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
 
 static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.y + b.y }; }
@@ -23,7 +25,20 @@ static force_inline V2 v2_min(V2 a, V2 b) { return (V2){ .x = min(a.x, b.x), .y 
 
 static force_inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
 
+static inline V2 v2_norm(V2 v) {
+    f32 length = v2_len(v);
+    if (length == 0) return (V2){0};
+    return (V2){ .x = v.x / length, .y = v.y / length };
+}
+
 static force_inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
+
+static inline V2 v2_rotate(V2 v, f32 angle_radians) {
+    f32 sin_angle = sinf(angle_radians);
+    f32 cos_angle = cosf(angle_radians);
+    V2 result = { .x = v.x * cos_angle - v.y * sin_angle, .y = v.x * sin_angle + v.y * cos_angle };
+    return result;
+}
 
 static inline V2 v2_round(V2 v) { return (V2){ .x = roundf(v.x), .y = roundf(v.y) }; }
 
@@ -48,7 +63,7 @@ static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z;
 static force_inline bool v3_equal(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
 
 static force_inline V3 v3_forward_from_view(M4 view) {
-    return (V3){ .x = -view.elements[0][2], .y = -view.elements[1][2], .z = -view.elements[2][2] };
+    return (V3){ .x = -view.items[0][2], .y = -view.items[1][2], .z = -view.items[2][2] };
 }
 
 static inline f32 v3_len(V3 v) { return sqrtf(v3_len_squared(v)); }
@@ -73,7 +88,7 @@ static inline V3 v3_norm(V3 v) {
 }
 
 static force_inline V3 v3_right_from_view(M4 view) {
-    return (V3){ .x = view.elements[0][0], .y = view.elements[1][0], .z = view.elements[2][0] };
+    return (V3){ .x = view.items[0][0], .y = view.items[1][0], .z = view.items[2][0] };
 }
 
 static force_inline V3 v3_scale(V3 v, f32 s) { return (V3){ .x = v.x * s, .y = v.y * s, .z = v.z * s }; }
@@ -88,7 +103,7 @@ static inline V3 v3_unproject(V3 pos, M4 view_projection) {
 }
 
 static force_inline V3 v3_up_from_view(M4 view) {
-    return (V3){ .x = view.elements[0][1], .y = view.elements[1][1], .z = view.elements[2][1] };
+    return (V3){ .x = view.items[0][1], .y = view.items[1][1], .z = view.items[2][1] };
 }
 
 static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
@@ -146,14 +161,14 @@ static inline V3 quat_rotate_v3(Quat q, V3 v) {
 
 static inline V3 m3_mul_v3(M3 m, V3 v) {
     return (V3){
-        .x = v3_dot(v, (V3){ .x = m.elements[0][0], .y = m.elements[0][1], .z = m.elements[0][2] }),
-        .y = v3_dot(v, (V3){ .x = m.elements[1][0], .y = m.elements[1][1], .z = m.elements[1][2] }),
-        .z = v3_dot(v, (V3){ .x = m.elements[2][0], .y = m.elements[2][1], .z = m.elements[2][2] }),
+        .x = v3_dot(v, (V3){ .x = m.items[0][0], .y = m.items[0][1], .z = m.items[0][2] }),
+        .y = v3_dot(v, (V3){ .x = m.items[1][0], .y = m.items[1][1], .z = m.items[1][2] }),
+        .z = v3_dot(v, (V3){ .x = m.items[2][0], .y = m.items[2][1], .z = m.items[2][2] }),
     };
 }
 
 static force_inline M4 m4_fill_diagonal(f32 value) {
-    return (M4){ .elements = { [0][0] = value, [1][1] = value, [2][2] = value, [3][3] = value } };
+    return (M4){ .items = { [0][0] = value, [1][1] = value, [2][2] = value, [3][3] = value } };
 }
 
 static inline M4 m4_from_rotation(V3 axis, f32 angle) {
@@ -163,7 +178,7 @@ static inline M4 m4_from_rotation(V3 axis, f32 angle) {
     f32 cos_theta = cosf(angle);
     f32 cos_value = 1.f - cos_theta;
 
-    return (M4){ .elements = {
+    return (M4){ .items = {
         [0][0] = (axis.x * axis.x * cos_value) + cos_theta,
         [0][1] = (axis.x * axis.y * cos_value) + (axis.z * sin_theta),
         [0][2] = (axis.x * axis.z * cos_value) - (axis.y * sin_theta),
@@ -182,9 +197,9 @@ static inline M4 m4_from_rotation(V3 axis, f32 angle) {
 
 static inline M4 m4_from_translation(V3 translation) {
     M4 result = m4_fill_diagonal(1.f);
-    result.elements[3][0] = translation.x;
-    result.elements[3][1] = translation.y;
-    result.elements[3][2] = translation.z;
+    result.items[3][0] = translation.x;
+    result.items[3][1] = translation.y;
+    result.items[3][2] = translation.z;
     return result;
 }
 
@@ -215,7 +230,7 @@ static inline M4 m4_look_at(V3 eye, V3 centre, V3 up_direction) {
     V3 right   = v3_norm(v3_cross(forward, up_direction));
     V3 up      = v3_cross(right, forward);
 
-    return (M4){ .elements = {
+    return (M4){ .items = {
         [0][0] =    right.x,
         [0][1] =       up.x,
         [0][2] = -forward.x,
@@ -239,24 +254,24 @@ static inline M4 m4_mul_m4(M4 a, M4 b) {
     M4 result = {0};
     for (int col = 0; col < 4; col += 1) for (int row = 0; row < 4; row += 1) {
         f32 sum = 0;
-        for (int pos = 0; pos < 4; pos += 1) sum += a.elements[pos][row] * b.elements[col][pos];
-        result.elements[col][row] = sum;
+        for (int pos = 0; pos < 4; pos += 1) sum += a.items[pos][row] * b.items[col][pos];
+        result.items[col][row] = sum;
     }
     return result;
 }
 
 static inline V4 m4_mul_v4(M4 m, V4 v) {
     return (V4){
-        .x = v4_dot(v, (V4){ .x = m.elements[0][0], .y = m.elements[0][1], .z = m.elements[0][2], .w = m.elements[0][3] }),
-        .y = v4_dot(v, (V4){ .x = m.elements[1][0], .y = m.elements[1][1], .z = m.elements[1][2], .w = m.elements[1][3] }),
-        .z = v4_dot(v, (V4){ .x = m.elements[2][0], .y = m.elements[2][1], .z = m.elements[2][2], .w = m.elements[2][3] }),
-        .w = v4_dot(v, (V4){ .x = m.elements[3][0], .y = m.elements[3][1], .z = m.elements[3][2], .w = m.elements[3][3] }),
+        .x = v4_dot(v, (V4){ .x = m.items[0][0], .y = m.items[0][1], .z = m.items[0][2], .w = m.items[0][3] }),
+        .y = v4_dot(v, (V4){ .x = m.items[1][0], .y = m.items[1][1], .z = m.items[1][2], .w = m.items[1][3] }),
+        .z = v4_dot(v, (V4){ .x = m.items[2][0], .y = m.items[2][1], .z = m.items[2][2], .w = m.items[2][3] }),
+        .w = v4_dot(v, (V4){ .x = m.items[3][0], .y = m.items[3][1], .z = m.items[3][2], .w = m.items[3][3] }),
     };
 }
 
 static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far) {
     f32 cot = 1.f / tanf(fov_vertical_radians / 2.f);
-    return (M4){ .elements = {
+    return (M4){ .items = {
         [0][0] = cot / width_over_height,
         [1][1] = cot,
         [2][2] = (range_near + range_far) / (range_near - range_far),
@@ -268,7 +283,7 @@ static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_o
 static force_inline M4 m4_transpose(M4 m) {
     M4 result = {0};
     for (int i = 0; i < 4; i += 1) for (int j = 0; j < 4; j += 1) {
-        result.elements[i][j] = m.elements[j][i];
+        result.items[i][j] = m.items[j][i];
     }
     return result;
 }

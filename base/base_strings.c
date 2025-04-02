@@ -75,7 +75,7 @@ static String16 string16_from_string(Arena *arena, String s) {
             .data = arena_make(arena, s.count, sizeof(u16)),
             .count = (usize)MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
         };
-        win32_assert_not_0(wstr.count);
+        win32_ensure_not_0(wstr.count);
         return wstr;
     #else
         discard(arena);
@@ -129,10 +129,24 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
             string_builder_push(builder, String, string);
         } break;
         case format_type_char: array_push(builder, &format.value_char); break;
+        case format_type_i8:   string_builder_push(builder, isize, (isize)format.value_i8); break;
+        case format_type_i16:  string_builder_push(builder, isize, (isize)format.value_i16); break;
+        case format_type_i32:  string_builder_push(builder, isize, (isize)format.value_i32); break;
+        case format_type_i64:  static_assert(sizeof(i64) == sizeof(isize), "this case assumes i64 == isize"); // fallthrough
+        case format_type_isize: {
+            isize value = format.value_isize;
+            if (value < 0) {
+                string_builder_push(builder, char, '-');
+                value = -value;
+            }
+            format.type = format_type_usize;
+            format.value_usize = (usize)value;
+            string_builder_push_format(builder, format);
+        } break;
         case format_type_u8:  string_builder_push(builder, usize, (usize)format.value_u8); break;
         case format_type_u16: string_builder_push(builder, usize, (usize)format.value_u16); break;
         case format_type_u32: string_builder_push(builder, usize, (usize)format.value_u32); break;
-        case format_type_u64: static_assert(sizeof(u64) == sizeof(usize)); // fallthrough
+        case format_type_u64: static_assert(sizeof(u64) == sizeof(usize), "this case assumes u64 == usize"); // fallthrough
         case format_type_usize: {
             usize value = format.value_usize;
             if (value == 0) {
@@ -142,15 +156,15 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
 
             // UINT64_MAX = 18,446,744,073,709,551,615
             // has 20 digits
-            u8 buf_mem[20];
-            usize buf_index = 20;
+            u8 buf_mem[sizeof(usize) * 8];
+            usize buf_index = sizeof(buf_mem);
 
             for (; value > 0; value /= 10) {
                 buf_index -= 1;
                 buf_mem[buf_index] = (u8)((value % 10) + '0');
             }
 
-            String decimal = { .data = buf_mem + buf_index, .count = (20 - buf_index) };
+            String decimal = { .data = buf_mem + buf_index, .count = sizeof(buf_mem) - buf_index };
             string_builder_push(builder, String, decimal);
         } break;
         case format_type_f32: string_builder_push(builder, f64, (f64)format.value_f32); break;
