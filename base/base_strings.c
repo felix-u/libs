@@ -1,9 +1,13 @@
-static usize int_from_hex_string(String s) {
+static usize int_from_string_base(String s, usize base) {
     usize result = 0, magnitude = s.count;
     for (usize i = 0; i < s.count; i += 1, magnitude -= 1) {
-        usize hex_digit = decimal_from_hex_digit_table[s.data[i]];
-        for (usize j = 1; j < magnitude; j += 1) hex_digit *= 16;
-        result += hex_digit;
+        result *= base;
+        usize digit = decimal_from_hex_digit_table[s.data[i]];
+        if (digit >= base) {
+            log_error("digit '%' is invalid in base %", fmt(char, s.data[i]), fmt(usize, base));
+            return 0;
+        }
+        result += digit;
     }
     return result;
 }
@@ -58,7 +62,7 @@ static String string_print(Arena *arena, char *format, ...) {
 
 static String string_range(String string, usize start, usize end) {
     assert(end <= string.count);
-    assert(start < end);
+    assert(start <= end);
     String result = { .data = string.data + start, .count = end - start };
     return result;
 }
@@ -129,9 +133,9 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
             string_builder_push(builder, String, string);
         } break;
         case format_type_char: array_push(builder, &format.value_char); break;
-        case format_type_i8:   string_builder_push(builder, isize, (isize)format.value_i8); break;
-        case format_type_i16:  string_builder_push(builder, isize, (isize)format.value_i16); break;
-        case format_type_i32:  string_builder_push(builder, isize, (isize)format.value_i32); break;
+        case format_type_i8:  format.type = format_type_isize; format.value_isize = (isize)format.value_i8; string_builder_push_format(builder, format); break;
+        case format_type_i16: format.type = format_type_isize; format.value_isize = (isize)format.value_i16; string_builder_push_format(builder, format); break;
+        case format_type_i32: format.type = format_type_isize; format.value_isize = (isize)format.value_i32; string_builder_push_format(builder, format); break;
         case format_type_i64:  static_assert(sizeof(i64) == sizeof(isize), "this case assumes i64 == isize"); // fallthrough
         case format_type_isize: {
             isize value = format.value_isize;
@@ -143,9 +147,9 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
             format.value_usize = (usize)value;
             string_builder_push_format(builder, format);
         } break;
-        case format_type_u8:  string_builder_push(builder, usize, (usize)format.value_u8); break;
-        case format_type_u16: string_builder_push(builder, usize, (usize)format.value_u16); break;
-        case format_type_u32: string_builder_push(builder, usize, (usize)format.value_u32); break;
+        case format_type_u8:  format.type = format_type_usize; format.value_usize = (usize)format.value_u8; string_builder_push_format(builder, format); break;
+        case format_type_u16: format.type = format_type_usize; format.value_usize = (usize)format.value_u16; string_builder_push_format(builder, format); break;
+        case format_type_u32: format.type = format_type_usize; format.value_usize = (usize)format.value_u32; string_builder_push_format(builder, format); break;
         case format_type_u64: static_assert(sizeof(u64) == sizeof(usize), "this case assumes u64 == usize"); // fallthrough
         case format_type_usize: {
             usize value = format.value_usize;
@@ -154,14 +158,19 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
                 break;
             }
 
-            // UINT64_MAX = 18,446,744,073,709,551,615
-            // has 20 digits
             u8 buf_mem[sizeof(usize) * 8];
             usize buf_index = sizeof(buf_mem);
 
-            for (; value > 0; value /= 10) {
+            u8 base = format.base == 0 ? 10 : format.base;
+            assert(base <= 16);
+
+            // TODO(felix): support capitalised
+            char *character_from_digit = "0123456789abcdef";
+
+            for (; value > 0; value /= base) {
                 buf_index -= 1;
-                buf_mem[buf_index] = (u8)((value % 10) + '0');
+                u8 digit = (u8)(value % base);
+                buf_mem[buf_index] = (u8)character_from_digit[digit];
             }
 
             String decimal = { .data = buf_mem + buf_index, .count = sizeof(buf_mem) - buf_index };

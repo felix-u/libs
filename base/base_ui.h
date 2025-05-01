@@ -32,7 +32,6 @@ structdef(UI_Box_Build) {
     String hash_string, display_string;
     UI_Box_Flags flags;
     UI_Size size[ui_axis_count];
-    Gfx_Texture *texture;
 };
 
 structdef(UI_Box_Style) {

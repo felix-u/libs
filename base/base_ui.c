@@ -445,7 +445,7 @@ static void ui_render_recursive(UI *ui, UI_Box *box) {
         i32 left = (i32)(box->rect.left + 0.5f);
         i32 width = (i32)(box->rect.right - box->rect.left + 0.5f);
         i32 height = (i32)(box->rect.bottom - box->rect.top + 0.5f);
-        gfx_draw_rectangle(&ui->gfx->texture, top, left, width, height, rgba);
+        gfx_draw_rectangle(ui->gfx, top, left, width, height, rgba);
     }
 
     // // TODO(felix): remove
@@ -482,7 +482,7 @@ static void ui_render_recursive(UI *ui, UI_Box *box) {
 
         i32 x = (i32)text_rect.left;
         i32 y = (i32)text_rect.top;
-        gfx_draw_text(&ui->gfx->texture, ui->gfx->font, box->build.display_string, x, y, 0x000000ff);
+        gfx_draw_text(ui->gfx, ui->gfx->font, box->build.display_string, x, y, 0x000000ff);
     }
 
     if (draw_texture) panic("TODO(felix)");

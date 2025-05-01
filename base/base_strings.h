@@ -59,7 +59,7 @@ const bool is_hex_digit[256] = {
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
 
-static usize int_from_hex_string(String s);
+static usize int_from_string_base(String s, usize base);
 
 static char *cstring_from_string(Arena *arena, String s);
 
