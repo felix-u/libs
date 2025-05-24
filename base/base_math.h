@@ -56,7 +56,22 @@ uniondef(M4) {
     V4 columns[4];
 };
 
-#define vector_pi_f32 3.14159265358979f
+#define pi_f32 3.14159265358979f
+
+// TODO(felix): use C11 generics for generic abs()
+#if COMPILER_MSVC
+    #pragma intrinsic(abs, _abs64, fabs)
+    #define abs_i32(x) abs(x)
+    #define abs_i64(x) _abs64(x)
+    #define abs_f64(x) fabs(x)
+    // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
+    static force_inline f32 abs_f32(f32 x) { return x < 0 ? -x : x; }
+#elif COMPILER_CLANG || COMPILER_GCC
+    #define abs_i32(x) __builtin_abs(x)
+    #define abs_i64(x) __builtin_llabs(x)
+    #define abs_f32(x) __builtin_fabsf(x)
+    #define abs_f64(x) __builtin_fabs(x)
+#endif
 
 static force_inline f32 radians_from_degrees(f32 degrees);
 

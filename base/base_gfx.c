@@ -719,7 +719,7 @@ static void gfx_draw_line(Gfx_Render_Context *gfx, V2 start, V2 end, f32 thickne
     i32 start_y = (i32)(start.y + 0.5f);
     i32 end_y = (i32)(end.y + 0.5f);
 
-    bool is_steep = abs(end_y - start_y) > abs(end_x - start_x);
+    bool is_steep = abs_i32(end_y - start_y) > abs_i32(end_x - start_x);
     if (is_steep) {
         swap(i32, &start_x, &start_y);
         swap(i32, &end_x, &end_y);
@@ -732,7 +732,7 @@ static void gfx_draw_line(Gfx_Render_Context *gfx, V2 start, V2 end, f32 thickne
     }
 
     i32 distance_x = end_x - start_x;
-    i32 distance_y = abs(end_y - start_y);
+    i32 distance_y = abs_i32(end_y - start_y);
     i32 error = distance_x / 2;
     i32 y_step = start_y < end_y ? 1 : -1;
 

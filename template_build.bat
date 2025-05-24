@@ -10,10 +10,10 @@ if not "%release%"=="1"                    set debug=1
 set dir_deps=..\deps
 set include_paths=-I%dir_deps%
 
-set cl_common=cl -nologo -FC -diagnostics:column -std:c11 -MT %include_paths%
+set cl_common=cl -nologo -FC -diagnostics:column -std:c11 -MT -Oi %include_paths%
 set clang_common=clang -pedantic -Wno-microsoft -Wno-gnu-zero-variadic-macro-arguments -std=c11 -MT %include_paths%
-set cl_link=-link -entry:entrypoint -subsystem:console -incremental:no kernel32.lib shell32.lib
-set clang_link=-lkernel32 -lshell32 -Xlinker -entry:entrypoint -Xlinker -subsystem:console
+set cl_link=-link -entry:entrypoint -subsystem:console -incremental:no
+set clang_link=-Xlinker -entry:entrypoint -Xlinker -subsystem:console
 set cl_debug=%cl_common% -W4 -WX -Z7 -DBUILD_DEBUG=1
 set clang_debug=%clang_common% ^
     -Wall -Werror -Wextra -Wshadow -Wconversion -Wdouble-promotion ^
@@ -25,7 +25,7 @@ set clang_out=-o
 REM TODO(felix): asan for debug!
 
 set cl_release=%cl_common% /O2
-set clang_release=%clang_common% -O3
+set clang_release=%clang_common% -O3 -Wno-assume
 
 if "%msvc%"=="1"  set compile_debug=%cl_debug%
 if "%msvc%"=="1"  set compile_release=%cl_release%

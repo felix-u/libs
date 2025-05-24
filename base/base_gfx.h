@@ -1,5 +1,6 @@
 #if OS_WINDOWS
-    // link: user32, gdi32
+    #pragma comment(lib, "user32.lib")
+    #pragma comment(lib, "gdi32.lib")
     #include <windowsx.h>
 #else
     #error "OS not yet supported"

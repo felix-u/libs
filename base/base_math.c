@@ -1,4 +1,4 @@
-static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * vector_pi_f32 / 180.f; }
+static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * pi_f32 / 180.f; }
 
 static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
 

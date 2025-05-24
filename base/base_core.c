@@ -1,3 +1,8 @@
+#if OS_WINDOWS
+    #pragma comment(lib, "kernel32.lib")
+    #pragma comment(lib, "shell32.lib") // needed by os_get_arguments
+#endif
+
 // TODO(felix): add slice_equal/slice_compare
 
 static void array_ensure_capacity_explicit_item_size(Array_void *array, usize item_count, usize item_size, bool non_zero) {
@@ -82,17 +87,23 @@ extern void *memset(void *destination_, int byte_, usize byte_count) {
     return destination;
 }
 
-// TODO(felix): replace with something that feels less hacky
-#if OS_LINUX || OS_MACOS
+static u8 program(void);
+#if OS_WINDOWS
+    void entrypoint(void) {
+        u8 exit_code = program();
+        ExitProcess(exit_code);
+    }
+#elif OS_LINUX || OS_MACOS
+    // TODO(felix): replace with something that feels less hacky
+
     static int argument_count_;
     static char **arguments_;
 
-    static void entrypoint(void);
     int main(int argument_count, char **arguments) {
         argument_count_ = argument_count;
         arguments_ = arguments;
-        entrypoint();
-        return 0;
+        u8 exit_code = entrypoint();
+        return exit_code;
     }
 #endif
 
