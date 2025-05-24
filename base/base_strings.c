@@ -14,7 +14,7 @@ static usize int_from_string_base(String s, usize base) {
 
 static bool string_equal(String s1, String s2) {
     if (s1.count != s2.count) return false;
-    return memcmp(s1.data, s2.data, s1.count) == 0;
+    return memcmp_(s1.data, s2.data, s1.count) == 0;
 }
 
 static String string_from_cstring(char *s) {
@@ -136,7 +136,7 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
         case format_type_i8:  format.type = format_type_isize; format.value_isize = (isize)format.value_i8; string_builder_push_format(builder, format); break;
         case format_type_i16: format.type = format_type_isize; format.value_isize = (isize)format.value_i16; string_builder_push_format(builder, format); break;
         case format_type_i32: format.type = format_type_isize; format.value_isize = (isize)format.value_i32; string_builder_push_format(builder, format); break;
-        case format_type_i64:  static_assert(sizeof(i64) == sizeof(isize), "this case assumes i64 == isize"); // fallthrough
+        case format_type_i64: { static_assert(sizeof(i64) == sizeof(isize), "this case assumes i64 == isize"); } // fallthrough
         case format_type_isize: {
             isize value = format.value_isize;
             if (value < 0) {
@@ -150,7 +150,7 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
         case format_type_u8:  format.type = format_type_usize; format.value_usize = (usize)format.value_u8; string_builder_push_format(builder, format); break;
         case format_type_u16: format.type = format_type_usize; format.value_usize = (usize)format.value_u16; string_builder_push_format(builder, format); break;
         case format_type_u32: format.type = format_type_usize; format.value_usize = (usize)format.value_u32; string_builder_push_format(builder, format); break;
-        case format_type_u64: static_assert(sizeof(u64) == sizeof(usize), "this case assumes u64 == usize"); // fallthrough
+        case format_type_u64: { static_assert(sizeof(u64) == sizeof(usize), "this case assumes u64 == usize"); } // fallthrough
         case format_type_usize: {
             usize value = format.value_usize;
             if (value == 0) {

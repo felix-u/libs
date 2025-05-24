@@ -10,6 +10,8 @@
     #include <unistd.h>
 
 #elif OS_LINUX
+    #define static_assert _Static_assert
+    void exit(int); // TODO(felix): can remove?
     void abort(void); // TODO(felix): own implementation to not depend on libc
     void *calloc(size_t item_count, size_t item_size); // TODO(felix): remove once using virtual alloc arena
     void free(void *pointer); // TODO(felix): remove once using virtual alloc arena
@@ -19,7 +21,9 @@
     #include <stdio.h> // TODO(felix): only needed for FILE. remove!
 
 #elif OS_MACOS
+    #define static_assert _Static_assert
     // TODO(felix): same notes as above
+    void exit(int);
     void abort(void);
     void *calloc(size_t item_count, size_t item_size);
     void free(void *pointer);
@@ -31,6 +35,7 @@
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
     #define abort() ExitProcess(1) // TODO(felix): remove this
+    #define exit(code) ExitProcess(code)
     #if !BASE_GRAPHICS
         #define NOGDI
         #define NOUSER
@@ -39,13 +44,12 @@
         // #undef far // TODO(felix): figure out what to do with this - needed by combaseapi.h
     #endif
     #include "windows.h"
+    #include "shellapi.h"
     #define _CRT_SECURE_NO_WARNINGS
     #undef min
     #undef max
     // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
     #define win32_ensure_not_0(win32_fn_result) statement_macro( if ((win32_fn_result) == 0) { panic("win32: %", fmt(u64, GetLastError())); } )
-    #define win32_ensure_hr(hresult) statement_macro( HRESULT hr_ = (hresult); if (hr_ != S_OK) { panic("win32: %", fmt(i32, hr_, .base = 16, .prefix = true, .uppercase = true)); } )
-    #define win32_ensure_d3d_compile(hresult, err_blob) statement_macro( if (hresult != S_OK) { panic("D3D compile:\n%", fmt(cstring, err_blob->lpVtbl->GetBufferPointer(err_blob))); } )
 
 #endif // OS
 
@@ -53,13 +57,8 @@
 #if COMPILER_CLANG || COMPILER_GCC // they share many builtins
     #define builtin_unreachable __builtin_unreachable()
     #define force_inline inline __attribute__((always_inline))
-    #if COMPILER_GCC && !BUILD_RELEASE // TODO(felix): can I avoid this by using nonstandard names for my mem_ defines?
-        #include <string.h>
-    #endif
-    #define memcmp __builtin_memcmp
-    #define memcpy __builtin_memcpy
-    #define memmove __builtin_memmove
-    #define memset __builtin_memset
+    // TODO(felix): this is only for memcmp, etc. fix!
+    #include <string.h>
 #endif
 
 
@@ -192,9 +191,10 @@ typedef Array_u8 String_Builder;
 
 // TODO(felix): a number of these would benefit from assert-as-expression using comma operator
 #define slice_from_c_array(c_array) { .data = c_array, .count = array_count(c_array) }
+#define slice_of(type, ...) slice_from_c_array(((type[]){ __VA_ARGS__ }))
 #define slice_get_last_assume_not_empty(s) ((s).data[(s).count - 1])
 #define slice_pop_assume_not_empty(slice) (slice).data[--(slice).count]
-#define slice_range(slice, beg, end) { .data = (void *)((uptr)(slice).data + (beg)), .count = (end) - (beg) }
+#define slice_range(slice, beg, end) { .data = (slice).data + (beg), .count = (end) - (beg) }
 #define slice_swap_remove(slice_pointer, idx) (slice_pointer)->data[idx] = (slice_pointer)->data[--(slice_pointer)->count]
 #define slice_as_bytes(slice) (String){ .data = (u8 *)(slice).data, .count = sizeof(*((slice).data)) * (slice).count }
 
@@ -247,3 +247,16 @@ static void array_push_slice_explicit_item_size_assume_capacity(Array_void *arra
 #define swap(type, a, b) statement_macro( \
     type temp_a__ = *(a); *(a) = *(b); *(b) = temp_a__; \
 )
+
+// TODO(felix): rename/replace
+static inline int memcmp_(void *a_, void *b_, usize byte_count);
+#if OS_WINDOWS
+    #pragma function(memcpy)
+#endif
+void *memcpy(void *destination_, const void *source_, usize byte_count);
+#if OS_WINDOWS
+    #pragma function(memset)
+#endif
+extern void *memset(void *destination_, int byte_, usize byte_count);
+
+static Slice_String os_get_arguments(struct Arena *arena);
