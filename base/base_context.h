@@ -68,6 +68,22 @@
 #endif
 
 
+#if OS_WINDOWS
+    #if !defined(WINDOWS_SUBSYSTEM_WINDOWS) && !defined(WINDOWS_SUBSYSTEM_CONSOLE)
+        #define WINDOWS_SUBSYSTEM_WINDOWS 0
+        #define WINDOWS_SUBSYSTEM_CONSOLE 1
+    #elif !defined(WINDOWS_SUBSYSTEM_WINDOWS)
+        static_assert(WINDOWS_SUBSYSTEM_CONSOLE == 1, "");
+        #define WINDOWS_SUBSYSTEM_WINDOWS 0
+    #elif !defined(WINDOWS_SUBSYSTEM_CONSOLE)
+        static_assert(WINDOWS_SUBSYSTEM_WINDOWS == 1, "");
+        #define WINDOWS_SUBSYSTEM_CONSOLE 0
+    #else
+        static_assert(!WINDOWS_SUBSYSTEM_WINDOWS || !WINDOWS_SUBSYSTEM_CONSOLE);
+    #endif
+#endif
+
+
 #if !defined(BASE_GRAPHICS)
     #define BASE_GRAPHICS 1
 #endif
