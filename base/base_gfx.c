@@ -909,7 +909,7 @@ static void gfx_draw_text(Gfx_Render_Context *gfx, Gfx_Font font, String string,
     i32 step = font.width + tracking;
 
     assert(string.count > 0);
-    for (usize i = 0; i < string.count; i += 1, left += step) {
+    for (u64 i = 0; i < string.count; i += 1, left += step) {
         u8 character = string.data[i];
         assert(character < 128);
 

@@ -2,22 +2,22 @@
 
 structdef(Arena) {
     void *mem;
-    usize offset;
-    usize capacity;
-    usize last_offset;
+    u64 offset;
+    u64 capacity;
+    u64 last_offset;
 };
 
 structdef(Scratch) {
     Arena *arena;
-    usize offset;
-    usize last_offset;
+    u64 offset;
+    u64 last_offset;
 };
 
-static void *arena_make(Arena *arena, usize item_count, usize item_size);
+static void *arena_make(Arena *arena, u64 item_count, u64 item_size);
 static void  arena_deinit(Arena *arena);
 
 // TODO(felix): remove this function. A zeroed reserve+commit arena will be valid and will grow on demand
-static Arena arena_init(usize initial_size_bytes);
+static Arena arena_init(u64 initial_size_bytes);
 
 static String arena_push(Arena *arena, String bytes);
 
@@ -37,7 +37,7 @@ static void    scratch_end(Scratch scratch);
 #else // IMPLEMENTATION
 
 
-static Arena arena_init(usize initial_size_bytes) {
+static Arena arena_init(u64 initial_size_bytes) {
     // TODO(felix): switch to reserve+commit with (virtually) no limit: reserve something like 64gb and commit pages as needed
     #if OS_WINDOWS
         Arena arena = { .mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, initial_size_bytes) };
@@ -53,14 +53,14 @@ static Arena arena_init(usize initial_size_bytes) {
     return arena;
 }
 
-static void *arena_make(Arena *arena, usize item_count, usize item_size) {
+static void *arena_make(Arena *arena, u64 item_count, u64 item_size) {
     assert(item_size > 0);
-    usize byte_count = item_count * item_size;
+    u64 byte_count = item_count * item_size;
     if (byte_count == 0) return 0;
 
     // TODO(felix): asan_poison alignment bytes
-    usize alignment = 2 * sizeof(void *);
-    usize modulo = arena->offset & (alignment - 1);
+    u64 alignment = 2 * sizeof(void *);
+    u64 modulo = arena->offset & (alignment - 1);
     if (modulo != 0) arena->offset += alignment - modulo;
 
     if (arena->capacity == 0) *arena = arena_init(8 * 1024 * 1024);

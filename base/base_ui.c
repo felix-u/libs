@@ -43,7 +43,7 @@ structdef(UI_Box_Style) {
 
 structdef(UI_Box) {
     UI_Box_Build build;
-    usize key;
+    u64 key;
 
     UI_Box_Style style, target_style;
 
@@ -128,7 +128,7 @@ static  UI_Interaction  ui_text(UI *ui, char *format, ...);
 // NOTE(felix): How this needs to look:
 // 1. Build box hierarchy. Use last frame's data (looked up by hash) for input
 //  requires hash links { UI_Box *hash_prev, *hash_next }
-//  requires keying and frame info { UI_Key key; usize last_frame_touched_idx }
+//  requires keying and frame info { UI_Key key; u64 last_frame_touched_idx }
 //      a) look up in box hash table to be able to use previous frame's layout to compute input
 //      b) iterate through hash table. if a box's last_frame_touched_idx < current_frame_idx, remove
 // 2. Layout pass (compute sizes)
@@ -167,21 +167,21 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
     if (arguments.only_hash) {
         display_string = (String){0};
         #if BUILD_DEBUG
-            for (usize i = 0; i < string.count; i += 1) {
+            for (u64 i = 0; i < string.count; i += 1) {
                 if (string.data[i] != '#') continue;
                 i += 1;
                 if (i == string.count || string.data[i] != '[') continue;
-                panic("you called `ui_box` with `.only_hash = true`, but the string `%` has a display/hash specifier at index %", fmt(String, string), fmt(usize, i));
+                panic("you called `ui_box` with `.only_hash = true`, but the string `%` has a display/hash specifier at index %", fmt(String, string), fmt(u64, i));
             }
         #endif
     } else {
-        usize specifier_start_index = 0, specifier_end_index = 0;
+        u64 specifier_start_index = 0, specifier_end_index = 0;
         enum { before_specifier, after_specifier, specifier_position_count };
         bool should_hash[specifier_position_count] = {0};
         bool should_display[specifier_position_count] = {0};
 
         bool there_is_a_specifier = false;
-        for (usize i = 0; i < string.count; i += 1) {
+        for (u64 i = 0; i < string.count; i += 1) {
             if (string.data[i] != '#') continue;
 
             i += 1;
@@ -191,7 +191,7 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
             there_is_a_specifier = true;
 
             specifier_start_index = i - 1;
-            usize position = before_specifier;
+            u64 position = before_specifier;
 
             for (; i < string.count; i += 1) switch (string.data[i]) {
                 case ']': specifier_end_index = i; goto compute_specifier;
@@ -230,7 +230,7 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
             // NOTE(felix): there's probably a case to make for allowing empty display strings
             assert(display_string.count != 0);
             #if BUILD_DEBUG
-                if (there_is_a_specifier) for (usize position = 0; position < specifier_position_count; position += 1) {
+                if (there_is_a_specifier) for (u64 position = 0; position < specifier_position_count; position += 1) {
                     assert(should_hash[position] || should_display[position]);
                 }
             #else
@@ -250,8 +250,8 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
 
     // djb2 hash
     // TODO(felix): add hashmap to base and use
-    usize key = 5381;
-    for (usize i = 0; i < hash_string.count; i += 1) {
+    u64 key = 5381;
+    for (u64 i = 0; i < hash_string.count; i += 1) {
         key = ((key << 5) + key) + hash_string.data[i];
     }
     key %= ui->box_hashmap.capacity;

@@ -7,8 +7,8 @@ structdef(Format) {
     enum {
         format_type_bool,
         format_type_char,
-        format_type_u8, format_type_u16, format_type_u32, format_type_u64, format_type_usize,
-        format_type_i8, format_type_i16, format_type_i32, format_type_i64, format_type_isize,
+        format_type_u8, format_type_u16, format_type_u32, format_type_u64,
+        format_type_i8, format_type_i16, format_type_i32, format_type_i64,
         format_type_f32,
         format_type_f64,
         format_type_V2,
@@ -18,8 +18,8 @@ structdef(Format) {
     union {
         bool value_bool;
         u8 value_char;
-        u8 value_u8; u16 value_u16; u32 value_u32; u64 value_u64; usize value_usize;
-        i8 value_i8; i16 value_i16; i32 value_i32; i64 value_i64; isize value_isize;
+        u8 value_u8; u16 value_u16; u32 value_u32; u64 value_u64;
+        i8 value_i8; i16 value_i16; i32 value_i32; i64 value_i64;
         f32 value_f32;
         f64 value_f64;
         V2 value_V2;
@@ -61,15 +61,15 @@ const bool is_hex_digit[256] = {
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
 
-static usize int_from_string_base(String s, usize base);
+static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
 
 static bool   string_equal(String s1, String s2);
 static String string_from_cstring(char *s);
-static String string_from_int_base(Arena *arena, usize _num, u8 base);
+static String string_from_int_base(Arena *arena, u64 _num, u8 base);
 static String string_print(Arena *arena, char *fmt, ...);
-static String string_range(String string, usize start, usize end);
+static String string_range(String string, u64 start, u64 end);
 static String string_vprint(Arena *arena, char *fmt, va_list args);
 
 static String16 string16_from_string(Arena *arena, String s);
@@ -85,13 +85,13 @@ static inline void string_builder_null_terminate(String_Builder *builder);
 #else // IMPLEMENTATION
 
 
-static usize int_from_string_base(String s, usize base) {
-    usize result = 0, magnitude = s.count;
-    for (usize i = 0; i < s.count; i += 1, magnitude -= 1) {
+static u64 int_from_string_base(String s, u64 base) {
+    u64 result = 0, magnitude = s.count;
+    for (u64 i = 0; i < s.count; i += 1, magnitude -= 1) {
         result *= base;
-        usize digit = decimal_from_hex_digit_table[s.data[i]];
+        u64 digit = decimal_from_hex_digit_table[s.data[i]];
         if (digit >= base) {
-            log_error("digit '%' is invalid in base %", fmt(char, s.data[i]), fmt(usize, base));
+            log_error("digit '%' is invalid in base %", fmt(char, s.data[i]), fmt(u64, base));
             return 0;
         }
         result += digit;
@@ -106,22 +106,22 @@ static bool string_equal(String s1, String s2) {
 
 static String string_from_cstring(char *s) {
     if (s == NULL) return (String){ 0 };
-    usize count = 0;
+    u64 count = 0;
     while (s[count] != '\0') count += 1;
     return (String){ .data = (u8 *)s, .count = count };
 }
 
 static char *cstring_from_string(Arena *arena, String string) {
     char *cstring = arena_make(arena, string.count + 1, sizeof(char));
-    for (usize i = 0; i < string.count; i += 1) cstring[i] = (char)string.data[i];
+    for (u64 i = 0; i < string.count; i += 1) cstring[i] = (char)string.data[i];
     cstring[string.count] = '\0';
     return cstring;
 }
 
 // Only bases <= 10
-static String string_from_int_base(Arena *arena, usize _num, u8 base) {
+static String string_from_int_base(Arena *arena, u64 _num, u8 base) {
     String str = {0};
-    usize num = _num;
+    u64 num = _num;
 
     do {
         num /= base;
@@ -131,7 +131,7 @@ static String string_from_int_base(Arena *arena, usize _num, u8 base) {
     str.data = arena_make(arena, str.count, sizeof(u8));
 
     num = _num;
-    for (isize i = (isize)str.count - 1; i >= 0; i -= 1) {
+    for (i64 i = (i64)str.count - 1; i >= 0; i -= 1) {
         str.data[i] = (u8)((num % base) + '0');
         num /= base;
     }
@@ -147,7 +147,7 @@ static String string_print(Arena *arena, char *format, ...) {
     return result;
 }
 
-static String string_range(String string, usize start, usize end) {
+static String string_range(String string, u64 start, u64 end) {
     assert(end <= string.count);
     assert(start <= end);
     String result = { .data = string.data + start, .count = end - start };
@@ -157,14 +157,14 @@ static String string_range(String string, usize start, usize end) {
 static String string_vprint(Arena *arena, char *fmt, va_list args) {
     String_Builder builder = { .arena = arena };
     string_builder_print_var_args(&builder, fmt, args);
-    return builder.slice;
+    return builder.string;
 }
 
 static String16 string16_from_string(Arena *arena, String s) {
     #if OS_WINDOWS
         String16 wstr = {
             .data = arena_make(arena, s.count, sizeof(u16)),
-            .count = (usize)MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
+            .count = (u64)MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
         };
         win32_ensure_not_0(wstr.count);
         return wstr;
@@ -186,8 +186,8 @@ static void string_builder_print_var_args(String_Builder *builder, char *fmt_c, 
     String fmt_str = string_from_cstring(fmt_c);
     assert(fmt_str.count > 0);
 
-    for (usize i = 0; i < fmt_str.count; i += 1) {
-        usize beg_i = i;
+    for (u64 i = 0; i < fmt_str.count; i += 1) {
+        u64 beg_i = i;
         while (fmt_str.data[i] != '%' && i < fmt_str.count) i += 1;
 
         if (i == fmt_str.count) {
@@ -220,33 +220,31 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
             string_builder_push(builder, String, string);
         } break;
         case format_type_char: push(builder, format.value_char); break;
-        case format_type_i8:  format.type = format_type_isize; format.value_isize = (isize)format.value_i8; string_builder_push_format(builder, format); break;
-        case format_type_i16: format.type = format_type_isize; format.value_isize = (isize)format.value_i16; string_builder_push_format(builder, format); break;
-        case format_type_i32: format.type = format_type_isize; format.value_isize = (isize)format.value_i32; string_builder_push_format(builder, format); break;
-        case format_type_i64: { static_assert(sizeof(i64) == sizeof(isize), "this case assumes i64 == isize"); } // fallthrough
-        case format_type_isize: {
-            isize value = format.value_isize;
+        case format_type_i8:  format.type = format_type_i64; format.value_i64 = (i64)format.value_i8; string_builder_push_format(builder, format); break;
+        case format_type_i16: format.type = format_type_i64; format.value_i64 = (i64)format.value_i16; string_builder_push_format(builder, format); break;
+        case format_type_i32: format.type = format_type_i64; format.value_i64 = (i64)format.value_i32; string_builder_push_format(builder, format); break;
+        case format_type_i64: {
+            i64 value = format.value_i64;
             if (value < 0) {
                 string_builder_push(builder, char, '-');
                 value = -value;
             }
-            format.type = format_type_usize;
-            format.value_usize = (usize)value;
+            format.type = format_type_u64;
+            format.value_u64 = (u64)value;
             string_builder_push_format(builder, format);
         } break;
-        case format_type_u8:  format.type = format_type_usize; format.value_usize = (usize)format.value_u8; string_builder_push_format(builder, format); break;
-        case format_type_u16: format.type = format_type_usize; format.value_usize = (usize)format.value_u16; string_builder_push_format(builder, format); break;
-        case format_type_u32: format.type = format_type_usize; format.value_usize = (usize)format.value_u32; string_builder_push_format(builder, format); break;
-        case format_type_u64: { static_assert(sizeof(u64) == sizeof(usize), "this case assumes u64 == usize"); } // fallthrough
-        case format_type_usize: {
-            usize value = format.value_usize;
+        case format_type_u8:  format.type = format_type_u64; format.value_u64 = (u64)format.value_u8; string_builder_push_format(builder, format); break;
+        case format_type_u16: format.type = format_type_u64; format.value_u64 = (u64)format.value_u16; string_builder_push_format(builder, format); break;
+        case format_type_u32: format.type = format_type_u64; format.value_u64 = (u64)format.value_u32; string_builder_push_format(builder, format); break;
+        case format_type_u64: {
+            u64 value = format.value_u64;
             if (value == 0) {
                 string_builder_push(builder, char, '0');
                 break;
             }
 
-            u8 buf_mem[sizeof(usize) * 8];
-            usize buf_index = sizeof(buf_mem);
+            u8 buf_mem[sizeof(u64) * 8];
+            u64 buf_index = sizeof(buf_mem);
 
             u8 base = format.base == 0 ? 10 : format.base;
             assert(base <= 16);
@@ -303,17 +301,17 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
                 break;
             }
 
-            string_builder_push(builder, usize, (usize)absolute_value);
+            string_builder_push(builder, u64, (u64)absolute_value);
 
             string_builder_push(builder, char, '.');
 
             f64 fraction = absolute_value;
 
             // TODO(felix): add ability to configure in format argument
-            usize precision = 2;
+            u64 precision = 2;
 
-            for (usize i = 0; i < precision; i += 1) {
-                fraction -= (f64)(usize)fraction;
+            for (u64 i = 0; i < precision; i += 1) {
+                fraction -= (f64)(u64)fraction;
                 fraction *= 10.0;
                 u8 fraction_as_char = (u8)fraction + '0';
                 string_builder_push(builder, char, fraction_as_char);
