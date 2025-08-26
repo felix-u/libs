@@ -1,5 +1,10 @@
 #if defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_STRINGS)
 
+uniondef(String_Builder) {
+    using(Array_u8, bytes);
+    struct { String string; u64 _capacity; struct Arena *_arena; };
+};
+
 structdef(Format) {
     #if BUILD_DEBUG
         u32 magic_value_for_debug;
@@ -65,7 +70,7 @@ static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
 
-static bool   string_equal(String s1, String s2);
+static bool   string_equals(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, u64 _num, u8 base);
 static String string_print(Arena *arena, char *fmt, ...);
@@ -99,7 +104,7 @@ static u64 int_from_string_base(String s, u64 base) {
     return result;
 }
 
-static bool string_equal(String s1, String s2) {
+static bool string_equals(String s1, String s2) {
     if (s1.count != s2.count) return false;
     return memcmp_(s1.data, s2.data, s1.count) == 0;
 }
@@ -333,7 +338,7 @@ static void string_builder_push_format(String_Builder *builder, Format format) {
 
 static inline void string_builder_null_terminate(String_Builder *builder) {
     // Avoid push(0) because we don't want to increase the string length
-    array_ensure_capacity(builder, builder->count + 1);
+    reserve(builder, builder->count + 1);
     builder->data[builder->count] = 0;
 }
 

@@ -1,9 +1,9 @@
 #if defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_IO)
 
 structdef(Os_Read_Entire_File_Arguments) { Arena *arena; String path; u64 max_bytes; };
-#define os_read_entire_file(...) os_read_entire_file_argument_struct((Os_Read_Entire_File_Arguments){ __VA_ARGS__ })
-static String os_read_entire_file_argument_struct(Os_Read_Entire_File_Arguments);
-static bool file_write_bytes_to_relative_path(char *path, String bytes);
+#define os_read_entire_file(...) os_read_entire_file_((Os_Read_Entire_File_Arguments){ __VA_ARGS__ })
+static String os_read_entire_file_(Os_Read_Entire_File_Arguments);
+static bool os_write_entire_file(Arena scratch, String path, String bytes);
 
 #define log_info(...) log_internal("info: " __VA_ARGS__)
 #define log_internal(...) log_internal_with_location(__FILE__, __LINE__, (char *)__func__, __VA_ARGS__)
@@ -17,7 +17,7 @@ static void print_var_args(char *format, va_list args);
 #else // IMPLEMENTATION
 
 
-static String os_read_entire_file_argument_struct(Os_Read_Entire_File_Arguments arguments) {
+static String os_read_entire_file_(Os_Read_Entire_File_Arguments arguments) {
     String path = arguments.path;
     u64 max_bytes = arguments.max_bytes;
     if (max_bytes == 0) max_bytes = UINT32_MAX;
@@ -53,7 +53,7 @@ static String os_read_entire_file_argument_struct(Os_Read_Entire_File_Arguments 
 
         bool read_ok = false;
         if (file_size_ok) {
-            array_ensure_capacity(&bytes, file_size);
+            reserve(&bytes, file_size);
 
             u32 num_bytes_read = 0;
             BOOL ok = ReadFile(file, bytes.data, (u32)file_size, (LPDWORD)&num_bytes_read, 0);
@@ -97,7 +97,7 @@ static String os_read_entire_file_argument_struct(Os_Read_Entire_File_Arguments 
         if (file_size_ok) {
             rewind(file_handle);
 
-            array_ensure_capacity(&bytes, file_size);
+            reserve(&bytes, file_size);
 
             u64 num_bytes_read = fread(bytes.data, 1, file_size, file_handle);
             bytes.count = num_bytes_read;
@@ -113,22 +113,25 @@ static String os_read_entire_file_argument_struct(Os_Read_Entire_File_Arguments 
     return bit_cast(String) bytes;
 }
 
-static bool file_write_bytes_to_relative_path(char *path, String bytes) {
+static bool os_write_entire_file(Arena scratch, String path, String bytes) {
     #if OS_WINDOWS
         u64 dword_max = UINT32_MAX;
         assert(bytes.count <= dword_max);
 
         // NOTE(felix): not sure about this. See https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
         DWORD share_mode = 0;
-        HANDLE file_handle = CreateFileA(path, GENERIC_WRITE, share_mode, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+        Scratch scratch_ = scratch_begin(&scratch);
+        char *path_as_cstring = cstring_from_string(scratch_.arena, path);
+        HANDLE file_handle = CreateFileA(path_as_cstring, GENERIC_WRITE, share_mode, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+        scratch_end(scratch_);
         if (file_handle == INVALID_HANDLE_VALUE) {
-            log_error("unable to open file '%'", fmt(cstring, path));
+            log_error("unable to open file '%'", fmt(String, path));
             return false;
         }
 
         bool ok = WriteFile(file_handle, bytes.data, (DWORD)bytes.count, 0, 0);
         if (!ok) {
-            log_error("error writing to file '%'", fmt(cstring, path));
+            log_error("error writing to file '%'", fmt(String, path));
         }
 
         CloseHandle(file_handle);

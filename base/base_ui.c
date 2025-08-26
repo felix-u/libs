@@ -57,7 +57,8 @@ structdef(UI_Box) {
 
     UI_Interaction interaction;
 };
-typedef Array(UI_Box *) Array_UI_Box_Pointer;
+typedef UI_Box *UI_Box_Pointer;
+define_container_types(UI_Box_Pointer)
 
 // TODO(felix): actually use properly
 structdef(UI_Style_Stack) {
@@ -95,8 +96,8 @@ structdef(UI) {
 static          UI_Box *ui_border_box(UI *ui);
 
 structdef(UI_Box_Arguments) { UI *ui; String string; bool only_hash; };
-#define ui_box(...) ui_box_argument_struct((UI_Box_Arguments){ __VA_ARGS__ })
-static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments);
+#define ui_box(...) ui_box_((UI_Box_Arguments){ __VA_ARGS__ })
+static UI_Box *ui_box_(UI_Box_Arguments arguments);
 
 static          UI_Box *ui_box_frame_local_not_keyed(UI *ui);
 static            void  ui_begin_build(UI *ui);
@@ -155,7 +156,7 @@ static UI_Box *ui_border_box(UI *ui) {
     return panel;
 }
 
-static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
+static UI_Box *ui_box_(UI_Box_Arguments arguments) {
     UI *ui = arguments.ui;
     String string = arguments.string;
 
@@ -212,18 +213,18 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
             String string_before_specifier = string_range(string, 0, specifier_start_index);
             String string_after_specifier = string_range(string, specifier_end_index + 1, string.count);
 
-            Array_u8 hash_string_builder = { .arena = ui->frame_arena };
-            array_ensure_capacity(&hash_string_builder, string.count);
+            String_Builder hash_string_builder = { .arena = ui->frame_arena };
+            reserve(&hash_string_builder, string.count);
             if (should_hash[before_specifier]) push_slice_assume_capacity(&hash_string_builder, string_before_specifier);
             if (should_hash[after_specifier]) push_slice_assume_capacity(&hash_string_builder, string_after_specifier);
 
-            Array_u8 display_string_builder = { .arena = ui->frame_arena };
-            array_ensure_capacity(&display_string_builder, string.count);
+            String_Builder display_string_builder = { .arena = ui->frame_arena };
+            reserve(&display_string_builder, string.count);
             if (should_display[before_specifier]) push_slice_assume_capacity(&display_string_builder, string_before_specifier);
             if (should_display[after_specifier]) push_slice_assume_capacity(&display_string_builder, string_after_specifier);
 
-            hash_string = hash_string_builder.slice;
-            display_string = display_string_builder.slice;
+            hash_string = hash_string_builder.string;
+            display_string = display_string_builder.string;
         }
 
         done_parsing: {
@@ -257,7 +258,7 @@ static UI_Box *ui_box_argument_struct(UI_Box_Arguments arguments) {
     key %= ui->box_hashmap.capacity;
 
     for (UI_Box *match = ui->box_hashmap.data[key]; match != 0; match = match->next) {
-        if (!string_equal(hash_string, match->build.hash_string)) continue;
+        if (!string_equals(hash_string, match->build.hash_string)) continue;
         // TODO(felix): there are fields we need to initialise here that are currently only initialised when allocating a new widget
         // TODO(felix): also, I think, fields that need to be zeroed
         // TODO(felix): need to do some cleanup here to unify control flow
