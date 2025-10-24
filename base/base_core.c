@@ -1,6 +1,5 @@
 #if defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_CORE)
 
-#include <stdarg.h> // TODO(felix): look into removing
 #include <stdint.h> // TODO(felix): look into removing
 #include <stddef.h> // TODO(felix): look into removing
 
@@ -30,7 +29,10 @@
     #define static_assert _Static_assert
     // TODO(felix): same notes as above
     void exit(int);
+    #define os_exit(code) exit(code)
     void abort(void);
+    #define os_abort() abort()
+    void *malloc(size_t bytes);
     void *calloc(size_t item_count, size_t item_size);
     void free(void *pointer);
     #include <fcntl.h>
@@ -138,7 +140,9 @@ typedef   double f64;
 typedef     uintptr_t upointer;
 typedef      intptr_t ipointer;
 
-#if BUILD_DEBUG
+typedef char *cstring;
+
+#if BUILD_DEBUG && COMPILER_MSVC
     #pragma section(".raddbg", read, write)
     #define raddbg_exe_data __declspec(allocate(".raddbg"))
     raddbg_exe_data unsigned char raddbg_is_attached_byte_marker[1];
@@ -152,6 +156,8 @@ typedef      intptr_t ipointer;
     #define raddbg_type_view(...)
     #define raddbg_entry_point(...)
 #endif
+
+#define cast(type) (type)
 
 #define using(type, field_name) union { type; type field_name; }
 
@@ -178,13 +184,13 @@ typedef Array(String) Array_String;
 #define array_count(arr) (sizeof(arr) / sizeof(*(arr)))
 #define array_size(arr) ((arr).capacity * sizeof(*((arr).data)))
 
-#define discard(expression) (void)(expression)
+#define discard (void)
 
 typedef Slice(u64) Slice_u64;
 #define Map(type) struct { \
-    Array_String keys; \
-    Array_##type values; \
-    Slice_u64 value_index_from_key_hash; \
+    using(Array_##type, values); \
+    u64 *keys; \
+    u64 *value_index_from_key_hash; \
 }
 
 #define define_container_types(type) \
@@ -224,9 +230,10 @@ define_container_types(f32)
 define_container_types(f64)
 define_container_types(upointer)
 define_container_types(ipointer)
+define_container_types(cstring)
 
-#define stringc(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
-#define string(s) (String)stringc(s)
+#define string_constant(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
+#define string(s) (String)string_constant(s)
 
 structdef(String16) { u16 *data; u64 count; };
 #define string16c(s) { .data = (u16 *)s, .count = sizeof(s) / sizeof(u16) - 1 }
@@ -235,7 +242,7 @@ structdef(String16) { u16 *data; u64 count; };
 #define log_error(...) log_internal("error: " __VA_ARGS__)
 
 #define panic(...) {\
-    log_internal_with_location(__FILE__, __LINE__, (char *)__func__, "panic: " __VA_ARGS__);\
+    log_internal("panic: " __VA_ARGS__);\
     breakpoint; os_abort();\
 }
 
@@ -244,8 +251,9 @@ structdef(String16) { u16 *data; u64 count; };
 #define slice_from_c_array(c_array) { .data = c_array, .count = array_count(c_array) }
 #define slice_of(type, ...) slice_from_c_array(((type[]){ __VA_ARGS__ }))
 #define slice_get_last(s) (assert_expression((s).count > 0) ? &(s).data[(s).count - 1] : 0)
-#define pop(s) (*(assert_expression((s).count > 0) ? &(s).data[--(s).count] : 0))
+#define pop(s) (*(assert_expression((s)->count > 0) ? &(s)->data[--(s)->count] : 0))
 #define slice_range(s, begin, end) { .data = assert_expression((i64)(end) - (i64)(begin) >= 0 && (end) <= (s).count) ? (s).data + (begin) : 0, .count = (end) - (begin) }
+#define slice_shift(s) ((assert_expression((s)->count > 0)) ? &((s)->data++)[(s)->count--, 0] : 0)
 #define slice_swap_remove(s, i) (s)->data[i] = (s)->data[--(s)->count]
 #define slice_as_bytes(s) (String){ .data = (u8 *)((s).data), .count = sizeof(*((s).data)) * (s).count }
 #define slice_size(s) ((s).count * (sizeof *(s).data))
@@ -302,15 +310,22 @@ static void reserve_explicit_item_size(Array_void *array, u64 item_count, u64 it
 )
 
 // TODO(felix): rename/replace
-static inline int memcmp_(void *a_, void *b_, u64 byte_count);
-#if OS_WINDOWS
-    #pragma function(memcpy)
+#if !OS_MACOS
+	static inline int memcmp_(void *a_, void *b_, u64 byte_count);
+	#if OS_WINDOWS
+	    #pragma function(memcpy)
+	#endif
+	void *memcpy(void *destination_, const void *source_, u64 byte_count);
+	#if OS_WINDOWS
+	    #pragma function(memset)
+	#endif
+	extern void *memset(void *destination_, int byte_, u64 byte_count);
 #endif
-void *memcpy(void *destination_, const void *source_, u64 byte_count);
-#if OS_WINDOWS
-    #pragma function(memset)
-#endif
-extern void *memset(void *destination_, int byte_, u64 byte_count);
+
+#define zero(pointer) zero_(pointer, sizeof *(pointer))
+static force_inline void zero_(void *pointer, u64 byte_count) {
+    memset(pointer, 0, byte_count);
+}
 
 struct Arena;
 static Slice_String os_get_arguments(struct Arena *arena);
@@ -375,16 +390,16 @@ static inline int memcmp_(void *a_, void *b_, u64 byte_count) {
         for (u64 i = 0; i < byte_count; i += 1) destination[i] = source[i];
         return destination;
     }
-#endif
 
-extern void *memset(void *destination_, int byte_, u64 byte_count) {
-    assert(byte_ < 256);
-    u8 byte = (u8)byte_;
-    u8 *destination = destination_;
-    assert(destination != 0);
-    for (u64 i = 0; i < byte_count; i += 1) destination[i] = byte;
-    return destination;
-}
+	extern void *memset(void *destination_, int byte_, u64 byte_count) {
+	    assert(byte_ < 256);
+	    u8 byte = (u8)byte_;
+	    u8 *destination = destination_;
+	    assert(destination != 0);
+	    for (u64 i = 0; i < byte_count; i += 1) destination[i] = byte;
+	    return destination;
+	}
+#endif
 
 raddbg_entry_point(program)
 static void program(void);
@@ -438,10 +453,10 @@ static Slice_String os_get_arguments(Arena *arena) {
             push_assume_capacity(&arguments, bit_cast(String) argument.slice);
         }
     #elif OS_LINUX || OS_MACOS
-        reserve(&arguments, argument_count__);
-        for (u64 i = 0; i < (u64)argument_count__; i += 1) {
-            String argument = string_from_cstring(arguments__[i]);
-            array_push_assume_capacity(&arguments, &argument);
+        reserve(&arguments, (u64)argument_count_);
+        for (u64 i = 0; i < (u64)argument_count_; i += 1) {
+            String argument = string_from_cstring(arguments_[i]);
+            push_assume_capacity(&arguments, argument);
         }
     #endif
 

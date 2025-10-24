@@ -1,99 +1,100 @@
 #if defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_MAP)
 
-structdef(Map_Result) { u64 index; void *pointer; };
+structdef(Map_Result) { u64 index; void *pointer; bool is_new; };
 
 structdef(Map_Get_Arguments) {
     u64 _item_size;
     Map_void *map;
-    String key;
+    u64 key;
     void *put;
 };
+
+static u64 hash_djb2(String bytes);
+static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index);
 
 
 #else // IMPLEMENTATION
 
 
+static u64 hash_djb2(String bytes) {
+    u64 hash = 5381;
+    for (u64 i = 0; i < bytes.count; i += 1) {
+        hash += (hash << 5) + bytes.data[i];
+    }
+    return hash;
+}
+
+static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index) {
+    u64 mask = ((u64)1 << exponent) - 1;
+    u64 step = (hash >> (64 - exponent)) | 1;
+    u64 new = (index + step) & mask;
+    return new;
+}
+
 #define map_max_load_factor 70
 
-#define map_make(arena, map, capacity) do { \
+#define map_make(arena, map, capacity) statement_macro( \
     static_assert(sizeof(*(map)) == sizeof(Map_void), "Parameter must be a Map"); \
     map_make_explicit_item_size((arena), (Map_void *)(map), (capacity), sizeof(*(map)->values.data)); \
-} while (0);
+)
 
 static void map_make_explicit_item_size(Arena *arena, Map_void *map, u64 capacity, u64 item_size) {
     capacity *= 100;
     capacity /= map_max_load_factor;
 
-    map->keys.arena = arena;
-    reserve(&map->keys, capacity);
-    map->keys.count = 1;
-
-    map->values.arena = arena;
+    map->arena = arena;
     reserve_explicit_item_size(&map->values, capacity, item_size, false);
-    map->values.count = 1;
 
-    Array_u64 indices = { .arena = arena };
-    reserve(&indices, capacity);
-    map->value_index_from_key_hash = (Slice_u64){ .data = indices.data, .count = indices.capacity };
+    map->count = 1;
+    map->keys = arena_make(map->arena, capacity, sizeof *map->keys);
+    map->value_index_from_key_hash = arena_make(map->arena, capacity, sizeof *map->value_index_from_key_hash);
 }
 
 #define map_get(map, key, ...) map_get_((Map_Get_Arguments){ \
     ._item_size = sizeof *(map)->values.data, \
     (Map_void *)(map), \
-    slice_as_bytes(key), \
+    key, \
     __VA_ARGS__ \
 })
 
-#define map_put(map, key, put, ...) map_get(map, key, \
-    0 ? &(map)->values.data[-1] : put, /* type checking hack */ \
+#define map_put(map_pointer, key, put, ...) map_get(map_pointer, key, \
+    0 ? &(map_pointer)->data[-1] : put, /* type checking hack */ \
 )
 
 static Map_Result map_get_(Map_Get_Arguments arguments) {
     Map_void *map = arguments.map;
-    String key = arguments.key;
+    u64 key = arguments.key;
     void *put = arguments.put;
     u64 item_size = arguments._item_size;
 
     Map_Result result = {0};
 
-    // djb2 hash
-    u64 hash = 5381;
-    {
-        for_slice (u8 *, byte, key) hash = ((hash << 5) + hash) + *byte;
-        // avoid outputting 0
-        hash %= (map->values.capacity - 1);
-        hash += 1;
-    }
-
+    assert(is_power_of_2(map->capacity));
+    u64 exponent = count_trailing_zeroes(map->capacity);
+    u64 hash = hash_djb2(as_bytes(&key));
     u64 *value_index = 0;
-    u64 probe_increment = 1;
+    for (u64 index = hash;;) {
+        index = hash_lookup_msi(hash, exponent, index);
+        index += !index; // never 0
 
-    for (;;) {
-        value_index = &map->value_index_from_key_hash.data[hash];
+        value_index = &map->value_index_from_key_hash[index];
+
         if (*value_index == 0) break;
 
-        String key_at_index = map->keys.data[*value_index];
-        if (string_equals(key, key_at_index)) break;
-
-        hash += probe_increment;
-        probe_increment += 1;
-
-        // wrap and avoid 0
-        while (hash >= map->value_index_from_key_hash.count) hash -= map->value_index_from_key_hash.count;
-        if (hash == 0) hash = 1;
+        u64 key_at_index = map->keys[*value_index];
+        if (key == key_at_index) break;
     }
 
     if (put != 0) {
-        if (*value_index == 0) {
-            assert(map->keys.count == map->values.count);
-            ensure(map->values.count + 1 < map->values.capacity * map_max_load_factor / 100);
+        result.is_new = *value_index == 0;
+        if (result.is_new) {
+            ensure(map->count + 1 < map->capacity * map_max_load_factor / 100);
 
             *value_index = map->values.count;
-            map->values.count += 1;
-            map->keys.count += 1;
+            map->count += 1;
         }
 
-        map->keys.data[*value_index] = key;
+        map->keys[*value_index] = key;
 
         void *pointer = (u8 *)map->values.data + *value_index * item_size;
         memcpy(pointer, put, item_size);

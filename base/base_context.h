@@ -1,19 +1,19 @@
 // Based on information from https://sourceforge.net/p/predef/wiki/Home/
 
-#ifndef BASE_CONTEXT_CUSTOM
-
-
-#if defined(__EMSCRIPTEN__)
-    #define OS_EMSCRIPTEN 1
-#elif defined(__linux__) || defined(__gnu_linux__)
-    #define OS_LINUX 1
-#elif defined(__APPLE__) && defined(__MACH__)
-    #define OS_MACOS 1
-#elif defined(_WIN32)
-    #define OS_WINDOWS 1
-#else
-    #error unsupported OS
-#endif // OS_...
+// TODO(felix): figure out why OS_MACOS isn't being detected automatically. That's the only reason I added this override
+#if !defined(BASE_CONTEXT_OVERRIDE_OS)
+	#if defined(__EMSCRIPTEN__)
+	    #define OS_EMSCRIPTEN 1
+	#elif defined(__linux__) || defined(__gnu_linux__)
+	    #define OS_LINUX 1
+	#elif defined(__APPLE__) && defined(__MACH__)
+	    #define OS_MACOS 1
+	#elif defined(_WIN32)
+	    #define OS_WINDOWS 1
+	#else
+	    #error unsupported OS
+	#endif // OS_...
+#endif
 
 #ifndef OS_EMSCRIPTEN
     #define OS_EMSCRIPTEN 0
@@ -79,14 +79,14 @@
         static_assert(WINDOWS_SUBSYSTEM_WINDOWS == 1, "");
         #define WINDOWS_SUBSYSTEM_CONSOLE 0
     #else
-        static_assert(!WINDOWS_SUBSYSTEM_WINDOWS || !WINDOWS_SUBSYSTEM_CONSOLE);
+        static_assert(!WINDOWS_SUBSYSTEM_WINDOWS || !WINDOWS_SUBSYSTEM_CONSOLE, "");
     #endif
 #endif
 
 
-#if !defined(BASE_GRAPHICS)
-    #define BASE_GRAPHICS 1
+#if !defined(PLATFORM_SOKOL)
+    #define PLATFORM_SOKOL 0
 #endif
-
-
-#endif // !BASE_CONTEXT_CUSTOM
+#if !defined(PLATFORM_NONE)
+    #define PLATFORM_NONE 0
+#endif

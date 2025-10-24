@@ -5,11 +5,14 @@ uniondef(String_Builder) {
     struct { String string; u64 _capacity; struct Arena *_arena; };
 };
 
+typedef void ***EXPECTED_A_FORMAT_STRUCT;
+
 structdef(Format) {
     #if BUILD_DEBUG
-        u32 magic_value_for_debug;
+        EXPECTED_A_FORMAT_STRUCT magic_value_for_debug;
     #endif
     enum {
+        format_type_dummy = 0,
         format_type_bool,
         format_type_char,
         format_type_u8, format_type_u16, format_type_u32, format_type_u64,
@@ -36,7 +39,8 @@ structdef(Format) {
     bool uppercase; // TODO(felix)
 };
 
-#define format_magic_value_for_debug 0xfeffec // why not? this is the background colour of the acme editor from plan9
+// why not? this is the background colour of the acme editor from plan9
+#define format_magic_value_for_debug (EXPECTED_A_FORMAT_STRUCT)(0xfeffec)
 
 #if BUILD_DEBUG
     #define fmt(type_, ...) (Format){ .magic_value_for_debug = format_magic_value_for_debug,\
@@ -66,6 +70,8 @@ const bool is_hex_digit[256] = {
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
 
+#define formats_from_va_args(...) ((Slice_Format)slice_of(Format, (Format){0}, __VA_ARGS__))
+
 static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
@@ -73,14 +79,16 @@ static char *cstring_from_string(Arena *arena, String string);
 static bool   string_equals(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, u64 _num, u8 base);
-static String string_print(Arena *arena, char *fmt, ...);
+
+#define string_print(arena, format, ...) string_print_((arena), (format), formats_from_va_args(__VA_ARGS__))
+static String string_print_(Arena *arena, char *fmt, Slice_Format arguments);
+
 static String string_range(String string, u64 start, u64 end);
-static String string_vprint(Arena *arena, char *fmt, va_list args);
 
 static String16 string16_from_string(Arena *arena, String s);
 
-static void string_builder_print(String_Builder *builder, char *fmt, ...);
-static void string_builder_print_var_args(String_Builder *builder, char *fmt, va_list args);
+#define string_builder_print(builder, format, ...) string_builder_print_((builder), (format), formats_from_va_args(__VA_ARGS__))
+static void string_builder_print_(String_Builder *builder, char *fmt, Slice_Format arguments);
 
 #define string_builder_push(builder, type_, ...) string_builder_push_format(builder, fmt(type_, __VA_ARGS__))
 static void string_builder_push_format(String_Builder *builder, Format format);
@@ -144,14 +152,6 @@ static String string_from_int_base(Arena *arena, u64 _num, u8 base) {
     return str;
 }
 
-static String string_print(Arena *arena, char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    String result = string_vprint(arena, format, args);
-    va_end(args);
-    return result;
-}
-
 static String string_range(String string, u64 start, u64 end) {
     assert(end <= string.count);
     assert(start <= end);
@@ -159,9 +159,9 @@ static String string_range(String string, u64 start, u64 end) {
     return result;
 }
 
-static String string_vprint(Arena *arena, char *fmt, va_list args) {
+static String string_print_(Arena *arena, char *fmt, Slice_Format arguments) {
     String_Builder builder = { .arena = arena };
-    string_builder_print_var_args(&builder, fmt, args);
+    string_builder_print_(&builder, fmt, arguments);
     return builder.string;
 }
 
@@ -180,16 +180,20 @@ static String16 string16_from_string(Arena *arena, String s) {
     #endif
 }
 
-static void string_builder_print(String_Builder *builder, char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    string_builder_print_var_args(builder, fmt, args);
-    va_end(args);
+static void format_skip_dummy_if_there(Slice_Format *arguments) {
+    if (arguments->count > 0 && arguments->data[0].type == format_type_dummy) slice_shift(arguments);
 }
 
-static void string_builder_print_var_args(String_Builder *builder, char *fmt_c, va_list args) {
+static void string_builder_print_(String_Builder *builder, char *fmt_c, Slice_Format arguments) {
     String fmt_str = string_from_cstring(fmt_c);
     assert(fmt_str.count > 0);
+
+    format_skip_dummy_if_there(&arguments);
+    if (BUILD_DEBUG) {
+        u64 format_count = 0;
+        for (u64 i = 0; i < fmt_str.count; i += 1) format_count += (fmt_str.data[i] == '%');
+        assert(arguments.count == format_count);
+    }
 
     for (u64 i = 0; i < fmt_str.count; i += 1) {
         u64 beg_i = i;
@@ -204,7 +208,7 @@ static void string_builder_print_var_args(String_Builder *builder, char *fmt_c, 
 
         if (i > beg_i) string_builder_push(builder, String, string_range(fmt_str, beg_i, i));
 
-        Format format = va_arg(args, Format);
+        Format format = *slice_shift(&arguments);
         string_builder_push_format(builder, format);
     }
 }

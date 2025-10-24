@@ -9,7 +9,7 @@
 #include "base_math.c"
 #include "base_strings.c"
 #include "base_os.c"
-#if BASE_GRAPHICS
-    #include "base_gfx.c"
-    // #include "base_ui.c"
+#if !PLATFORM_NONE
+    #include "base_app.c"
+    #include "base_ui.c"
 #endif
