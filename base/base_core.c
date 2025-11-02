@@ -196,41 +196,41 @@ typedef Slice(u64) Slice_u64;
 #define define_container_types(type) \
     typedef Slice(type) Slice_##type; \
     typedef Array(type) Array_##type; \
-    typedef Map(type) Map_##type;
+    typedef Map(type) Map_##type
 
 #define enumdef(Name, type)\
     typedef type Name;\
-    define_container_types(Name)\
+    define_container_types(Name);\
     enum
 
 #define structdef(Name) \
     typedef struct Name Name; \
-    define_container_types(Name)\
+    define_container_types(Name);\
     struct Name
 
 #define uniondef(Name) \
     typedef union Name Name; \
-    define_container_types(Name)\
+    define_container_types(Name);\
     union Name
 
-define_container_types(void)
+define_container_types(void);
 typedef Slice(bool) Slice_bool;
 typedef Array(bool) Array_bool;
 typedef Map(bool) Map_bool;
-define_container_types(u8)
-define_container_types(u16)
-define_container_types(u32)
+define_container_types(u8);
+define_container_types(u16);
+define_container_types(u32);
 typedef Array(u64) Array_u64;
 typedef Map(u64) Map_u64;
-define_container_types(i8)
-define_container_types(i16)
-define_container_types(i32)
-define_container_types(i64)
-define_container_types(f32)
-define_container_types(f64)
-define_container_types(upointer)
-define_container_types(ipointer)
-define_container_types(cstring)
+define_container_types(i8);
+define_container_types(i16);
+define_container_types(i32);
+define_container_types(i64);
+define_container_types(f32);
+define_container_types(f64);
+define_container_types(upointer);
+define_container_types(ipointer);
+define_container_types(cstring);
 
 #define string_constant(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
 #define string(s) (String)string_constant(s)

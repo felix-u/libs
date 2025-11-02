@@ -49,6 +49,7 @@ structdef(Format) {
     #define fmt(type_, ...) (Format){ .type = format_type_##type_, .value_##type_ = __VA_ARGS__ }
 #endif
 
+
 #define cstring_print(arena_ptr, fmt, ...)\
     (char *)(string_print(arena_ptr, fmt "\0", __VA_ARGS__).data)
 
@@ -60,12 +61,12 @@ structdef(Format) {
     action('a', 0xa) action('b', 0xb) action('c', 0xc) action('d', 0xd)\
     action('e', 0xe) action('f', 0xf)
 
-const u8 decimal_from_hex_digit_table[256] = {
+static const u8 decimal_from_hex_digit_table[256] = {
     #define _make_hex_digit_value_table(c, val) [c] = val,
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
-const bool is_hex_digit[256] = {
+static const bool is_hex_digit[256] = {
     #define _make_hex_digit_truth_table(c, val) [c] = true,
     _for_valid_hex_digit(_make_hex_digit_truth_table)
 };
@@ -76,14 +77,19 @@ static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
 
+#define STRING_LOWERCASE_BIT 0x20
+typedef enum {
+    String_Case_UPPER = 0x00,
+    String_Case_LOWER = STRING_LOWERCASE_BIT,
+} String_Case;
+static void string_case(String s, String_Case string_case);
+
 static bool   string_equals(String s1, String s2);
 static String string_from_cstring(char *s);
 static String string_from_int_base(Arena *arena, u64 _num, u8 base);
 
 #define string_print(arena, format, ...) string_print_((arena), (format), formats_from_va_args(__VA_ARGS__))
 static String string_print_(Arena *arena, char *fmt, Slice_Format arguments);
-
-static String string_range(String string, u64 start, u64 end);
 
 static String16 string16_from_string(Arena *arena, String s);
 
@@ -110,6 +116,16 @@ static u64 int_from_string_base(String s, u64 base) {
         result += digit;
     }
     return result;
+}
+
+static void string_case(String s, String_Case string_case) {
+    for (u64 i = 0; i < s.count; i += 1) {
+        u8 *c = &s.data[i];
+        u8 is_alpha = ascii_is_alpha(*c);
+        u8 mask = (u8)~STRING_LOWERCASE_BIT | (u8)(!is_alpha * STRING_LOWERCASE_BIT);
+        *c &= mask;
+        *c |= string_case * is_alpha;
+    }
 }
 
 static bool string_equals(String s1, String s2) {
@@ -150,13 +166,6 @@ static String string_from_int_base(Arena *arena, u64 _num, u8 base) {
     }
 
     return str;
-}
-
-static String string_range(String string, u64 start, u64 end) {
-    assert(end <= string.count);
-    assert(start <= end);
-    String result = { .data = string.data + start, .count = end - start };
-    return result;
 }
 
 static String string_print_(Arena *arena, char *fmt, Slice_Format arguments) {
@@ -200,13 +209,17 @@ static void string_builder_print_(String_Builder *builder, char *fmt_c, Slice_Fo
         while (fmt_str.data[i] != '%' && i < fmt_str.count) i += 1;
 
         if (i == fmt_str.count) {
-            string_builder_push(builder, String, string_range(fmt_str, beg_i, i));
+            String remaining = slice_range(fmt_str, beg_i, i);
+            string_builder_push(builder, String, remaining);
             return;
         }
 
         assert(fmt_str.data[i] == '%');
 
-        if (i > beg_i) string_builder_push(builder, String, string_range(fmt_str, beg_i, i));
+        if (i > beg_i) {
+            String up_to_percent = slice_range(fmt_str, beg_i, i);
+            string_builder_push(builder, String, up_to_percent);
+        }
 
         Format format = *slice_shift(&arguments);
         string_builder_push_format(builder, format);

@@ -55,7 +55,7 @@ structdef(Ui_Box_Style_Set) {
 };
 
 typedef u32 Ui_Box_Id;
-define_container_types(Ui_Box_Id)
+define_container_types(Ui_Box_Id);
 
 structdef(Ui_Box) {
     using(struct {
@@ -92,7 +92,7 @@ structdef(Ui_Box) {
 };
 
 typedef Ui_Box *Ui_Box_Pointer;
-define_container_types(Ui_Box_Pointer)
+define_container_types(Ui_Box_Pointer);
 
 structdef(Ui) {
     Platform *platform;
@@ -621,7 +621,7 @@ static Ui_Box *ui_text_(Ui *ui, char *format, Slice_Format arguments) {
 //     UI_Interaction interaction;
 // };
 // typedef UI_Box *UI_Box_Pointer;
-// define_container_types(UI_Box_Pointer)
+// define_container_types(UI_Box_Pointer);
 
 // // TODO(felix): actually use properly
 // structdef(UI_Style_Stack) {
