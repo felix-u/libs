@@ -2,34 +2,73 @@
 // https://floooh.github.io/sokol-html5/
 // https://zeromake.github.io/learnopengl-examples/
 
-#if defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_PLATFORM)
+
+#if !defined(BASE_PLATFORM_H)
+#define BASE_PLATFORM_H
+
+#include "base/base_context.h"
+
+#if COMPILER_CLANG
+	#pragma clang diagnostic push
+	// #pragma diagnostic ignored "-Wgnu-empty-struct"
+#elif COMPILER_MSVC
+	#pragma warning(push)
+	#pragma warning(disable: 4267)
+	#pragma warning(disable: 4996)
+#endif
+
+#if BASE_OS == BASE_OS_WINDOWS
+	#define SOKOL_D3D11
+#elif BASE_OS == BASE_OS_MACOS
+	#define SOKOL_METAL
+#elif BASE_OS == BASE_OS_EMSCRIPTEN
+	// #define SOKOL_WGPU
+	#define SOKOL_GLES3
+#else
+	#error "unsupported OS"
+#endif
+
+#if BUILD_DEBUG
+    #define SOKOL_DEBUG
+#endif
+
+#define SOKOL_NO_ENTRY
+
+#if defined(BASE_PLATFORM_IMPLEMENTATION)
+	#define SOKOL_IMPL
+	#define FONTSTASH_IMPLEMENTATION
+#endif
+
+#include "sokol/sokol_gfx.h"
+#include "sokol/sokol_gl.h"
+#include <stdio.h>
+#include "fontstash/fontstash.h"
+#include "sokol/sokol_fontstash.h" // NOTE(felix): commented out the 3 stdlib includes on line 187
+#include "sokol/sokol_app.h"
+#include "sokol/sokol_glue.h"
+
+#if COMPILER_CLANG
+	#pragma clang diagnostic pop
+#elif COMPILER_MSVC
+	#pragma warning(pop)
+#endif
 
 
-#define DEPENDENCIES_NO_IMPLEMENTATION
-#include "../dependencies.c"
+#endif // !defined(BASE_PLATFORM_H)
 
-structdef(Platform) {
-    using(App_Frame_Info, frame_info);
-    Arena *persistent_arena;
-    Arena *frame_arena;
 
-    V4 clear_color;
+#if defined(BASE_IMPLEMENTATION)
+
+
+struct Platform {
+    using(Platform_Common, common);
+
     sg_pipeline pipeline;
     sg_pass_action pass_action;
-
     f32 max_font_size;
     FONScontext *fontstash_context;
     i32 font_id;
-
-    Array_Draw_Command draw_commands;
-    bool should_quit;
 };
-
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size);
-
-
-#else // IMPLEMENTATION
-
 
 #include "../shader.c"
 
@@ -50,7 +89,7 @@ static void sokol_event(const sapp_event *event, void *user_data) {
         case SAPP_KEYCODE_LEFT: key_code = App_Key_LEFT; break;
         case SAPP_KEYCODE_RIGHT: key_code = App_Key_RIGHT; break;
         default: {
-            log_info("unimplemented key translation from sokol key code %", fmt(i32, cast(i32) event->key_code));
+            log_info("unimplemented key translation from sokol key code %d", cast(i32) event->key_code);
         } break;
     }
 
@@ -79,7 +118,8 @@ static void sokol_event(const sapp_event *event, void *user_data) {
             info->mouse_down[mouse_button] = false;
         } break;
         case SAPP_EVENTTYPE_MOUSE_MOVE: {
-            info->mouse_position = (V2){ .x = event->mouse_x, .y = event->mouse_y };
+            info->mouse_position[0] = event->mouse_x;
+            info->mouse_position[1] = event->mouse_y;
         } break;
         default: break;
     }
@@ -87,16 +127,13 @@ static void sokol_event(const sapp_event *event, void *user_data) {
 
 static void sokol_logger(const char *tag, u32 level, u32 item, const char *message, u32 line_number, const char *filename, void *user_data) {
     discard user_data;
-    print("%:%: % % % '%'\n",
-        fmt(cstring, cast(char *) filename), fmt(u32, line_number),
-        fmt(cstring, cast(char *) tag), fmt(u32, level), fmt(u32, item),
-        fmt(cstring, cast(char *) message)
-    );
+    print("%s:%u: %s %u %u '%s'\n", filename, line_number, tag, level, item, message);
 }
 
 static void sokol_populate_frame_info(App_Frame_Info *info) {
     info->dpi_scale = sapp_dpi_scale();
-    info->window_size = (V2){ .x = sapp_widthf(), .y = sapp_heightf() };
+    info->window_size[0] = sapp_widthf();
+    info->window_size[1] = sapp_heightf();
     info->seconds_since_last_frame = cast(f32) sapp_frame_duration();
 }
 
@@ -156,7 +193,18 @@ static void sokol_init(void *user_data) {
         });
 
         // TODO(felix): embed via metaprogram
-        String font_ttf_file = os_read_entire_file(platform->persistent_arena, string("deps/Inter-4.1/InterVariable.ttf"));
+        String font_ttf_file = {0};
+        #if BASE_OS == BASE_OS_EMSCRIPTEN
+        {
+            #include "inter.c"
+            font_ttf_file.data = (u8 *)inter_ttf_bytes;
+            font_ttf_file.count = sizeof inter_ttf_bytes;
+        }
+        #else
+        {
+            font_ttf_file = os_read_entire_file(platform->persistent_arena, "deps/Inter-4.1/InterVariable.ttf", 0);
+        }
+        #endif
         assert(font_ttf_file.count != 0);
         platform->font_id = fonsAddFontMem(platform->fontstash_context, "sans", font_ttf_file.data, cast(i32) font_ttf_file.count, false);
         fonsSetFont(platform->fontstash_context, platform->font_id);
@@ -184,15 +232,37 @@ static void sokol_frame(void *user_data) {
     platform->pass_action.colors[0].clear_value = bit_cast(sg_color) platform->clear_color;
     app_update_and_render(platform);
 
+    // TODO(felix): fix
+    bool hack_because_sdf_shader_is_being_weird_on_web = BASE_OS == BASE_OS_EMSCRIPTEN;
+    if (hack_because_sdf_shader_is_being_weird_on_web) for_slice (Draw_Command *, command, platform->draw_commands) switch (command->kind) {
+        case Draw_Kind_RECTANGLE: {
+            command->kind = Draw_Kind_QUADRILATERAL;
+            Draw_Command new = { .quadrilateral = {
+                [Draw_Corner_BOTTOM_LEFT] = { command->position[0], command->position[1] + command->rectangle.size[1] },
+                [Draw_Corner_TOP_RIGHT]   = { command->position[0] + command->rectangle.size[0], command->position[1] },
+            } };
+
+            v_copy(new.quadrilateral[Draw_Corner_TOP_LEFT], command->position);
+
+            v_copy(new.quadrilateral[Draw_Corner_BOTTOM_RIGHT], command->position);
+            v_add(new.quadrilateral[Draw_Corner_BOTTOM_RIGHT], command->rectangle.size);
+
+            for (Draw_Corner corner = 0; corner < Draw_Corner_COUNT; corner += 1) {
+                v_copy(command->quadrilateral[corner], new.quadrilateral[corner]);
+            }
+        } break;
+        default: break;
+    }
+
     for_slice (Draw_Command *, command, platform->draw_commands) switch (command->kind) {
         case Draw_Kind_TEXT: {
             u32 font_color_abgr = 0;
             {
-                V4 c = command->color[Draw_Color_SOLID];
-                u8 r = cast(u8) (c.r * 255.f + 0.5f);
-                u8 g = cast(u8) (c.g * 255.f + 0.5f);
-                u8 b = cast(u8) (c.b * 255.f + 0.5f);
-                u8 a = cast(u8) (c.a * 255.f + 0.5f);
+                f32 c[4]; v_copy(c, command->color[Draw_Color_SOLID]);
+                u8 r = cast(u8) (c[0] * 255.f + 0.5f);
+                u8 g = cast(u8) (c[1] * 255.f + 0.5f);
+                u8 b = cast(u8) (c[2] * 255.f + 0.5f);
+                u8 a = cast(u8) (c[3] * 255.f + 0.5f);
                 font_color_abgr = sfons_rgba(r, g, b, a);
             }
 
@@ -202,36 +272,45 @@ static void sokol_frame(void *user_data) {
 
             fonsSetAlign(platform->fontstash_context, FONS_ALIGN_LEFT | FONS_ALIGN_TOP);
             fonsSetColor(platform->fontstash_context, font_color_abgr);
-            fonsDrawText(platform->fontstash_context, command->position.x, command->position.y, cast(char *) s.data, cast(char *) s.data + s.count);
+            fonsDrawText(platform->fontstash_context, command->position[0], command->position[1], cast(char *) s.data, cast(char *) s.data + s.count);
         } break;
         case Draw_Kind_RECTANGLE: {
-            assert(command->rectangle.size.x >= 0);
-            assert(command->rectangle.size.y >= 0);
+            assert(command->rectangle.size[0] >= 0);
+            assert(command->rectangle.size[1] >= 0);
 
-            V2 pivot = {0};
-            if (v2_equal(command->rectangle.pivot, v2(0))) {
-                pivot = v2_add(command->position, v2_scale(command->rectangle.size, 0.5f));
-            } else pivot = command->rectangle.pivot;
+            f32 pivot[2] = {0};
+            if (v_equals_(command->rectangle.pivot, (f32[2]){0}, 2)) {
+                f32 add[2]; v_copy(add, command->rectangle.size);
+                v_scale(add, 0.5f);
+
+                v_copy(pivot, command->position);
+                v_add(pivot, add);
+            } else v_copy(pivot, command->rectangle.pivot);
+
             M3 model = m3_from_rotation(command->rectangle.rotation_radians, pivot);
 
-            V4 *c = command->color;
+            f32 (*c)[4] = command->color;
 
             vertex_parameters_t vertex_parameters = {
-                .rectangle = true,
-                .framebuffer_size = platform->window_size,
-                .color = c[Draw_Color_SOLID],
+                .kind = 0,
                 .model = m4_from_top_left_m3(model),
                 .inverse_model = m4_from_top_left_m3(m3_inverse(model)),
-                .top_left_pixels = command->position,
-                .bottom_right_pixels = v2_add(command->position, command->rectangle.size),
-                .top_left_color = command->gradient ? c[Draw_Color_TOP_LEFT] : c[Draw_Color_SOLID],
-                .bottom_left_color = command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
-                .bottom_right_color = command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
-                .top_right_color = command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
-                .border_color = command->rectangle.border_color,
-                .border_width = command->rectangle.border_width,
-                .border_radius = command->rectangle.border_radius,
+                .border_data = { command->rectangle.border_width, command->rectangle.border_radius },
             };
+
+            v_copy(vertex_parameters.framebuffer_size, platform->window_size);
+
+            v_copy(vertex_parameters.top_left_pixels, command->position);
+
+            v_copy(vertex_parameters.bottom_right_pixels, command->position);
+            v_add(vertex_parameters.bottom_right_pixels, command->rectangle.size);
+
+            v_copy_(vertex_parameters.color, c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.bottom_left_color, command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.bottom_right_color, command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.top_right_color, command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID], 4);
+            v_copy(vertex_parameters.border_color, command->rectangle.border_color);
+
             static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
             fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
 
@@ -241,21 +320,25 @@ static void sokol_frame(void *user_data) {
             sg_draw(0, 6, 1);
         } break;
         case Draw_Kind_QUADRILATERAL: {
-            V4 *c = command->color;
+            f32 (*c)[4] = command->color;
             vertex_parameters_t vertex_parameters = {
-                .quad = true,
-                .framebuffer_size = platform->window_size,
-                .color = c[Draw_Color_SOLID],
+                .kind = 1,
                 .model = m4_fill_diagonal(1.f),
-                .top_left_color = command->gradient ? c[Draw_Color_TOP_LEFT] : c[Draw_Color_SOLID],
-                .bottom_left_color = command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
-                .bottom_right_color = command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
-                .top_right_color = command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
-                .quad_top_left = command->quadrilateral[Draw_Corner_TOP_LEFT],
-                .quad_bottom_left = command->quadrilateral[Draw_Corner_BOTTOM_LEFT],
-                .quad_bottom_right = command->quadrilateral[Draw_Corner_BOTTOM_RIGHT],
-                .quad_top_right = command->quadrilateral[Draw_Corner_TOP_RIGHT],
             };
+
+            v_copy(vertex_parameters.framebuffer_size, platform->window_size);
+
+            v_copy(vertex_parameters.quad_top_left, command->quadrilateral[Draw_Corner_TOP_LEFT]);
+            v_copy(vertex_parameters.quad_bottom_left, command->quadrilateral[Draw_Corner_BOTTOM_LEFT]);
+            v_copy(vertex_parameters.quad_bottom_right, command->quadrilateral[Draw_Corner_BOTTOM_RIGHT]);
+            v_copy(vertex_parameters.quad_top_right, command->quadrilateral[Draw_Corner_TOP_RIGHT]);
+
+            v_copy_(vertex_parameters.color, c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.bottom_left_color, command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.bottom_right_color, command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID], 4);
+            v_copy_(vertex_parameters.top_right_color, command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID], 4);
+            v_copy(vertex_parameters.border_color, command->rectangle.border_color);
+
             static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
             fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
 
@@ -270,7 +353,7 @@ static void sokol_frame(void *user_data) {
     sfons_flush(platform->fontstash_context);
     sgl_defaults();
     sgl_matrix_mode_projection();
-    sgl_ortho(0, platform->window_size.x, platform->window_size.y, 0, -1.f, 1.f);
+    sgl_ortho(0, platform->window_size[0], platform->window_size[1], 0, -1.f, 1.f);
     sgl_draw();
 
     sg_end_pass();
@@ -283,23 +366,23 @@ static void sokol_frame(void *user_data) {
     if (platform->should_quit) sapp_quit();
 }
 
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
-    fonsSetSize(platform->fontstash_context, font_size);
+static void platform_measure_text(Platform_Common *platform, String text, f32 font_size, f32 out[2]) {
+    FONScontext *fontstash_context = (cast(Platform *) platform)->fontstash_context;
+    fonsSetSize(fontstash_context, font_size);
 
     f32 bounds[4] = {0};
-    V2 text_size = {0};
     String s = text;
-    text_size.x = fonsTextBounds(platform->fontstash_context, 0, 0, cast(char *) s.data, cast(char *) s.data + s.count, bounds);
-    text_size.y = bounds[3] - bounds[1];
-
-    return text_size;
+    out[0] = fonsTextBounds(fontstash_context, 0, 0, cast(char *) s.data, cast(char *) s.data + s.count, bounds);
+    out[1] = bounds[3] - bounds[1];
 }
 
 static void program(void) {
-    Arena persistent_arena = arena_init(32 * 1024 * 1024);
-    Arena frame_arena = arena_init(32 * 1024 * 1024);
+    static Arena persistent_arena;
+    persistent_arena = arena_init(32 * 1024 * 1024);
+    static Arena frame_arena;
+    frame_arena = arena_init(32 * 1024 * 1024);
 
-    Platform platform = {
+    static Platform platform = {
         .persistent_arena = &persistent_arena,
         .frame_arena = &frame_arena,
     };
@@ -317,4 +400,4 @@ static void program(void) {
 }
 
 
-#endif // defined(BASE_NO_IMPLEMENTATION) || defined(BASE_NO_IMPLEMENTATION_PLATFORM)
+#endif // defined(BASE_IMPLEMENTATION)

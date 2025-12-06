@@ -1,33 +1,24 @@
 // Based on information from https://sourceforge.net/p/predef/wiki/Home/
 
-// TODO(felix): figure out why OS_MACOS isn't being detected automatically. That's the only reason I added this override
-#if !defined(BASE_CONTEXT_OVERRIDE_OS)
-	#if defined(__EMSCRIPTEN__)
-	    #define OS_EMSCRIPTEN 1
-	#elif defined(__linux__) || defined(__gnu_linux__)
-	    #define OS_LINUX 1
-	#elif defined(__APPLE__) && defined(__MACH__)
-	    #define OS_MACOS 1
-	#elif defined(_WIN32)
-	    #define OS_WINDOWS 1
-	#else
-	    #error unsupported OS
-	#endif // OS_...
-#endif
+#define BASE_OS_NONE (0)
+#define BASE_OS_WINDOWS (1 << 0)
+#define BASE_OS_MACOS (1 << 1)
+#define BASE_OS_LINUX (1 << 2)
+#define BASE_OS_EMSCRIPTEN (1 << 3)
+#define BASE_OS_COUNT (1 << 4)
+#define BASE_OS_ANY_POSIX (BASE_OS_MACOS | BASE_OS_LINUX | BASE_OS_EMSCRIPTEN)
 
-#ifndef OS_EMSCRIPTEN
-    #define OS_EMSCRIPTEN 0
-#endif
-#ifndef OS_LINUX
-    #define OS_LINUX 0
-#endif
-#ifndef OS_MACOS
-    #define OS_MACOS 0
-#endif
-#ifndef OS_WINDOWS
-    #define OS_WINDOWS 0
-#endif
-
+#if defined(__EMSCRIPTEN__)
+    #define BASE_OS BASE_OS_EMSCRIPTEN
+#elif defined(__linux__) || defined(__gnu_linux__)
+    #define BASE_OS BASE_OS_LINUX
+#elif defined(__APPLE__) && defined(__MACH__)
+    #define BASE_OS BASE_OS_MACOS
+#elif defined(_WIN32)
+    #define BASE_OS BASE_OS_WINDOWS
+#else
+    #define BASE_OS BASE_OS_NONE
+#endif // OS_...
 
 #if defined(__clang__)
     #define COMPILER_CLANG 1
@@ -49,7 +40,6 @@
     #define COMPILER_MSVC 0
 #endif
 
-
 #if COMPILER_CLANG
     #if __has_feature(address_sanitizer)
         #define BUILD_ASAN 1
@@ -67,8 +57,7 @@
     #define BUILD_DEBUG 0
 #endif
 
-
-#if OS_WINDOWS
+#if BASE_OS == BASE_OS_WINDOWS
     #if !defined(WINDOWS_SUBSYSTEM_WINDOWS) && !defined(WINDOWS_SUBSYSTEM_CONSOLE)
         #define WINDOWS_SUBSYSTEM_WINDOWS 0
         #define WINDOWS_SUBSYSTEM_CONSOLE 1
@@ -83,10 +72,6 @@
     #endif
 #endif
 
-
-#if !defined(PLATFORM_SOKOL)
-    #define PLATFORM_SOKOL 0
-#endif
 #if !defined(PLATFORM_NONE)
     #define PLATFORM_NONE 0
 #endif
