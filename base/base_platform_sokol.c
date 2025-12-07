@@ -258,7 +258,7 @@ static void sokol_frame(void *user_data) {
         case Draw_Kind_TEXT: {
             u32 font_color_abgr = 0;
             {
-                f32 c[4]; v_copy(c, command->color[Draw_Color_SOLID]);
+                f32 *c = command->color[Draw_Color_SOLID];
                 u8 r = cast(u8) (c[0] * 255.f + 0.5f);
                 u8 g = cast(u8) (c[1] * 255.f + 0.5f);
                 u8 b = cast(u8) (c[2] * 255.f + 0.5f);

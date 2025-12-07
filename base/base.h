@@ -57,8 +57,8 @@
     #define os_abort() ExitProcess(1)
     #define os_exit(code) ExitProcess(code)
     #if !BASE_GRAPHICS
-        #define NOGDI
-        #define NOUSER
+        // #define NOGDI
+        // #define NOUSER
         // #define NOMINMAX
         // #undef near
         // #undef far // TODO(felix): figure out what to do with this - needed by combaseapi.h
@@ -2294,11 +2294,12 @@ static String build_compiler_initial_command[Build_Compiler_COUNT][BUILD_FLAGS_M
 static String build_compiler_link_flags[Build_Compiler_COUNT][BASE_OS_COUNT][BUILD_FLAGS_MAX] = {
     [Build_Compiler_MSVC] = { [BASE_OS_WINDOWS] = {
         string_constant("-link"),
+        // string_constant("-entry:entrypoint"),
         string_constant("-subsystem:console"),
         string_constant("-incremental:no"),
         string_constant("-opt:ref"),
-        // string_constant("-fixed"),
-        // string_constant("libucrtd.lib"),
+        string_constant("-fixed"),
+        string_constant("libucrtd.lib"),
     } },
     [Build_Compiler_CLANG] = {
         [BASE_OS_MACOS] = {
@@ -2324,7 +2325,7 @@ static String build_compiler_link_flags[Build_Compiler_COUNT][BASE_OS_COUNT][BUI
 static String build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_COUNT][BUILD_FLAGS_MAX] = {
     [Build_Mode_DEBUG] = {
         [Build_Compiler_MSVC] = {
-            string_constant("-MDd"), // TODO(felix): raylib needs this, otherwise -MTd for sokol. Maybe should take care via metaprogramming annotation
+            string_constant("-MTd"), // TODO(felix): raylib needs -MDd, otherwise -MTd for sokol. Maybe should take care via metaprogramming annotation
             string_constant("-W4"),
             string_constant("-wd4127"), // "conditional expression is constant"
             string_constant("-wd4709"), // "comma operator within array index expression"
@@ -2454,6 +2455,7 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
 
     bool is_raylib = string_equals(platform, string("base_platform_raylib"));
     bool is_sdl_gles = string_equals(platform, string("base_platform_sdl3_gles3"));
+    bool is_wingdi = string_equals(platform, string("base_platform_wingdi"));
 
     bool compile_platform = platform.count != 0;
     String platform_c_file = string_print(scratch.arena, "../src/base/%S.c", platform);
@@ -2463,7 +2465,7 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
         push(&platform_objects, string_print(scratch.arena, "%S/raylib-5.5_win64_msvc16/lib/raylib.lib", dependency_directory));
     } else if (is_sdl_gles) {
         push(&platform_objects, string_print(scratch.arena, "%S/SDL3-3.2.28/lib/x64/SDL3.lib", dependency_directory));
-    } else {
+    } else if (!is_wingdi) {
         push(&platform_objects, string_print(scratch.arena, "%S.%S", platform, object_extension));
     }
 
@@ -2507,8 +2509,8 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
 
     Slice_String include_paths = slice_of(String,
         string_print(&arena, "-I%S", dependency_directory),
-        string_print(&arena, "-I%S/SDL3-3.2.28/include", dependency_directory),
-        string_print(&arena, "-I%S/wgpu-windows-x86_64-msvc-debug/include/webgpu", dependency_directory),
+        // string_print(&arena, "-I%S/SDL3-3.2.28/include", dependency_directory),
+        // string_print(&arena, "-I%S/wgpu-windows-x86_64-msvc-debug/include/webgpu", dependency_directory),
         string("-I../src")
     );
 
@@ -2528,6 +2530,7 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
         push_slice(&common[c], include_paths);
     }
 
+    // bool link_crt = !is_wingdi;
     bool link_crt = true;
 
     Array_String link[Build_Compiler_COUNT] = {0};
@@ -2600,7 +2603,7 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
         String shell = string_print(&arena, build_emscripten_html, program_name);
         const char *path = (const char *)string_print(&arena, "%S/shell.html\0", build_directory).data;
         dependencies_ok = os_write_entire_file(path, shell);
-    } else if (is_raylib || is_sdl_gles) {
+    } else if (is_raylib || is_sdl_gles || is_wingdi) {
         dependencies_ok = true;
     } else {
         dependencies_ok = !compile_platform || os_file_info((const char *)string_print(&arena, "build/%S.%S\0", platform, object_extension).data).exists;
