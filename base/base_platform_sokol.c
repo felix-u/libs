@@ -118,8 +118,7 @@ static void sokol_event(const sapp_event *event, void *user_data) {
             info->mouse_down[mouse_button] = false;
         } break;
         case SAPP_EVENTTYPE_MOUSE_MOVE: {
-            info->mouse_position[0] = event->mouse_x;
-            info->mouse_position[1] = event->mouse_y;
+            info->mouse_position = (V2){ .x = event->mouse_x, .y = event->mouse_y };
         } break;
         default: break;
     }
@@ -132,8 +131,7 @@ static void sokol_logger(const char *tag, u32 level, u32 item, const char *messa
 
 static void sokol_populate_frame_info(App_Frame_Info *info) {
     info->dpi_scale = sapp_dpi_scale();
-    info->window_size[0] = sapp_widthf();
-    info->window_size[1] = sapp_heightf();
+    info->window_size = (V2){ .x = sapp_widthf(), .y = sapp_heightf() };
     info->seconds_since_last_frame = cast(f32) sapp_frame_duration();
 }
 
@@ -149,6 +147,8 @@ static void sokol_cleanup(void *user_data) {
 
 static void sokol_init(void *user_data) {
     Platform *platform = user_data;
+    app_start(platform);
+    
     sokol_populate_frame_info(&platform->frame_info);
 
     sg_setup(&(sg_desc){
@@ -210,7 +210,6 @@ static void sokol_init(void *user_data) {
         fonsSetFont(platform->fontstash_context, platform->font_id);
     }
 
-    app_start(platform);
     platform->pass_action.colors[0].clear_value = bit_cast(sg_color) platform->clear_color;
 }
 
@@ -232,37 +231,15 @@ static void sokol_frame(void *user_data) {
     platform->pass_action.colors[0].clear_value = bit_cast(sg_color) platform->clear_color;
     app_update_and_render(platform);
 
-    // TODO(felix): fix
-    bool hack_because_sdf_shader_is_being_weird_on_web = BASE_OS == BASE_OS_EMSCRIPTEN;
-    if (hack_because_sdf_shader_is_being_weird_on_web) for_slice (Draw_Command *, command, platform->draw_commands) switch (command->kind) {
-        case Draw_Kind_RECTANGLE: {
-            command->kind = Draw_Kind_QUADRILATERAL;
-            Draw_Command new = { .quadrilateral = {
-                [Draw_Corner_BOTTOM_LEFT] = { command->position[0], command->position[1] + command->rectangle.size[1] },
-                [Draw_Corner_TOP_RIGHT]   = { command->position[0] + command->rectangle.size[0], command->position[1] },
-            } };
-
-            v_copy(new.quadrilateral[Draw_Corner_TOP_LEFT], command->position);
-
-            v_copy(new.quadrilateral[Draw_Corner_BOTTOM_RIGHT], command->position);
-            v_add(new.quadrilateral[Draw_Corner_BOTTOM_RIGHT], command->rectangle.size);
-
-            for (Draw_Corner corner = 0; corner < Draw_Corner_COUNT; corner += 1) {
-                v_copy(command->quadrilateral[corner], new.quadrilateral[corner]);
-            }
-        } break;
-        default: break;
-    }
-
     for_slice (Draw_Command *, command, platform->draw_commands) switch (command->kind) {
         case Draw_Kind_TEXT: {
             u32 font_color_abgr = 0;
             {
-                f32 *c = command->color[Draw_Color_SOLID];
-                u8 r = cast(u8) (c[0] * 255.f + 0.5f);
-                u8 g = cast(u8) (c[1] * 255.f + 0.5f);
-                u8 b = cast(u8) (c[2] * 255.f + 0.5f);
-                u8 a = cast(u8) (c[3] * 255.f + 0.5f);
+                V4 c = command->color[Draw_Color_SOLID];
+                u8 r = cast(u8) (c.r * 255.f + 0.5f);
+                u8 g = cast(u8) (c.g * 255.f + 0.5f);
+                u8 b = cast(u8) (c.b * 255.f + 0.5f);
+                u8 a = cast(u8) (c.a * 255.f + 0.5f);
                 font_color_abgr = sfons_rgba(r, g, b, a);
             }
 
@@ -272,44 +249,40 @@ static void sokol_frame(void *user_data) {
 
             fonsSetAlign(platform->fontstash_context, FONS_ALIGN_LEFT | FONS_ALIGN_TOP);
             fonsSetColor(platform->fontstash_context, font_color_abgr);
-            fonsDrawText(platform->fontstash_context, command->position[0], command->position[1], cast(char *) s.data, cast(char *) s.data + s.count);
+            fonsDrawText(platform->fontstash_context, command->x, command->y, cast(char *) s.data, cast(char *) s.data + s.count);
         } break;
         case Draw_Kind_RECTANGLE: {
-            assert(command->rectangle.size[0] >= 0);
-            assert(command->rectangle.size[1] >= 0);
+            assert(command->rectangle.size.x >= 0);
+            assert(command->rectangle.size.y >= 0);
 
-            f32 pivot[2] = {0};
-            if (v_equals_(command->rectangle.pivot, (f32[2]){0}, 2)) {
-                f32 add[2]; v_copy(add, command->rectangle.size);
-                v_scale(add, 0.5f);
-
-                v_copy(pivot, command->position);
-                v_add(pivot, add);
-            } else v_copy(pivot, command->rectangle.pivot);
+            V2 pivot = {0};
+            if (v2_equals(command->rectangle.pivot, (V2){0})) {
+                V2 add = v2_scale(command->rectangle.size, 0.5f);
+                pivot = v2_add(command->position, add);
+            } else pivot = command->rectangle.pivot;
 
             M3 model = m3_from_rotation(command->rectangle.rotation_radians, pivot);
 
-            f32 (*c)[4] = command->color;
+            V4 *c = command->color;
 
             vertex_parameters_t vertex_parameters = {
                 .kind = 0,
                 .model = m4_from_top_left_m3(model),
                 .inverse_model = m4_from_top_left_m3(m3_inverse(model)),
-                .border_data = { command->rectangle.border_width, command->rectangle.border_radius },
+                .border_data = { .x = command->rectangle.border_width, .y = command->rectangle.border_radius },
             };
 
-            v_copy(vertex_parameters.framebuffer_size, platform->window_size);
+            vertex_parameters.framebuffer_size = platform->window_size;
 
-            v_copy(vertex_parameters.top_left_pixels, command->position);
+            vertex_parameters.top_left_pixels = command->position;
 
-            v_copy(vertex_parameters.bottom_right_pixels, command->position);
-            v_add(vertex_parameters.bottom_right_pixels, command->rectangle.size);
+            vertex_parameters.bottom_right_pixels = v2_add(command->position, command->rectangle.size);
 
-            v_copy_(vertex_parameters.color, c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.bottom_left_color, command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.bottom_right_color, command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.top_right_color, command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID], 4);
-            v_copy(vertex_parameters.border_color, command->rectangle.border_color);
+            vertex_parameters.color = c[Draw_Color_SOLID];
+            vertex_parameters.bottom_left_color = command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID];
+            vertex_parameters.bottom_right_color = command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID];
+            vertex_parameters.top_right_color = command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID];
+            vertex_parameters.border_color = command->rectangle.border_color;
 
             static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
             fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
@@ -320,24 +293,24 @@ static void sokol_frame(void *user_data) {
             sg_draw(0, 6, 1);
         } break;
         case Draw_Kind_QUADRILATERAL: {
-            f32 (*c)[4] = command->color;
+            V4 *c = command->color;
             vertex_parameters_t vertex_parameters = {
                 .kind = 1,
                 .model = m4_fill_diagonal(1.f),
             };
 
-            v_copy(vertex_parameters.framebuffer_size, platform->window_size);
+            vertex_parameters.framebuffer_size = platform->window_size;
 
-            v_copy(vertex_parameters.quad_top_left, command->quadrilateral[Draw_Corner_TOP_LEFT]);
-            v_copy(vertex_parameters.quad_bottom_left, command->quadrilateral[Draw_Corner_BOTTOM_LEFT]);
-            v_copy(vertex_parameters.quad_bottom_right, command->quadrilateral[Draw_Corner_BOTTOM_RIGHT]);
-            v_copy(vertex_parameters.quad_top_right, command->quadrilateral[Draw_Corner_TOP_RIGHT]);
+            vertex_parameters.quad_top_left = command->quadrilateral[Draw_Corner_TOP_LEFT];
+            vertex_parameters.quad_bottom_left = command->quadrilateral[Draw_Corner_BOTTOM_LEFT];
+            vertex_parameters.quad_bottom_right = command->quadrilateral[Draw_Corner_BOTTOM_RIGHT];
+            vertex_parameters.quad_top_right = command->quadrilateral[Draw_Corner_TOP_RIGHT];
 
-            v_copy_(vertex_parameters.color, c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.bottom_left_color, command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.bottom_right_color, command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID], 4);
-            v_copy_(vertex_parameters.top_right_color, command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID], 4);
-            v_copy(vertex_parameters.border_color, command->rectangle.border_color);
+            vertex_parameters.color = c[Draw_Color_SOLID];
+            vertex_parameters.bottom_left_color = command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID];
+            vertex_parameters.bottom_right_color = command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID];
+            vertex_parameters.top_right_color = command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID];
+            vertex_parameters.border_color = command->rectangle.border_color;
 
             static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
             fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
@@ -353,7 +326,7 @@ static void sokol_frame(void *user_data) {
     sfons_flush(platform->fontstash_context);
     sgl_defaults();
     sgl_matrix_mode_projection();
-    sgl_ortho(0, platform->window_size[0], platform->window_size[1], 0, -1.f, 1.f);
+    sgl_ortho(0, platform->window_size.x, platform->window_size.y, 0, -1.f, 1.f);
     sgl_draw();
 
     sg_end_pass();
@@ -366,14 +339,17 @@ static void sokol_frame(void *user_data) {
     if (platform->should_quit) sapp_quit();
 }
 
-static void platform_measure_text(Platform_Common *platform, String text, f32 font_size, f32 out[2]) {
+static V2 platform_measure_text(Platform_Common *platform, String text, f32 font_size) {
     FONScontext *fontstash_context = (cast(Platform *) platform)->fontstash_context;
     fonsSetSize(fontstash_context, font_size);
 
     f32 bounds[4] = {0};
     String s = text;
-    out[0] = fonsTextBounds(fontstash_context, 0, 0, cast(char *) s.data, cast(char *) s.data + s.count, bounds);
-    out[1] = bounds[3] - bounds[1];
+    V2 result = {
+        .x = fonsTextBounds(fontstash_context, 0, 0, cast(char *) s.data, cast(char *) s.data + s.count, bounds),
+        .y = bounds[3] - bounds[1],
+    };
+    return result;
 }
 
 static void program(void) {

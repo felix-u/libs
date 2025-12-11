@@ -56,19 +56,12 @@
     #define VC_EXTRALEAN
     #define os_abort() ExitProcess(1)
     #define os_exit(code) ExitProcess(code)
-    #if !BASE_GRAPHICS
-        // #define NOGDI
-        // #define NOUSER
-        // #define NOMINMAX
-        // #undef near
-        // #undef far // TODO(felix): figure out what to do with this - needed by combaseapi.h
-    #endif
+    #define NOGDI
+    #define NOUSER
+    #define NOMINMAX
     #include "windows.h"
     #include "shellapi.h"
     #define _CRT_SECURE_NO_WARNINGS
-    // TODO(felix): these win32_asserts should probably be in base_gfx (at the very least, win32_assert_d3d_compile should be)
-    #define win32_ensure_not_0(win32_fn_result) statement_macro( if ((win32_fn_result) == 0) { panic("win32: %llu", GetLastError()); } )
-
 #endif // OS
 
 #if COMPILER_CLANG || COMPILER_GCC // they share many builtins
@@ -221,10 +214,6 @@ define_container_types(ipointer)
 #define string_constant(s)  { .data = (u8 *)s, .count = sizeof(s) - 1 }
 #define string(s) (String)string_constant(s)
 
-structdef(String16) { u16 *data; u64 count; };
-#define string16c(s) { .data = (u16 *)s, .count = sizeof(s) / sizeof(u16) - 1 }
-#define string16(s) (String16)string16c(s)
-
 #define log_error(...) log_internal("error: " __VA_ARGS__)
 
 #define panic(...) {\
@@ -360,14 +349,54 @@ static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index);
 
 // TODO(felix): square root, etc. via intrinsics, not math.h (avoid linking UCRT)
 
-typedef f32 Quat[4];
-
-structdef(M3) {
-    f32 columns[3][3];
+uniondef(V2) {
+    struct { f32 x, y; };
+    f32 v[2];
 };
 
-structdef(M4) {
-    f32 columns[4][4];
+uniondef(V3) {
+    struct { f32 x, y, z; };
+    struct { f32 r, g, b; };
+
+    struct { V2 xy; f32 _0; };
+    struct { f32 _1; V2 yz; };
+    struct { V2 uv; f32 _2; };
+    struct { f32 _3; V2 vw; };
+    struct { V2 rg; f32 _4; };
+    struct { f32 _5; V2 gb; };
+
+    f32 v[3];
+};
+
+uniondef(V4) {
+    struct { f32 x, y, z, w; };
+    struct { f32 r, g, b, a; };
+    struct { V2 top_left, bottom_right; };
+    struct { f32 left, top, right, bottom; };
+
+    struct { V2 xy, zw; };
+    struct { f32 _0; V2 yz; f32 _1; };
+    struct { V2 rg, ba; };
+    struct { f32 _2; V2 gb; f32 _3; };
+
+    struct { V3 xyz; f32 _4; };
+    struct { V3 rgb; f32 _5; };
+    struct { f32 _6; V3 yzw; };
+    struct { f32 _7; V3 gba; };
+
+    f32 v[4];
+};
+
+typedef V4 Quat;
+
+uniondef(M3) {
+    f32 c[3][3];
+    V3 columns[3];
+};
+
+uniondef(M4) {
+    f32 c[4][4];
+    V4 columns[4];
 };
 
 #define pi_f32 3.14159265358979f
@@ -394,89 +423,81 @@ structdef(M4) {
     #define count_trailing_zeroes(x) (u64)(__builtin_ctzll(x))
 #endif
 
-static bool intersect_point_in_rectangle(f32 point[2], f32 rectangle[4]);
+static bool intersect_point_in_rectangle(V2 point, V4 rectangle);
 static bool is_power_of_2(u64 x);
 
 static force_inline f32 radians_from_degrees(f32 degrees);
 
-static void rgba_from_hex(u32 hex, f32 rgba[4]);
+static V4 rgba_from_hex(u32 hex);
 
 static       inline f32 stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds);
 static force_inline f32 lerp(f32 a, f32 b, f32 amount);
 
-#define v_add(a, b) { static_assert(sizeof(a) == sizeof(b), ""); v_add_((a), (b), array_count(a)); }
-static force_inline void v_add_(f32 *a, f32 *b, u64 count);
+static force_inline V2   v2(f32 value);
+static force_inline V2   v2_add(V2 a, V2 b);
+static force_inline V2   v2_div(V2 a, V2 b);
+static       inline f32  v2_dot(V2 a, V2 b);
+static force_inline bool v2_equals(V2 a, V2 b);
+static       inline f32  v2_len(V2 v);
+static       inline f32  v2_len_squared(V2 v);
+static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
+static force_inline V2   v2_max(V2 a, V2 b);
+static force_inline V2   v2_min(V2 a, V2 b);
+static force_inline V2   v2_mul(V2 a, V2 b);
+static       inline V2   v2_norm(V2 v);
+static force_inline V2   v2_reciprocal(V2 v);
+static       inline V2   v2_rotate(V2 v, f32 angle_radians);
+static       inline V2   v2_round(V2 v);
+static       inline V2   v2_round_down(V2 v);
+static force_inline V2   v2_scale(V2 v, f32 s);
+static       inline V2   v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds);
+static force_inline V2   v2_sub(V2 a, V2 b);
 
-#define v_copy(d, s) { static_assert(sizeof(d) == sizeof(s), ""); v_copy_((d), (s), array_count(d)); }
-static force_inline void v_copy_(f32 *destination, f32 *source, u64 count);
+static force_inline V3   v3_add(V3 a, V3 b);
+static       inline V3   v3_cross(V3 a, V3 b);
+static       inline f32  v3_dot(V3 a, V3 b);
+static force_inline bool v3_equal(V3 a, V3 b);
+static force_inline V3   v3_forward_from_view(M4 view);
+static       inline f32  v3_len(V3 v);
+static       inline f32  v3_len_squared(V3 v);
+static       inline V3   v3_lerp(V3 a, V3 b, f32 amount);
+static force_inline V3   v3_neg(V3 v);
+static       inline V3   v3_norm(V3 v);
+static force_inline V3   v3_right_from_view(M4 view);
+static force_inline V3   v3_scale(V3 v, f32 s);
+static force_inline V3   v3_sub(V3 a, V3 b);
+static       inline V3   v3_unproject(V3 pos, M4 view_projection);
+static force_inline V3   v3_up_from_view(M4 view);
 
-#define v_divide(a, b) { static_assert(sizeof(a) == sizeof(b), ""); v_divide_((a), (b), array_count(a)); }
-static inline void v_divide_(f32 *a, f32 *b, u64 count);
+static force_inline V4   v4_add(V4 a, V4 b);
+static       inline f32  v4_dot(V4 a, V4 b);
+static force_inline bool v4_equal(V4 a, V4 b);
+static       inline V4   v4_lerp(V4 a, V4 b, f32 amount);
+static       inline V4   v4_round(V4 v);
+static force_inline V4   v4_scale(V4 v, f32 s);
+static       inline V4   v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds);
+static force_inline V4   v4_sub(V4 a, V4 b);
+static force_inline V4   v4v(V3 xyz, f32 w);
 
-#define v_dot(a, b) (assert_expression(array_count(a) == array_count(b)) ? v_dot_((a), (b), array_count(a)) : 0)
-static inline f32 v_dot_(f32 *a, f32 *b, u64 count);
+static inline Quat quat_from_rotation(V3 axis, f32 angle);
+static inline Quat quat_mul_quat(Quat a, Quat b);
+static inline V3   quat_rotate_v3(Quat q, V3 v);
 
-#define v_equals(a, b) (assert_expression(array_count(a) == array_count(b)) ? v_equals((a), (b)) : 0)
-static inline bool v_equals_(f32 *a, f32 *b, u64 count);
-
-#define v_fill(v, x) v_fill_((v), (x), array_count(v))
-static force_inline void v_fill_(f32 *v, f32 value, u64 count);
-
-#define v_length_squared(v) v_length_squared_((v), array_count(v))
-static inline f32 v_length_squared_(f32 *v, u64 count);
-
-#define v_length(v) v_length_((v), array_count(v))
-static inline f32 v_length_(f32 *v, u64 count);
-
-#define v_lerp(a, b, s) { static_assert(sizeof(a) == sizeof(b), ""); v_lerp_((a), (b), (s), array_count(a)); }
-static inline void v_lerp_(f32 *a, f32 *b, f32 amount, u64 count);
-
-#define v_multiply(a, b) { static_assert(sizeof(a) == sizeof(b), ""); v_multiply_((a), (b), array_count(a)); }
-static inline void v_multiply_(f32 *a, f32 *b, u64 count);
-
-#define v_reciprocal(v) v_reciprocal_((v), array_count(v))
-static inline void v_reciprocal_(f32 *v, u64 count);
-
-#define v_round(v) v_round_(v, array_count(v))
-static inline void v_round_(f32 *v, u64 count);
-
-#define v_scale(v, a) v_scale_((v), (a), array_count(v))
-static inline void v_scale_(f32 *v, f32 amount, u64 count);
-
-#define v_norm(v) v_norm_((v), array_count(v))
-static inline void v_norm_(f32 *v, u64 count);
-
-#define v_stable_lerp(a, b, k, dt) { static_assert(sizeof(a) == sizeof(b), ""); v_stable_lerp_((a), (b), (k), (dt), array_count(a)); }
-static inline void v_stable_lerp_(f32 *a, f32 *b, f32 k, f32 dt, u64 count);
-
-#define v_subtract(a, b) { static_assert(sizeof(a) == sizeof(b), ""); v_subtract_((a), (b), array_count(a)); }
-static inline void v_subtract_(f32 *a, f32 *b, u64 count);
-
-static       inline void v3_cross(f32 a[3], f32 b[3], f32 out[3]);
-static force_inline void v3_forward_from_view(M4 view, f32 out[3]);
-static force_inline void v3_right_from_view(M4 view, f32 out[3]);
-static       inline void v3_unproject(f32 pos[3], M4 view_projection);
-static force_inline void v3_up_from_view(M4 view, f32 out[3]);
-
-static inline void quat_from_rotation(f32 axis[3], f32 angle, Quat *out);
-static inline void quat_mul_quat(Quat a, Quat b, Quat *out);
-static inline void quat_rotate_v3(Quat q, f32 v[3]);
-
-static force_inline   M3 m3_fill_diagonal(f32 value);
-static       inline   M3 m3_from_rotation(f32 radians, f32 pivot[2]);
-static       inline   M3 m3_inverse(M3 m);
-static       inline   M3 m3_model(f32 scale[2], f32 radians, f32 pivot[2], f32 post_translation[2]);
-static       inline void m3_mul_v3(M3 m, f32 v[3]);
-static       inline   M3 m3_transpose(M3 m);
+static force_inline M3 m3_fill_diagonal(f32 value);
+static       inline M3 m3_from_rotation(f32 radians, V2 pivot);
+static       inline M3 m3_inverse(M3 m);
+static       inline M3 m3_model(V2 scale, f32 radians, V2 pivot, V2 post_translation);
+static       inline V3 m3_mul_v3(M3 m, V3 v);
+static       inline M3 m3_transpose(M3 m);
 
 static force_inline M4 m4_fill_diagonal(f32 value);
-static       inline M4 m4_from_rotation(f32 axis[3], f32 angle);
+static       inline M4 m4_from_rotation(V3 axis, f32 angle);
 static       inline M4 m4_from_top_left_m3(M3 m);
-static       inline M4 m4_from_translation(f32 translation[3]);
+static       inline M4 m4_from_translation(V3 translation);
 static       inline M4 m4_inverse(M4 m);
-static       inline M4 m4_look_at(f32 eye[3], f32 centre[3], f32 up_direction[3]);
+static       inline M4 m4_look_at(V3 eye, V3 centre, V3 up_direction);
 static       inline M4 m4_mul_m4(M4 a, M4 b);
-static       inline void m4_mul_v4(M4 m, f32 v[4], f32 out[4]);
+static       inline V4 m4_mul_v4(M4 m, V4 v);
 static       inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far);
 static force_inline M4 m4_transpose(M4 m);
 
@@ -498,11 +519,6 @@ static const u8 decimal_from_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
-static const bool is_hex_digit[256] = {
-    #define _make_hex_digit_truth_table(c, val) [c] = true,
-    _for_valid_hex_digit(_make_hex_digit_truth_table)
-};
-
 static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
@@ -514,7 +530,6 @@ static   String string_print_(Arena *arena, const char *fmt, va_list arguments);
 static   String string_print(Arena *arena, const char *fmt, ...);
 static   String string_range(String string, u64 start, u64 end);
 static     bool string_starts_with(String s, String start);
-static String16 string16_from_string(Arena *arena, String s);
 
 static void string_builder_print(String_Builder *builder, const char* format, ...);
 static void string_builder_print_(String_Builder *builder, const char *fmt, va_list arguments);
@@ -588,10 +603,10 @@ enumdef(App_Mouse_Button, u8) {
 };
 
 structdef(App_Frame_Info) {
-    f32 window_size[2];
+    V2 window_size;
     f32 dpi_scale;
     f32 seconds_since_last_frame;
-    f32 mouse_position[2];
+    V2 mouse_position;
     bool mouse_clicked[App_Mouse_Button_MAX_VALUE];
     bool mouse_down[App_Mouse_Button_MAX_VALUE];
     bool key_down[App_Key_MAX_VALUE];
@@ -628,8 +643,8 @@ typedef enum Draw_Corner {
 
 structdef(Draw_Command) {
     Draw_Kind kind;
-    f32 position[2];
-    f32 color[Draw_Color_MAX_VALUE][4];
+    using(V2, position);
+    V4 color[Draw_Color_MAX_VALUE];
     bool gradient;
     union {
         struct {
@@ -637,14 +652,14 @@ structdef(Draw_Command) {
             f32 font_size;
         } text;
         struct {
-            f32 pivot[2];
+            V2 pivot;
             f32 rotation_radians;
-            f32 border_color[4];
+            V4 border_color;
             f32 border_width;
             f32 border_radius;
-            f32 size[2];
+            V2 size;
         } rectangle;
-        f32 quadrilateral[Draw_Corner_COUNT][2];
+        V2 quadrilateral[Draw_Corner_COUNT];
     };
 };
 
@@ -654,17 +669,23 @@ structdef(Platform_Common) {
     Arena *frame_arena;
     Array_Draw_Command draw_commands;
     bool should_quit;
-    f32 clear_color[4];
+    V4 clear_color;
 };
 
 #if PLATFORM_NONE
     typedef Platform_Common Platform;
-    #define platform_measure_text(...)
+    static V2 platform_measure_text(Platform_Common *platform, String text, f32 font_size) {
+        discard platform;
+        discard text;
+        discard font_size;
+        panic("PLATFORM=NONE");
+        return (V2){0};
+    }
 #else
     struct Platform;
     typedef struct Platform Platform;
 
-    static void platform_measure_text(Platform_Common *platform, String text, f32 font_size, f32 out[2]);
+    static V2 platform_measure_text(Platform_Common *platform, String text, f32 font_size);
 #endif
 
 #define draw(platform, ...) draw_(&(platform)->common, (Draw_Command){ __VA_ARGS__ })
@@ -685,8 +706,8 @@ enumdef(Ui_Box_Flags, u8) {
 #define Ui_Box_Flag_ANY_VISIBLE (Ui_Box_Flag_DRAW_BACKGROUND | Ui_Box_Flag_DRAW_BORDER | Ui_Box_Flag_DRAW_TEXT)
 
 structdef(Ui_Box_Rectangle) {
-    f32 top_left[2];
-    f32 size[2];
+    V2 top_left;
+    V2 size;
 };
 
 enumdef(Ui_Size_Kind, u8) {
@@ -705,9 +726,9 @@ enumdef(Ui_Color, u8) {
 
 structdef(Ui_Box_Style) {
     f32 font_size;
-    f32 inner_padding[2];
-    f32 child_gap[2];
-    f32 color[Ui_Color_COUNT][4];
+    V2 inner_padding;
+    V2 child_gap;
+    V4 color[Ui_Color_COUNT];
     f32 border_width;
     f32 border_radius;
     f32 animation_speed;
@@ -1128,10 +1149,10 @@ static Map_Result map_get_(Map_void *map, u64 key, void *put, u64 item_size) {
     return result;
 }
 
-static bool intersect_point_in_rectangle(f32 point[2], f32 rectangle[4]) {
+static bool intersect_point_in_rectangle(V2 point, V4 rectangle) {
     bool result = true;
-    result = result && rectangle[0] < point[0] && point[0] < rectangle[2];
-    result = result && rectangle[1] < point[1] && point[1] < rectangle[3];
+    result = result && rectangle.left < point.x && point.x < rectangle.right;
+    result = result && rectangle.top < point.y && point.y < rectangle.bottom;
     return result;
 }
 
@@ -1141,12 +1162,15 @@ static bool is_power_of_2(u64 x) {
 
 static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * pi_f32 / 180.f; }
 
-static void rgba_from_hex(u32 hex, f32 out[4]) {
+static V4 rgba_from_hex(u32 hex) {
     f32 pack = 1.f / 255.f;
-    out[0] = pack * (hex >> 24);
-    out[1] = pack * ((hex >> 16) & 0xff);
-    out[2] = pack * ((hex >> 8) & 0xff);
-    out[3] = pack * (hex & 0xff);
+    V4 result = {
+        .r = pack * (hex >> 24),
+        .g = pack * ((hex >> 16) & 0xff),
+        .b = pack * ((hex >> 8) & 0xff),
+        .a = pack * (hex & 0xff),
+    };
+    return result;
 }
 
 static inline f32 stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds) {
@@ -1159,333 +1183,342 @@ static inline f32 stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds) {
 
 static force_inline f32 lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
 
-static force_inline void v3_up_from_view(M4 view, f32 out[3]) {
-    for (u64 i = 0; i < 3; i += 1) out[i] = view.columns[i][1];
+static force_inline V2 v2(f32 value) { return (V2){ .x = value, .y = value }; }
+
+static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.y + b.y }; }
+
+static force_inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
+
+static inline f32 v2_dot(V2 a, V2 b) { return a.x * b.x + a.y * b.y; }
+
+static force_inline bool v2_equals(V2 a, V2 b) { return a.x == b.x && a.y == b.y; }
+
+static inline f32 v2_len(V2 v) { return sqrtf(v2_len_squared(v)); }
+
+static inline f32 v2_len_squared(V2 v) { return v2_dot(v, v); }
+
+static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
+    V2 add = v2_scale(v2_sub(b, a), amount);
+    return v2_add(a, add);
 }
 
-static force_inline void v_add_(f32 *a, f32 *b, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] += b[i];
+static force_inline V2 v2_max(V2 a, V2 b) { return (V2){ .x = MAX(a.x, b.x), .y = MAX(a.y, b.y) }; }
+
+static force_inline V2 v2_min(V2 a, V2 b) { return (V2){ .x = MIN(a.x, b.x), .y = MIN(a.y, b.y) }; }
+
+static force_inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
+
+static inline V2 v2_norm(V2 v) {
+    f32 length = v2_len(v);
+    if (length == 0) return (V2){0};
+    return (V2){ .x = v.x / length, .y = v.y / length };
 }
 
-static force_inline void v_copy_(f32 *destination, f32 *source, u64 count) {
-    for (u64 i = 0; i < count; i += 1) destination[i] = source[i];
-}
+static force_inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
 
-static inline void v_divide_(f32 *a, f32 *b, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] /= b[i];
-}
-
-static inline f32 v_dot_(f32 *a, f32 *b, u64 count) {
-    f32 result = 0;
-    for (u64 i = 0; i < count; i += 1) result += a[i] * b[i];
+static inline V2 v2_rotate(V2 v, f32 angle_radians) {
+    f32 sin_angle = sinf(angle_radians);
+    f32 cos_angle = cosf(angle_radians);
+    V2 result = { .x = v.x * cos_angle - v.y * sin_angle, .y = v.x * sin_angle + v.y * cos_angle };
     return result;
 }
 
-static inline bool v_equals_(f32 *a, f32 *b, u64 count) {
-    for (u64 i = 0; i < count; i +=1) if (a[i] != b[i]) return false;
-    return true;
+static inline V2 v2_round(V2 v) { return (V2){ .x = roundf(v.x), .y = roundf(v.y) }; }
+
+static inline V2 v2_round_down(V2 v) { return v2_round(v2_sub(v, (V2){ .x = 0.5f, .y = 0.5f })); }
+
+static force_inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v.y * s }; }
+
+static inline V2 v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds) {
+    for (u64 i = 0; i < 2; i += 1) {
+        a.v[i] = stable_lerp(a.v[i], b.v[i], k, delta_time_seconds);
+    }
+    return a;
 }
 
-static force_inline void v_fill_(f32 *v, f32 value, u64 count) {
-    for (u64 i = 0; i < count; i += 1) v[i] = value;
+static force_inline V2 v2_sub(V2 a, V2 b) { return (V2){ .x = a.x - b.x, .y = a.y - b.y }; }
+
+static force_inline V3 v3_add(V3 a, V3 b) { return (V3){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z }; }
+
+static inline V3 v3_cross(V3 a, V3 b) {
+    return (V3) {
+        .x = a.y * b.z - a.z * b.y,
+        .y = a.z * b.x - a.x * b.z,
+        .z = a.x * b.y - a.y * b.x,
+    };
 }
 
-static inline f32 v_length_squared_(f32 *v, u64 count) {
-    return v_dot_(v, v, count);
+static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+static force_inline bool v3_equal(V3 a, V3 b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
+
+static force_inline V3 v3_forward_from_view(M4 view) {
+    return (V3){ .x = -view.c[0][2], .y = -view.c[1][2], .z = -view.c[2][2] };
 }
 
-static inline f32 v_length_(f32 *v, u64 count) {
-    return sqrtf(v_length_squared_(v, count));
+static inline f32 v3_len(V3 v) { return sqrtf(v3_len_squared(v)); }
+
+static inline f32 v3_len_squared(V3 v) { return v3_dot(v, v); }
+
+static inline V3 v3_lerp(V3 a, V3 b, f32 amount) {
+    V3 add = v3_scale(v3_sub(b, a), amount);
+    return v3_add(a, add);
 }
 
-static inline void v_lerp_(f32 *a, f32 *b, f32 amount, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] += (b[i] - a[i]) * amount;
+static force_inline V3 v3_neg(V3 v) { return (V3){ .x = -v.x, .y = -v.y, .z = -v.z }; }
+
+static inline V3 v3_norm(V3 v) {
+    f32 length = v3_len(v);
+    if (length == 0) return (V3){0};
+    return (V3){
+        .x = v.x / length,
+        .y = v.y / length,
+        .z = v.z / length,
+    };
 }
 
-static inline void v_multiply_(f32 *a, f32 *b, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] *= b[i];
+static force_inline V3 v3_right_from_view(M4 view) {
+    return (V3){ .x = view.c[0][0], .y = view.c[1][0], .z = view.c[2][0] };
 }
 
-static inline void v_reciprocal_(f32 *v, u64 count) {
-    for (u64 i = 0; i < count; i += 1) v[i] = 1.f / v[i];
-}
+static force_inline V3 v3_scale(V3 v, f32 s) { return (V3){ .x = v.x * s, .y = v.y * s, .z = v.z * s }; }
 
-static inline void v_round_(f32 *v, u64 count) {
-    for (u64 i = 0; i < count; i += 1) v[i] = roundf(v[i]);
-}
+static force_inline V3 v3_sub(V3 a, V3 b) { return (V3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z }; }
 
-static inline void v_scale_(f32 *v, f32 amount, u64 count) {
-    for (u64 i = 0; i < count; i += 1) v[i] *= amount;
-}
-
-static inline void v_norm_(f32 *v, u64 count) {
-    f32 length = v_length_(v, count);
-    if (length == 0) v_fill_(v, 0, count);
-    else v_scale_(v, 1.f / length, count);
-}
-
-static inline void v_stable_lerp_(f32 *a, f32 *b, f32 k, f32 dt, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] = stable_lerp(a[i], b[i], k, dt);
-}
-
-static inline void v_subtract_(f32 *a, f32 *b, u64 count) {
-    for (u64 i = 0; i < count; i += 1) a[i] -= b[i];
-}
-
-static inline void v2_rotate(f32 v[2], f32 angle_radians) {
-    f32 sin_angle = sinf(angle_radians);
-    f32 cos_angle = cosf(angle_radians);
-    f32 old[2] = { v[0], v[1] };
-    v[0] = old[0] * cos_angle - old[1] * sin_angle;
-    v[1] = old[0] * sin_angle + old[1] * cos_angle;
-}
-
-static inline void v3_cross(f32 a[3], f32 b[3], f32 out[3]) {
-    out[0] = a[1] * b[2] - a[2] * b[1];
-    out[1] = a[2] * b[0] - a[0] * b[2];
-    out[2] = a[0] * b[1] - a[1] * b[0];
-}
-
-static force_inline void v3_forward_from_view(M4 view, f32 out[3]) {
-    for (u64 i = 0; i < 3; i += 1) out[i] = -view.columns[i][2];
-}
-
-static force_inline void v3_right_from_view(M4 view, f32 out[3]) {
-    for (u64 i = 0; i < 3; i += 1) out[i] = view.columns[i][0];
-}
-
-static inline void v3_unproject(f32 pos[3], M4 view_projection) {
+static inline V3 v3_unproject(V3 pos, M4 view_projection) {
     M4 view_projection_inv = m4_inverse(view_projection);
-    f32 q[4] = { pos[0], pos[1], pos[2], 1.f };
-    f32 q_trans[4]; m4_mul_v4(view_projection_inv, q, q_trans);
-    f32 q_trans_v3[3] = { q_trans[0], q_trans[1], q_trans[2] };
-    v_scale(q_trans_v3, 1.f / q_trans[3]);
-    v_copy_(pos, q_trans_v3, 3);
+    Quat q = v4v(pos, 1.f);
+    Quat q_trans = m4_mul_v4(view_projection_inv, q);
+    return v3_scale(q_trans.xyz, 1.f / q_trans.w);
 }
 
-static inline void quat_from_rotation(f32 axis[3], f32 angle, Quat *out) {
+static force_inline V3 v3_up_from_view(M4 view) {
+    return (V3){ .x = view.c[0][1], .y = view.c[1][1], .z = view.c[2][1] };
+}
+
+static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
+
+static inline f32 v4_dot(V4 a, V4 b) { return v3_dot(a.xyz, b.xyz) + a.w * b.w; }
+
+static force_inline bool v4_equal(V4 a, V4 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+}
+
+static inline V4 v4_lerp(V4 a, V4 b, f32 amount) {
+    V4 add = v4_scale(v4_sub(b, a), amount);
+    return v4_add(a, add);
+}
+
+static inline V4 v4_round(V4 v) {
+    v.x = roundf(v.x);
+    v.y = roundf(v.y);
+    v.z = roundf(v.z);
+    v.w = roundf(v.w);
+    return v;
+}
+
+static force_inline V4 v4_scale(V4 v, f32 s) { return (V4){ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s }; }
+
+static inline V4 v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds) {
+    for (u64 i = 0; i < 4; i += 1) {
+        a.v[i] = stable_lerp(a.v[i], b.v[i], k, delta_time_seconds);
+    }
+    return a;
+}
+
+static force_inline V4 v4_sub(V4 a, V4 b) { return (V4){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w }; }
+
+static V4 v4v(V3 xyz, f32 w) { return (V4){ .x = xyz.x, .y = xyz.y, .z = xyz.z, .w = w }; }
+
+static inline Quat quat_from_rotation(V3 axis, f32 angle) {
     f32 half_angle = angle / 2.f;
     f32 sin_half_angle = sinf(half_angle);
-    for (u64 i = 0; i < 3; i += 1) (*out)[i] = axis[i] * sin_half_angle;
-    (*out)[3] = cosf(half_angle);
+    return (Quat){
+        .x = axis.x * sin_half_angle,
+        .y = axis.y * sin_half_angle,
+        .z = axis.z * sin_half_angle,
+        .w = cosf(half_angle),
+    };
 }
 
-static inline void quat_mul_quat(Quat a, Quat b, Quat *out) {
-    (*out)[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
-    (*out)[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
-    (*out)[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
-    (*out)[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+static inline Quat quat_mul_quat(Quat a, Quat b) {
+    return (Quat){
+        .x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        .y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        .z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        .w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    };
 }
 
-static inline void quat_rotate_v3(Quat q, f32 v[3]) {
-    f32 qv[4] = { v[0], v[1], v[2] };
-    f32 q_conjugate[4] = { -q[0], -q[1], -q[2], q[3] };
-
-    Quat intermediate = {0};
-    quat_mul_quat(q, qv, &intermediate);
-
-    Quat result = {0};
-    quat_mul_quat(intermediate, q_conjugate, &result);
-
-    v_copy_(v, result, 3);
+static inline V3 quat_rotate_v3(Quat q, V3 v) {
+    Quat qv = { .xyz = v };
+    Quat q_conjugate = (Quat){ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
+    return quat_mul_quat(quat_mul_quat(q, qv), q_conjugate).xyz;
 }
 
 static force_inline M3 m3_fill_diagonal(f32 value) {
-    M3 result = { .columns = { [0][0] = value, [1][1] = value, [2][2] = value } };
+    M3 result = { .c = { [0][0] = value, [1][1] = value, [2][2] = value } };
     return result;
 }
 
-static inline M3 m3_from_rotation(f32 radians, f32 pivot[2]) {
-    return m3_model((f32[2]){ 1.f, 1.f }, radians, pivot, (f32[2]){0});
+static inline M3 m3_from_rotation(f32 radians, V2 pivot) {
+    return m3_model((V2){ .x = 1.f, .y = 1.f }, radians, pivot, (V2){0});
 }
 
 static inline M3 m3_inverse(M3 m) {
-    M3 cross = {0};
-    v3_cross(m.columns[1], m.columns[2], cross.columns[0]);
-    v3_cross(m.columns[2], m.columns[0], cross.columns[1]);
-    v3_cross(m.columns[0], m.columns[1], cross.columns[2]);
+    M3 cross = { .columns = {
+        [0] = v3_cross(m.columns[1], m.columns[2]),
+        [1] = v3_cross(m.columns[2], m.columns[0]),
+        [2] = v3_cross(m.columns[0], m.columns[1]),
+    } };
 
-    float inverse_determinant = 1.f / v_dot(cross.columns[2], m.columns[2]);
+    float inverse_determinant = 1.f / v3_dot(cross.columns[2], m.columns[2]);
 
-    M3 result = {0};
-    for (u64 i = 0; i < 3; i += 1) {
-        v_scale(cross.columns[i], inverse_determinant);
-        v_copy(result.columns[i], cross.columns[i]);
-    }
+    M3 result = { .columns = {
+        [0] = v3_scale(cross.columns[0], inverse_determinant),
+        [1] = v3_scale(cross.columns[1], inverse_determinant),
+        [2] = v3_scale(cross.columns[2], inverse_determinant),
+    } };
 
     result = m3_transpose(result);
     return result;
 }
 
-static inline M3 m3_model(f32 scale[2], f32 radians, f32 pivot[2], f32 post_translation[2]) {
+static inline M3 m3_model(V2 scale, f32 radians, V2 pivot, V2 post_translation) {
     f32 cos_value = cosf(radians);
     f32 sin_value = sinf(radians);
 
-    f32 a = cos_value * scale[0];
-    f32 b = sin_value * scale[1];
-    f32 c = -sin_value * scale[0];
-    f32 d = cos_value * scale[1];
+    f32 a = cos_value * scale.x;
+    f32 b = sin_value * scale.y;
+    f32 c = -sin_value * scale.x;
+    f32 d = cos_value * scale.y;
 
-    f32 translation[2]; v_copy_(translation, pivot, 2);
-    f32 a_pivot[2] = { a * pivot[0] + c * pivot[1], b * pivot[0] + d * pivot[1] };
-    v_subtract(translation, a_pivot);
-    v_add_(translation, post_translation, 2);
+    V2 a_pivot = { .x = a * pivot.x + c * pivot.y, .y = b * pivot.x + d * pivot.y };
+    V2 translation = v2_sub(pivot, a_pivot);
+    translation = v2_add(translation, post_translation);
 
-    M3 result = { .columns = {
+    M3 result = { .c = {
         [0][0] = a,
         [0][1] = b,
 
         [1][0] = c,
         [1][1] = d,
 
-        [2][0] = translation[0],
-        [2][1] = translation[1],
+        [2][0] = translation.x,
+        [2][1] = translation.y,
         [2][2] = 1.f,
     } };
 
     return result;
 }
 
-static inline void m3_mul_v3(M3 m, f32 v[3]) {
-    f32 result[3] = {0};
-    for (u64 i = 0; i < 3; i += 1) {
-        result[i] = v_dot_(v, ((f32[3]){ m.columns[i][0], m.columns[i][1], m.columns[i][2] }), 3);
-    }
-    v_copy_(v, result, 3);
+static inline V3 m3_mul_v3(M3 m, V3 v) {
+    return (V3){
+        .x = v3_dot(v, (V3){ .x = m.c[0][0], .y = m.c[0][1], .z = m.c[0][2] }),
+        .y = v3_dot(v, (V3){ .x = m.c[1][0], .y = m.c[1][1], .z = m.c[1][2] }),
+        .z = v3_dot(v, (V3){ .x = m.c[2][0], .y = m.c[2][1], .z = m.c[2][2] }),
+    };
 }
 
 static inline M3 m3_transpose(M3 m) {
     M3 result = m;
-    result.columns[0][1] = m.columns[1][0];
-    result.columns[0][2] = m.columns[2][0];
-    result.columns[1][0] = m.columns[0][1];
-    result.columns[1][2] = m.columns[2][1];
-    result.columns[2][1] = m.columns[1][2];
-    result.columns[2][0] = m.columns[0][2];
+    result.c[0][1] = m.c[1][0];
+    result.c[0][2] = m.c[2][0];
+    result.c[1][0] = m.c[0][1];
+    result.c[1][2] = m.c[2][1];
+    result.c[2][1] = m.c[1][2];
+    result.c[2][0] = m.c[0][2];
     return result;
 }
 
 static force_inline M4 m4_fill_diagonal(f32 value) {
-    return (M4){ .columns = { [0][0] = value, [1][1] = value, [2][2] = value, [3][3] = value } };
+    return (M4){ .c = { [0][0] = value, [1][1] = value, [2][2] = value, [3][3] = value } };
 }
 
-static inline M4 m4_from_rotation(f32 axis[3], f32 angle) {
-    v_norm_(axis, 3);
+static inline M4 m4_from_rotation(V3 axis, f32 angle) {
+    axis = v3_norm(axis);
 
     f32 sin_theta = sinf(angle);
     f32 cos_theta = cosf(angle);
     f32 cos_value = 1.f - cos_theta;
 
-    return (M4){ .columns = {
-        [0][0] = (axis[0] * axis[0] * cos_value) + cos_theta,
-        [0][1] = (axis[0] * axis[1] * cos_value) + (axis[2] * sin_theta),
-        [0][2] = (axis[0] * axis[2] * cos_value) - (axis[1] * sin_theta),
+    return (M4){ .c = {
+        [0][0] = (axis.x * axis.x * cos_value) + cos_theta,
+        [0][1] = (axis.x * axis.y * cos_value) + (axis.z * sin_theta),
+        [0][2] = (axis.x * axis.z * cos_value) - (axis.y * sin_theta),
 
-        [1][0] = (axis[1] * axis[0] * cos_value) - (axis[2] * sin_theta),
-        [1][1] = (axis[1] * axis[1] * cos_value) + cos_theta,
-        [1][2] = (axis[1] * axis[2] * cos_value) + (axis[0] * sin_theta),
+        [1][0] = (axis.y * axis.x * cos_value) - (axis.z * sin_theta),
+        [1][1] = (axis.y * axis.y * cos_value) + cos_theta,
+        [1][2] = (axis.y * axis.z * cos_value) + (axis.x * sin_theta),
 
-        [2][0] = (axis[2] * axis[0] * cos_value) + (axis[1] * sin_theta),
-        [2][1] = (axis[2] * axis[1] * cos_value) - (axis[0] * sin_theta),
-        [2][2] = (axis[2] * axis[2] * cos_value) + cos_theta,
+        [2][0] = (axis.z * axis.x * cos_value) + (axis.y * sin_theta),
+        [2][1] = (axis.z * axis.y * cos_value) - (axis.x * sin_theta),
+        [2][2] = (axis.z * axis.z * cos_value) + cos_theta,
 
         [3][3] = 1.f,
     } };
 }
 
 static inline M4 m4_from_top_left_m3(M3 m) {
-    M4 result = {0};
-    for (u64 i = 0; i < 3; i += 1) v_copy_(result.columns[i], m.columns[i], 3);
+    M4 result = { .columns = {
+        [0].xyz = m.columns[0],
+        [1].xyz = m.columns[1],
+        [2].xyz = m.columns[2],
+    } };
     return result;
 }
 
-static inline M4 m4_from_translation(f32 translation[3]) {
+static inline M4 m4_from_translation(V3 translation) {
     M4 result = m4_fill_diagonal(1.f);
-    v_copy_(result.columns[3], translation, 3);
+    result.c[3][0] = translation.x;
+    result.c[3][1] = translation.y;
+    result.c[3][2] = translation.z;
     return result;
 }
 
 static inline M4 m4_inverse(M4 m) {
-    f32 cols_0_xyz[3] = { m.columns[0][0], m.columns[0][1], m.columns[0][2] };
-    f32 cols_1_xyz[3] = { m.columns[1][0], m.columns[1][1], m.columns[1][2] };
-    f32 cols_2_xyz[3] = { m.columns[2][0], m.columns[2][1], m.columns[2][2] };
-    f32 cols_3_xyz[3] = { m.columns[3][0], m.columns[3][1], m.columns[3][2] };
+    V4 *cols = m.columns;
 
-    f32 cross_0_1[3]; v3_cross(cols_0_xyz, cols_1_xyz, cross_0_1);
-    f32 cross_2_3[3]; v3_cross(cols_2_xyz, cols_3_xyz, cross_2_3);
+    V3 cross_0_1 = v3_cross(cols[0].xyz, cols[1].xyz);
+    V3 cross_2_3 = v3_cross(cols[2].xyz, cols[3].xyz);
+    V3 sub_1_0 = v3_sub(v3_scale(cols[0].xyz, cols[1].w), v3_scale(cols[1].xyz, cols[0].w));
+    V3 sub_3_2 = v3_sub(v3_scale(cols[2].xyz, cols[3].w), v3_scale(cols[3].xyz, cols[2].w));
 
-    f32 sub_1_0[3]; v_copy(sub_1_0, cols_0_xyz); v_scale(sub_1_0, m.columns[1][3]);
-    f32 s1[3]; v_copy(s1, cols_1_xyz); v_scale(s1, m.columns[0][3]);
-    v_subtract(sub_1_0, s1);
+    float inv_det = 1.0f / (v3_dot(cross_0_1, sub_3_2) + v3_dot(cross_2_3, sub_1_0));
+    cross_0_1 = v3_scale(cross_0_1, inv_det);
+    cross_2_3 = v3_scale(cross_2_3, inv_det);
+    sub_1_0 = v3_scale(sub_1_0, inv_det);
+    sub_3_2 = v3_scale(sub_3_2, inv_det);
 
-    f32 sub_3_2[3]; v_copy(sub_3_2, cols_2_xyz); v_scale(sub_3_2, m.columns[3][3]);
-    f32 s3[3]; v_copy(s3, cols_3_xyz); v_scale(s3, m.columns[2][3]);
-    v_subtract(sub_3_2, s3);
-
-    float inv_det = 1.0f / (v_dot(cross_0_1, sub_3_2) + v_dot(cross_2_3, sub_1_0));
-    v_scale(cross_0_1, inv_det);
-    v_scale(cross_2_3, inv_det);
-    v_scale(sub_1_0, inv_det);
-    v_scale(sub_3_2, inv_det);
-
-    M4 result = {0};
-
-    f32 scaled[3];
-
-    // TODO(felix): we're continuously assigning to results.columns[0][3]. The real logic got lost in refactoring somewhere.
-    // check back or check HandmadeMath!
-    panic("check comment");
-
-    v_copy(scaled, cross_2_3); v_scale(scaled, m.columns[1][3]);
-    v3_cross(cols_1_xyz, sub_3_2, result.columns[0]);
-    v_add_(result.columns[0], scaled, 3);
-    result.columns[0][3] = -v_dot(cols_1_xyz, cross_2_3);
-
-    v_copy(scaled, cross_2_3); v_scale(scaled, m.columns[0][3]);
-    v3_cross(cols_0_xyz, sub_3_2, result.columns[1]);
-    v_add_(result.columns[1], scaled, 3);
-    result.columns[0][3] = v_dot(cols_0_xyz, cross_2_3);
-
-    v_copy(scaled, cross_0_1); v_scale(scaled, m.columns[3][3]);
-    v3_cross(cols_3_xyz, sub_1_0, result.columns[2]);
-    v_add_(result.columns[2], scaled, 3);
-    result.columns[0][3] = -v_dot(cols_3_xyz, cross_0_1);
-
-    v_copy(scaled, cross_0_1); v_scale(scaled, m.columns[2][3]);
-    v3_cross(cols_2_xyz, sub_1_0, result.columns[3]);
-    v_add_(result.columns[3], scaled, 3);
-    result.columns[0][3] = v_dot(cols_2_xyz, cross_0_1);
-
-    return result;
+    return m4_transpose((M4){ .columns = {
+        [0] = v4v(v3_add(v3_cross(cols[1].xyz, sub_3_2), v3_scale(cross_2_3, cols[1].w)), -v3_dot(cols[1].xyz, cross_2_3)),
+        [1] = v4v(v3_sub(v3_cross(sub_3_2, cols[0].xyz), v3_scale(cross_2_3, cols[0].w)),  v3_dot(cols[0].xyz, cross_2_3)),
+        [2] = v4v(v3_add(v3_cross(cols[3].xyz, sub_1_0), v3_scale(cross_0_1, cols[3].w)), -v3_dot(cols[3].xyz, cross_0_1)),
+        [3] = v4v(v3_sub(v3_cross(sub_1_0, cols[2].xyz), v3_scale(cross_0_1, cols[2].w)),  v3_dot(cols[2].xyz, cross_0_1)),
+    } });
 }
 
-static inline M4 m4_look_at(f32 eye[3], f32 centre[3], f32 up_direction[3]) {
-    f32 forward[3]; v_copy_(forward, centre, 3);
-    v_subtract_(forward, eye, 3);
-    v_norm(forward);
+static inline M4 m4_look_at(V3 eye, V3 centre, V3 up_direction) {
+    V3 forward = v3_norm(v3_sub(centre, eye));
+    V3 right   = v3_norm(v3_cross(forward, up_direction));
+    V3 up      = v3_cross(right, forward);
 
-    f32 right[3]; v3_cross(forward, up_direction, right);
-    v_norm(right);
+    return (M4){ .c = {
+        [0][0] =    right.x,
+        [0][1] =       up.x,
+        [0][2] = -forward.x,
 
-    f32 up[3]; v3_cross(right, forward, up);
-    v_norm(up);
+        [1][0] =    right.y,
+        [1][1] =       up.y,
+        [1][2] = -forward.y,
 
-    return (M4){ .columns = {
-        [0][0] =    right[0],
-        [0][1] =       up[0],
-        [0][2] = -forward[0],
+        [2][0] =    right.z,
+        [2][1] =       up.z,
+        [2][2] = -forward.z,
 
-        [1][0] =    right[1],
-        [1][1] =       up[1],
-        [1][2] = -forward[1],
-
-        [2][0] =    right[2],
-        [2][1] =       up[2],
-        [2][2] = -forward[2],
-
-        [3][0] = -v_dot_(right,   eye, 3),
-        [3][1] = -v_dot_(up,      eye, 3),
-        [3][2] =  v_dot_(forward, eye, 3),
+        [3][0] = -v3_dot(right,   eye),
+        [3][1] = -v3_dot(up,      eye),
+        [3][2] =  v3_dot(forward, eye),
         [3][3] =  1.f,
     } };
 }
@@ -1494,22 +1527,24 @@ static inline M4 m4_mul_m4(M4 a, M4 b) {
     M4 result = {0};
     for (int col = 0; col < 4; col += 1) for (int row = 0; row < 4; row += 1) {
         f32 sum = 0;
-        for (int pos = 0; pos < 4; pos += 1) sum += a.columns[pos][row] * b.columns[col][pos];
-        result.columns[col][row] = sum;
+        for (int pos = 0; pos < 4; pos += 1) sum += a.c[pos][row] * b.c[col][pos];
+        result.c[col][row] = sum;
     }
     return result;
 }
 
-static inline void m4_mul_v4(M4 m, f32 v[4], f32 out[4]) {
-    out[0] = v_dot_(v, (f32[4]){ m.columns[0][0], m.columns[0][1], m.columns[0][2], m.columns[0][3] }, 4);
-    out[1] = v_dot_(v, (f32[4]){ m.columns[1][0], m.columns[1][1], m.columns[1][2], m.columns[1][3] }, 4);
-    out[2] = v_dot_(v, (f32[4]){ m.columns[2][0], m.columns[2][1], m.columns[2][2], m.columns[2][3] }, 4);
-    out[3] = v_dot_(v, (f32[4]){ m.columns[3][0], m.columns[3][1], m.columns[3][2], m.columns[3][3] }, 4);
+static inline V4 m4_mul_v4(M4 m, V4 v) {
+    return (V4){
+        .x = v4_dot(v, (V4){ .x = m.c[0][0], .y = m.c[0][1], .z = m.c[0][2], .w = m.c[0][3] }),
+        .y = v4_dot(v, (V4){ .x = m.c[1][0], .y = m.c[1][1], .z = m.c[1][2], .w = m.c[1][3] }),
+        .z = v4_dot(v, (V4){ .x = m.c[2][0], .y = m.c[2][1], .z = m.c[2][2], .w = m.c[2][3] }),
+        .w = v4_dot(v, (V4){ .x = m.c[3][0], .y = m.c[3][1], .z = m.c[3][2], .w = m.c[3][3] }),
+    };
 }
 
 static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far) {
     f32 cot = 1.f / tanf(fov_vertical_radians / 2.f);
-    return (M4){ .columns = {
+    return (M4){ .c = {
         [0][0] = cot / width_over_height,
         [1][1] = cot,
         [2][2] = (range_near + range_far) / (range_near - range_far),
@@ -1521,7 +1556,7 @@ static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_o
 static force_inline M4 m4_transpose(M4 m) {
     M4 result = {0};
     for (int i = 0; i < 4; i += 1) for (int j = 0; j < 4; j += 1) {
-        result.columns[i][j] = m.columns[j][i];
+        result.c[i][j] = m.c[j][i];
     }
     return result;
 }
@@ -1605,21 +1640,6 @@ static bool string_starts_with(String s, String start) {
     if (s.count < start.count) return false;
     for (u64 i = 0; i < start.count; i += 1) if (s.data[i] != start.data[i]) return false;
     return true;
-}
-
-static String16 string16_from_string(Arena *arena, String s) {
-    #if BASE_OS == BASE_OS_WINDOWS
-        String16 wstr = {
-            .data = arena_make(arena, s.count, u16),
-            .count = (u64)MultiByteToWideChar(CP_UTF8, 0, (char *)s.data, (int)s.count, wstr.data, (int)s.count),
-        };
-        win32_ensure_not_0(wstr.count);
-        return wstr;
-    #else
-        discard(arena);
-        discard(s);
-        panic("unimplemented for this OS");
-    #endif
 }
 
 static void string_builder_print(String_Builder *builder, const char *fmt_c, ...) {
@@ -2626,7 +2646,8 @@ static u32 build_default_everything(Arena arena, String program_name, u8 target_
 
     bool is_sokol = string_equals(platform, string("base_platform_sokol"));
     bool shaders_ok = !is_sokol;
-    if (is_sokol && dependencies_ok) {
+    shaders_ok = shaders_ok || BASE_OS == BASE_OS_WINDOWS; // TODO(felix): remove
+    if (is_sokol && dependencies_ok && BASE_OS != BASE_OS_WINDOWS /* TODO(felix): remove */) {
         const char *shader_file = "./src/shader.c";
         if (os_file_info(shader_file).exists) {
             os_remove_file(shader_file);
@@ -2696,24 +2717,24 @@ static void ui_begin(Ui *ui) {
     ui->scale = ui->platform->dpi_scale;
 
     Ui_Box_Style_Set default_style = {0};
-    rgba_from_hex(0xd8d8d8ff, default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BACKGROUND]);
-    rgba_from_hex(0x000000ff, default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_FOREGROUND]);
-    rgba_from_hex(0x6d6d6dff, default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BORDER]);
-    rgba_from_hex(0x9b9b9bff, default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BACKGROUND]);
-    rgba_from_hex(0x000000ff, default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_FOREGROUND]);
-    rgba_from_hex(0x515151ff, default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BORDER]);
-    rgba_from_hex(0x000000ff, default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BACKGROUND]);
-    rgba_from_hex(0x000000ff, default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_FOREGROUND]);
-    rgba_from_hex(0xffffffff, default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BORDER]);
+    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BACKGROUND] = rgba_from_hex(0xd8d8d8ff);
+    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_FOREGROUND] = rgba_from_hex(0x000000ff);
+    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BORDER] = rgba_from_hex(0x6d6d6dff);
+    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BACKGROUND] = rgba_from_hex(0x9b9b9bff);
+    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_FOREGROUND] = rgba_from_hex(0x000000ff);
+    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BORDER] = rgba_from_hex(0x515151ff);
+    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BACKGROUND] = rgba_from_hex(0x000000ff);
+    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_FOREGROUND] = rgba_from_hex(0x000000ff);
+    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BORDER] = rgba_from_hex(0xffffffff);
 
 	for (Ui_Box_Style_Kind kind = 0; kind < Ui_Box_Style_Kind_COUNT; kind += 1) {
 		Ui_Box_Style *style = &default_style.kinds[kind];
 
         style->font_size = 14.f;
-		style->inner_padding[0] = 5.f;
-		style->inner_padding[1] = 3.f;
-		style->child_gap[0] = 3.f;
-		style->child_gap[1] = 3.f;
+		style->inner_padding.x = 5.f;
+		style->inner_padding.y = 3.f;
+		style->child_gap.x = 3.f;
+		style->child_gap.y = 3.f;
 		style->border_width = 1.f;
 		style->border_radius = 5.f;
 		style->animation_speed = 20.f;
@@ -2747,9 +2768,9 @@ static void ui_default_render_passthrough(Ui *ui) {
         Ui_Box *box = *box_double_pointer;
 
         Ui_Box_Style style = box->display_style;
-        f32 background_color[4]; v_copy(background_color, style.color[Ui_Color_BACKGROUND]);
-        f32 border_color[4]; v_copy(border_color, style.color[Ui_Color_BORDER]);
-        f32 foreground_color[4]; v_copy(foreground_color, style.color[Ui_Color_FOREGROUND]);
+        V4 background_color = style.color[Ui_Color_BACKGROUND];
+        V4 border_color = style.color[Ui_Color_BORDER];
+        V4 foreground_color = style.color[Ui_Color_FOREGROUND];
         f32 border_width = style.border_width * ui->scale;
         f32 border_radius = style.border_radius * ui->scale;
 
@@ -2762,10 +2783,10 @@ static void ui_default_render_passthrough(Ui *ui) {
                     .border_radius = border_radius,
                 },
             };
-            v_copy(command.position, box->display_rectangle.top_left);
-            v_copy(command.color[Draw_Color_SOLID], background_color);
-            v_copy(command.rectangle.size, box->display_rectangle.size);
-            v_copy(command.rectangle.border_color, border_color);
+            command.position = box->display_rectangle.top_left;
+            command.color[Draw_Color_SOLID] = background_color;
+            command.rectangle.size = box->display_rectangle.size;
+            command.rectangle.border_color = border_color;
 
             draw_(ui->platform, command);
         }
@@ -2774,12 +2795,12 @@ static void ui_default_render_passthrough(Ui *ui) {
         if (draw_text) {
             assert(box->display_string.count > 0);
 
-            f32 position[2]; v_copy(position, box->display_rectangle.top_left);
+            V2 position = box->display_rectangle.top_left;
             for_ui_axis (axis) {
-                f32 add = box->display_style.inner_padding[axis];
+                f32 add = box->display_style.inner_padding.v[axis];
                 add += !!(box->flags & Ui_Box_Flag_DRAW_BORDER) * box->display_style.border_width;
                 add *= ui->scale;
-                position[axis] += add;
+                position.v[axis] += add;
             }
 
             Draw_Command command = {
@@ -2789,8 +2810,8 @@ static void ui_default_render_passthrough(Ui *ui) {
                     .font_size = box->display_style.font_size * ui->scale,
                 },
             };
-            v_copy(command.position, position);
-            v_copy(command.color[Draw_Color_SOLID], foreground_color);
+            command.position = position;
+            command.color[Draw_Color_SOLID] = foreground_color;
 
             draw_(ui->platform, command);
         }
@@ -2815,13 +2836,13 @@ static void ui_layout_standalone(Ui *ui, Ui_Box *box) {
 
         style->font_size = stable_lerp(style->font_size, target_style->font_size, style->animation_speed, dt);
 
-        v_stable_lerp(style->inner_padding, target_style->inner_padding, style->animation_speed, dt);
-        v_stable_lerp(style->child_gap, target_style->child_gap, style->animation_speed, dt);
+        style->inner_padding = v2_stable_lerp(style->inner_padding, target_style->inner_padding, style->animation_speed, dt);
+        style->child_gap = v2_stable_lerp(style->child_gap, target_style->child_gap, style->animation_speed, dt);
 
         for (Ui_Color color = 0; color < Ui_Color_COUNT; color += 1) {
-            f32 *current = style->color[color];
-            f32 *target = target_style->color[color];
-            v_stable_lerp_(current, target, style->animation_speed, dt, 4);
+            V4 *current = &style->color[color];
+            V4 *target = &target_style->color[color];
+            *current = v4_stable_lerp(*current, *target, style->animation_speed, dt);
         }
 
         style->border_width = stable_lerp(style->border_width, target_style->border_width, style->animation_speed, dt);
@@ -2829,8 +2850,8 @@ static void ui_layout_standalone(Ui *ui, Ui_Box *box) {
     } else *style = *target_style;
 
     for_ui_axis (axis) {
-		box->target_rectangle.size[axis] += ui->scale * 2.f * style->border_width * !!(box->flags & Ui_Box_Flag_DRAW_BORDER);
-		box->target_rectangle.size[axis] += ui->scale * 2.f * style->inner_padding[axis];
+		box->target_rectangle.size.v[axis] += ui->scale * 2.f * style->border_width * !!(box->flags & Ui_Box_Flag_DRAW_BORDER);
+		box->target_rectangle.size.v[axis] += ui->scale * 2.f * style->inner_padding.v[axis];
 
         switch (box->size_kind[axis]) {
             case Ui_Size_Kind_NIL: unreachable;
@@ -2852,25 +2873,25 @@ static void ui_layout_dependent_descendant(Ui *ui, Ui_Box *box) {
         case Ui_Size_Kind_TEXT: break;
         case Ui_Size_Kind_SUM_OF_CHILDREN: {
             for (Ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                box->target_rectangle.size[axis] += child->target_rectangle.size[axis];
-				box->target_rectangle.size[axis] += ui->scale * box->display_style.child_gap[axis];
+                box->target_rectangle.size.v[axis] += child->target_rectangle.size.v[axis];
+				box->target_rectangle.size.v[axis] += ui->scale * box->display_style.child_gap.v[axis];
             }
 
             bool has_at_least_one_child = box->first_child != 0;
-            box->target_rectangle.size[axis] -= has_at_least_one_child * ui->scale * box->display_style.child_gap[axis];
+            box->target_rectangle.size.v[axis] -= has_at_least_one_child * ui->scale * box->display_style.child_gap.v[axis];
         } break;
         case Ui_Size_Kind_LARGEST_CHILD: {
             f32 largest = 0;
             for (Ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                f32 size = child->target_rectangle.size[axis];
+                f32 size = child->target_rectangle.size.v[axis];
                 largest = MAX(largest, size);
             }
-            box->target_rectangle.size[axis] += largest;
+            box->target_rectangle.size.v[axis] += largest;
         } break;
         default: unreachable;
     }
 
-    for_ui_axis (axis) assert(box->target_rectangle.size[axis] != 0);
+    for_ui_axis (axis) assert(box->target_rectangle.size.v[axis] != 0);
 }
 
 static void ui_layout_relative_positions_and_rectangle(Ui *ui, Ui_Box *box) {
@@ -2878,26 +2899,26 @@ static void ui_layout_relative_positions_and_rectangle(Ui *ui, Ui_Box *box) {
         Ui_Axis layout_axis = cast(Ui_Axis) box->parent->flags & Ui_Box_Flag_CHILD_AXIS;
 
         if (box->previous_sibling != 0) {
-            box->target_rectangle.top_left[layout_axis] = box->previous_sibling->target_rectangle.top_left[layout_axis];
-            box->target_rectangle.top_left[layout_axis] += box->previous_sibling->target_rectangle.size[layout_axis];
-            box->target_rectangle.top_left[layout_axis] += ui->scale * box->parent->display_style.child_gap[layout_axis];
+            box->target_rectangle.top_left.v[layout_axis] = box->previous_sibling->target_rectangle.top_left.v[layout_axis];
+            box->target_rectangle.top_left.v[layout_axis] += box->previous_sibling->target_rectangle.size.v[layout_axis];
+            box->target_rectangle.top_left.v[layout_axis] += ui->scale * box->parent->display_style.child_gap.v[layout_axis];
         } else {
-            box->target_rectangle.top_left[layout_axis] = box->parent->target_rectangle.top_left[layout_axis];
-			box->target_rectangle.top_left[layout_axis] += ui->scale * box->parent->display_style.inner_padding[layout_axis];
-			box->target_rectangle.top_left[layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
+            box->target_rectangle.top_left.v[layout_axis] = box->parent->target_rectangle.top_left.v[layout_axis];
+			box->target_rectangle.top_left.v[layout_axis] += ui->scale * box->parent->display_style.inner_padding.v[layout_axis];
+			box->target_rectangle.top_left.v[layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
         }
 
         Ui_Axis non_layout_axis = !layout_axis;
-        box->target_rectangle.top_left[non_layout_axis] = box->parent->target_rectangle.top_left[non_layout_axis];
-        box->target_rectangle.top_left[non_layout_axis] += ui->scale * box->parent->display_style.inner_padding[non_layout_axis];
-        box->target_rectangle.top_left[non_layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
+        box->target_rectangle.top_left.v[non_layout_axis] = box->parent->target_rectangle.top_left.v[non_layout_axis];
+        box->target_rectangle.top_left.v[non_layout_axis] += ui->scale * box->parent->display_style.inner_padding.v[non_layout_axis];
+        box->target_rectangle.top_left.v[non_layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
     }
 
     bool animate = !!(box->flags & Ui_Box_Flag_ANIMATE);
     animate = animate && !(box->flags & Ui_Box_Flag__FIRST_FRAME);
     if (animate) {
-        f32 display[4]; v_copy_(display, &box->display_rectangle.top_left[0], 4);
-        v_stable_lerp_(display, &box->target_rectangle.top_left[0], box->display_style.animation_speed, ui->platform->seconds_since_last_frame, 4);
+        V4 display = bit_cast(V4) box->display_rectangle;
+        display = v4_stable_lerp(display, bit_cast(V4) box->target_rectangle, box->display_style.animation_speed, ui->platform->seconds_since_last_frame);
         box->display_rectangle = bit_cast(Ui_Box_Rectangle) display;
     } else {
         box->display_rectangle = box->target_rectangle;
@@ -2906,14 +2927,14 @@ static void ui_layout_relative_positions_and_rectangle(Ui *ui, Ui_Box *box) {
     if (box->flags & Ui_Box_Flag_ANY_VISIBLE) {
         Ui_Box_Rectangle display = box->display_rectangle;
         Ui_Box_Rectangle target = box->target_rectangle;
-        assert(display.top_left[0] >= 0);
-        assert(display.top_left[1] >= 0);
-        assert(target.top_left[0] >= 0);
-        assert(target.top_left[1] >= 0);
-        assert(display.size[0] >= 0);
-        assert(display.size[1] >= 0);
-        assert(target.size[0] > 0);
-        assert(target.size[1] > 0);
+        assert(display.top_left.x >= 0);
+        assert(display.top_left.y >= 0);
+        assert(target.top_left.x >= 0);
+        assert(target.top_left.y >= 0);
+        assert(display.size.x >= 0);
+        assert(display.size.y >= 0);
+        assert(target.size.x > 0);
+        assert(target.size.y > 0);
 
         push_assume_capacity(&ui->boxes_to_render, box);
     }
@@ -3062,8 +3083,8 @@ static Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *for
     box->display_string = display_string;
     if (display_string.count > 0) {
         f32 font_size = box->display_style.font_size * ui->scale;
-        platform_measure_text(ui->platform, box->display_string, font_size, box->target_rectangle.size);
-        for_ui_axis (axis) assert(box->target_rectangle.size[axis] != 0);
+        box->target_rectangle.size = platform_measure_text(ui->platform, box->display_string, font_size);
+        for_ui_axis (axis) assert(box->target_rectangle.size.v[axis] != 0);
     }
 
     if (box->parent != 0) {
@@ -3083,10 +3104,8 @@ static Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *for
 
     box->target_style_set = *slice_get_last(ui->style_stack);
 
-    f32 rectangle[4];
-    v_copy_(rectangle, box->display_rectangle.top_left, 2);
-    v_copy_(&rectangle[2], box->display_rectangle.top_left, 2);
-    v_add_(&rectangle[2], box->display_rectangle.size, 2);
+    V4 rectangle = bit_cast(V4) box->display_rectangle.top_left;
+    rectangle.zw = v2_add(box->display_rectangle.top_left, box->display_rectangle.size);
 
     box->hovered = !!(box->flags & Ui_Box_Flag_HOVERABLE) && intersect_point_in_rectangle(ui->platform->mouse_position, rectangle);
     box->clicked = box->hovered && !!(box->flags & Ui_Box_Flag_CLICKABLE) && ui->platform->mouse_clicked[App_Mouse_Button_LEFT];
