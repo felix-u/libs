@@ -125,7 +125,7 @@ static void sokol_event(const sapp_event *event, void *user_data) {
 }
 
 static void sokol_logger(const char *tag, u32 level, u32 item, const char *message, u32 line_number, const char *filename, void *user_data) {
-    discard user_data;
+    (void)user_data;
     print("%s:%u: %s %u %u '%s'\n", filename, line_number, tag, level, item, message);
 }
 
@@ -148,7 +148,7 @@ static void sokol_cleanup(void *user_data) {
 static void sokol_init(void *user_data) {
     Platform *platform = user_data;
     app_start(platform);
-    
+
     sokol_populate_frame_info(&platform->frame_info);
 
     sg_setup(&(sg_desc){

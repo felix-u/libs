@@ -52,6 +52,7 @@
     extern int errno;
     #include <sys/wait.h>
 #elif BASE_OS == BASE_OS_WINDOWS
+    #define static_assert _Static_assert
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
     #define os_abort() ExitProcess(1)
@@ -59,8 +60,8 @@
     #define NOGDI
     #define NOUSER
     #define NOMINMAX
-    #include "windows.h"
-    #include "shellapi.h"
+    #include <windows.h>
+    #include <shellapi.h>
     #define _CRT_SECURE_NO_WARNINGS
 #endif // OS
 
@@ -163,8 +164,6 @@ typedef Array(String) Array_String;
 
 #define array_count(arr) (sizeof(arr) / sizeof(*(arr)))
 #define array_size(arr) ((arr).capacity * sizeof(*((arr).data)))
-
-#define discard (void)
 
 typedef Slice(u64) Slice_u64;
 #define MapU64(type) struct { \
@@ -335,8 +334,8 @@ static void    scratch_end(Scratch scratch);
     #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
     #include <sanitizer/asan_interface.h>
 #else
-    #define asan_poison_memory_region(address, byte_count)   statement_macro( discard(address); discard(byte_count); )
-    #define asan_unpoison_memory_region(address, byte_count) statement_macro( discard(address); discard(byte_count); )
+    #define asan_poison_memory_region(address, byte_count)   statement_macro( (void)(address); (void)(byte_count); )
+    #define asan_unpoison_memory_region(address, byte_count) statement_macro( (void)(address); (void)(byte_count); )
 #endif // BUILD_ASAN
 
 structdef(Map_Result) { u64 index; void *pointer; bool is_new; };
@@ -519,6 +518,7 @@ static const u8 decimal_from_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
+static f64 f64_from_string(String s);
 static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
@@ -675,9 +675,9 @@ structdef(Platform_Common) {
 #if PLATFORM_NONE
     typedef Platform_Common Platform;
     static V2 platform_measure_text(Platform_Common *platform, String text, f32 font_size) {
-        discard platform;
-        discard text;
-        discard font_size;
+        (void)platform;
+        (void)text;
+        (void)font_size;
         panic("PLATFORM=NONE");
         return (V2){0};
     }
@@ -1561,6 +1561,37 @@ static force_inline M4 m4_transpose(M4 m) {
     return result;
 }
 
+static f64 f64_from_string(String s) {
+    f64 result = 0;
+    if (s.count == 0) return result;
+
+    bool is_negative = s.data[0] == '-';
+    s.data += is_negative;
+    s.count -= is_negative;
+
+    u64 decimal_index = 0;
+    while (decimal_index < s.count && s.data[decimal_index] != '.') decimal_index += 1;
+    String int_string = slice_range(s, 0, decimal_index);
+    f64 int_part = (f64)int_from_string_base(int_string, 10);
+
+    f64 decimal_part = 0;
+    if (decimal_index != s.count) {
+        String decimal_string = slice_range(s, decimal_index + 1, s.count);
+        u64 digit_count = decimal_string.count;
+        for (i64 i = (i64)decimal_string.count; i >= 0; i -= 1) {
+            bool trailing_zero = decimal_string.data[i] == 0;
+            digit_count -= trailing_zero;
+            if (!trailing_zero) break;
+        }
+        decimal_part = (f64)int_from_string_base(decimal_string, 10);
+        for (u64 i = 0; i < digit_count; i += 1) decimal_part *= 0.1;
+    }
+
+    result = int_part + decimal_part;
+    result *= (f64)is_negative * -2.0 + 1.0;
+    return result;
+}
+
 static u64 int_from_string_base(String s, u64 base) {
     u64 result = 0, magnitude = s.count;
     for (u64 i = 0; i < s.count; i += 1, magnitude -= 1) {
@@ -1896,8 +1927,8 @@ static Os_File_Info os_file_info(const char *relative_path) {
         }
     }
     #else
-        discard arena;
-        discard relative_path;
+        (void)arena;
+        (void)relative_path;
         panic("unimplemented");
     #endif
 
@@ -1909,7 +1940,7 @@ static bool os_make_directory(const char *relative_path, u32 mode) {
 
     #if BASE_OS == BASE_OS_WINDOWS
     {
-        discard mode;
+        (void)mode;
         BOOL win32_ok = CreateDirectoryA(relative_path, 0);
         ok = !!win32_ok;
 
@@ -1926,8 +1957,8 @@ static bool os_make_directory(const char *relative_path, u32 mode) {
     }
     #else
     {
-        discard mode;
-        discard path_as_cstring;
+        (void)mode;
+        (void)path_as_cstring;
         panic("unimplemented");
     }
     #endif
@@ -2045,7 +2076,7 @@ static void os_remove_file(const char *relative_path) {
         }
     }
     #else
-        discard path_as_cstring;
+        (void)path_as_cstring;
         panic("unimplemented");
     #endif
 }
@@ -2111,7 +2142,7 @@ static void log_internal_with_location(const char *file, u64 line, const char *f
     #if BUILD_DEBUG
         print("%s:%llu:%s(): logged here\n", file, line, func);
     #else
-        discard(file); discard(line); discard(func);
+        (void)(file); (void)(line); (void)(func);
     #endif
 }
 
@@ -2223,7 +2254,7 @@ static void os_write(String string) {
     // NOTE(felix): can't use assert in this function because panic() will call os_write, so we'll end up with a recursively failing assert and stack overflow. Instead, use `if (!condition) { breakpoint; abort(); }`
     #if BASE_OS == BASE_OS_WINDOWS
         #if WINDOWS_SUBSYSTEM_WINDOWS
-            discard(string);
+            (void)(string);
         #else
             if (string.count > UINT32_MAX) { breakpoint; os_abort(); }
 
@@ -2239,7 +2270,7 @@ static void os_write(String string) {
     #elif BASE_OS & BASE_OS_ANY_POSIX
         int stdout_handle = 1;
         i64 bytes_written = write(stdout_handle, string.data, string.count);
-        discard(bytes_written);
+        (void)(bytes_written);
 
     #else
         #error "unimplemented"
