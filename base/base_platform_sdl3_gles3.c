@@ -623,139 +623,142 @@ static void program(void) {
         glUseProgram(platform.shader_program[SP__UBER]);
         glBindVertexArray(platform.vao);
 
-        for_slice (Draw_Command *, command, platform.draw_commands) switch (command->kind) {
-            case Draw_Kind_TEXT: {
-                f32 x = command->position[0];
-                f32 y = command->position[1];
-                f32 scale = command->text.font_size / platform.font_base_scale;
+        for (u64 i = 0; i < platform.draw_commands.count; i += 1) {
+            Draw_Command *c = &platform.draw_commands.data[i];
+            switch (c->kind) {
+                case Draw_Kind_TEXT: {
+                    f32 x = command->position[0];
+                    f32 y = command->position[1];
+                    f32 scale = command->text.font_size / platform.font_base_scale;
 
-                glUseProgram(platform.shader_program[SP__TEXTURE]);
-                glBindVertexArray(platform.vao);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, font_texture);
-                glUniform1i(platform.text_u_tex, 0);
+                    glUseProgram(platform.shader_program[SP__TEXTURE]);
+                    glBindVertexArray(platform.vao);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, font_texture);
+                    glUniform1i(platform.text_u_tex, 0);
 
-                glUniform2f(platform.text_u_screen_size,
-                            platform.window_size[0],
-                            platform.window_size[1]);
+                    glUniform2f(platform.text_u_screen_size,
+                                platform.window_size[0],
+                                platform.window_size[1]);
 
-                glUniform4fv(platform.text_u_color, 1, command->color[Draw_Color_SOLID]);
+                    glUniform4fv(platform.text_u_color, 1, command->color[Draw_Color_SOLID]);
 
-                for (u64 i = 0; i < command->text.string.count; i++) {
-                    char c = command->text.string.data[i];
-                    if (c < 32 || c > 126) continue;
+                    for (u64 i = 0; i < command->text.string.count; i++) {
+                        char c = command->text.string.data[i];
+                        if (c < 32 || c > 126) continue;
 
-                    stbtt_bakedchar *b = &platform.ascii[c - 32];
+                        stbtt_bakedchar *b = &platform.ascii[c - 32];
 
-                    f32 x0 = x + b->xoff * scale;
-                    f32 y0 = y + b->yoff * scale;
-                    f32 x1 = x0 + (b->x1 - b->x0) * scale;
-                    f32 y1 = y0 + (b->y1 - b->y0) * scale;
+                        f32 x0 = x + b->xoff * scale;
+                        f32 y0 = y + b->yoff * scale;
+                        f32 x1 = x0 + (b->x1 - b->x0) * scale;
+                        f32 y1 = y0 + (b->y1 - b->y0) * scale;
 
-                    f32 max = 1.f / (f32)max_font_size;
-                    f32 u0 = b->x0 * max;
-                    f32 v0 = b->y0 * max;
-                    f32 u1 = b->x1 * max;
-                    f32 v1 = b->y1 * max;
+                        f32 max = 1.f / (f32)max_font_size;
+                        f32 u0 = b->x0 * max;
+                        f32 v0 = b->y0 * max;
+                        f32 u1 = b->x1 * max;
+                        f32 v1 = b->y1 * max;
 
-                    f32 verts[] = {
-                        x0, y0, u0, v0,
-                        x1, y0, u1, v0,
-                        x0, y1, u0, v1,
-                        x1, y1, u1, v1,
-                    };
+                        f32 verts[] = {
+                            x0, y0, u0, v0,
+                            x1, y0, u1, v0,
+                            x0, y1, u0, v1,
+                            x1, y1, u1, v1,
+                        };
 
-                    glBindBuffer(GL_ARRAY_BUFFER, platform.text_vbo);
-                    glBufferData(GL_ARRAY_BUFFER, sizeof verts, verts, GL_DYNAMIC_DRAW);
+                        glBindBuffer(GL_ARRAY_BUFFER, platform.text_vbo);
+                        glBufferData(GL_ARRAY_BUFFER, sizeof verts, verts, GL_DYNAMIC_DRAW);
 
-                    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(f32)*4, (void*)0);
-                    glEnableVertexAttribArray(0);
-                    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(f32)*4, (void*)(8));
-                    glEnableVertexAttribArray(1);
+                        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(f32)*4, (void*)0);
+                        glEnableVertexAttribArray(0);
+                        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(f32)*4, (void*)(8));
+                        glEnableVertexAttribArray(1);
 
-                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-                    x += b->xadvance * scale;
-                }
-            } break;
-            case Draw_Kind_RECTANGLE: {
-                assert(command->rectangle.size[0] >= 0);
-                assert(command->rectangle.size[1] >= 0);
+                        x += b->xadvance * scale;
+                    }
+                } break;
+                case Draw_Kind_RECTANGLE: {
+                    assert(command->rectangle.size[0] >= 0);
+                    assert(command->rectangle.size[1] >= 0);
 
-                f32 pivot[2] = {0};
-                if (v_equals_(command->rectangle.pivot, (f32[2]){0}, 2)) {
-                    f32 add[2]; v_copy(add, command->rectangle.size);
-                    v_scale(add, 0.5f);
-                    v_copy(pivot, command->position);
-                    v_add(pivot, add);
-                } else {
-                    v_copy(pivot, command->rectangle.pivot);
-                }
+                    f32 pivot[2] = {0};
+                    if (v_equals_(command->rectangle.pivot, (f32[2]){0}, 2)) {
+                        f32 add[2]; v_copy(add, command->rectangle.size);
+                        v_scale(add, 0.5f);
+                        v_copy(pivot, command->position);
+                        v_add(pivot, add);
+                    } else {
+                        v_copy(pivot, command->rectangle.pivot);
+                    }
 
-                M3 model_m3 = m3_from_rotation(command->rectangle.rotation_radians, pivot);
-                M3 inv_m3   = m3_inverse(model_m3);
+                    M3 model_m3 = m3_from_rotation(command->rectangle.rotation_radians, pivot);
+                    M3 inv_m3   = m3_inverse(model_m3);
 
-                uniforms_cpu.model = m4_from_top_left_m3(model_m3);
-                uniforms_cpu.inverse_model = m4_from_top_left_m3(inv_m3);
+                    uniforms_cpu.model = m4_from_top_left_m3(model_m3);
+                    uniforms_cpu.inverse_model = m4_from_top_left_m3(inv_m3);
 
-                uniforms_cpu.kind = 0;
+                    uniforms_cpu.kind = 0;
 
-                v_copy(uniforms_cpu.top_left_pixels, command->position);
+                    v_copy(uniforms_cpu.top_left_pixels, command->position);
 
-                v_copy(uniforms_cpu.bottom_right_pixels, command->position);
-                v_add(uniforms_cpu.bottom_right_pixels, command->rectangle.size);
+                    v_copy(uniforms_cpu.bottom_right_pixels, command->position);
+                    v_add(uniforms_cpu.bottom_right_pixels, command->rectangle.size);
 
-                uniforms_cpu.border_data[0] = command->rectangle.border_width;
-                uniforms_cpu.border_data[1] = command->rectangle.border_radius;
+                    uniforms_cpu.border_data[0] = command->rectangle.border_width;
+                    uniforms_cpu.border_data[1] = command->rectangle.border_radius;
 
-                f32 (*c)[4] = command->color;
+                    f32 (*c)[4] = command->color;
 
-                v_copy_(uniforms_cpu.color, c[Draw_Color_SOLID], 4);
-                v_copy_(uniforms_cpu.bottom_left_color,
-                        command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
-                        4);
-                v_copy_(uniforms_cpu.bottom_right_color,
-                        command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
-                        4);
-                v_copy_(uniforms_cpu.top_right_color,
-                        command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
-                        4);
-                v_copy(uniforms_cpu.border_color, command->rectangle.border_color);
+                    v_copy_(uniforms_cpu.color, c[Draw_Color_SOLID], 4);
+                    v_copy_(uniforms_cpu.bottom_left_color,
+                            command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
+                            4);
+                    v_copy_(uniforms_cpu.bottom_right_color,
+                            command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
+                            4);
+                    v_copy_(uniforms_cpu.top_right_color,
+                            command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
+                            4);
+                    v_copy(uniforms_cpu.border_color, command->rectangle.border_color);
 
-                glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof uniforms_cpu, &uniforms_cpu);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-            } break;
+                    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof uniforms_cpu, &uniforms_cpu);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                } break;
 
-            case Draw_Kind_QUADRILATERAL: {
-                uniforms_cpu.model = m4_fill_diagonal(1.f);
-                uniforms_cpu.inverse_model = m4_fill_diagonal(1.f);
-                uniforms_cpu.kind = 1;
+                case Draw_Kind_QUADRILATERAL: {
+                    uniforms_cpu.model = m4_fill_diagonal(1.f);
+                    uniforms_cpu.inverse_model = m4_fill_diagonal(1.f);
+                    uniforms_cpu.kind = 1;
 
-                v_copy(uniforms_cpu.quad_top_left,     command->quadrilateral[Draw_Corner_TOP_LEFT]);
-                v_copy(uniforms_cpu.quad_bottom_left,  command->quadrilateral[Draw_Corner_BOTTOM_LEFT]);
-                v_copy(uniforms_cpu.quad_bottom_right, command->quadrilateral[Draw_Corner_BOTTOM_RIGHT]);
-                v_copy(uniforms_cpu.quad_top_right,    command->quadrilateral[Draw_Corner_TOP_RIGHT]);
+                    v_copy(uniforms_cpu.quad_top_left,     command->quadrilateral[Draw_Corner_TOP_LEFT]);
+                    v_copy(uniforms_cpu.quad_bottom_left,  command->quadrilateral[Draw_Corner_BOTTOM_LEFT]);
+                    v_copy(uniforms_cpu.quad_bottom_right, command->quadrilateral[Draw_Corner_BOTTOM_RIGHT]);
+                    v_copy(uniforms_cpu.quad_top_right,    command->quadrilateral[Draw_Corner_TOP_RIGHT]);
 
-                f32 (*c)[4] = command->color;
+                    f32 (*c)[4] = command->color;
 
-                v_copy_(uniforms_cpu.color, c[Draw_Color_SOLID], 4);
-                v_copy_(uniforms_cpu.bottom_left_color,
-                        command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
-                        4);
-                v_copy_(uniforms_cpu.bottom_right_color,
-                        command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
-                        4);
-                v_copy_(uniforms_cpu.top_right_color,
-                        command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
-                        4);
+                    v_copy_(uniforms_cpu.color, c[Draw_Color_SOLID], 4);
+                    v_copy_(uniforms_cpu.bottom_left_color,
+                            command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID],
+                            4);
+                    v_copy_(uniforms_cpu.bottom_right_color,
+                            command->gradient ? c[Draw_Color_BOTTOM_RIGHT] : c[Draw_Color_SOLID],
+                            4);
+                    v_copy_(uniforms_cpu.top_right_color,
+                            command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID],
+                            4);
 
-                v_copy(uniforms_cpu.border_color, command->rectangle.border_color);
+                    v_copy(uniforms_cpu.border_color, command->rectangle.border_color);
 
-                glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof uniforms_cpu, &uniforms_cpu);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-            } break;
+                    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof uniforms_cpu, &uniforms_cpu);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                } break;
 
-            default: unreachable;
+                default: unreachable;
+            }
         }
 
         SDL_GL_SwapWindow(platform.window);

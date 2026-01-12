@@ -115,47 +115,50 @@ static void program(void) {
         BeginDrawing();
         ClearBackground(clear);
 
-        for_slice (Draw_Command *, c, platform.draw_commands) switch (c->kind) {
-            case Draw_Kind_TEXT: {
-                const char *as_cstring = cstring_from_string(scratch.arena, c->text.string);
-                Color color = rl_color_from_v4(*c->color);
-                DrawTextEx(platform.rl_font, as_cstring, *(Vector2 *)c->position, c->text.font_size, 1.f, color);
-            } break;
-            case Draw_Kind_RECTANGLE: {
-                // TODO(felix): support border
+        for (u64 i = 0; i < platform.draw_commands.count; i += 1) {
+            Draw_Command *c = &platform.draw_commands.data[i];
+            switch (c->kind) {
+                case Draw_Kind_TEXT: {
+                    const char *as_cstring = cstring_from_string(scratch.arena, c->text.string);
+                    Color color = rl_color_from_v4(*c->color);
+                    DrawTextEx(platform.rl_font, as_cstring, *(Vector2 *)c->position, c->text.font_size, 1.f, color);
+                } break;
+                case Draw_Kind_RECTANGLE: {
+                    // TODO(felix): support border
 
-                assert(c->rectangle.size[0] >= 0);
-                assert(c->rectangle.size[1] >= 0);
+                    assert(c->rectangle.size[0] >= 0);
+                    assert(c->rectangle.size[1] >= 0);
 
-                Rectangle rectangle = {
-                    .x = c->position[0],
-                    .y = c->position[1],
-                    .width = c->rectangle.size[0],
-                    .height = c->rectangle.size[1],
-                };
-                Color top_left_color = rl_color_from_v4(c->color[Draw_Color_TOP_LEFT]);
-                Color bottom_left_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_LEFT]) : top_left_color;
-                Color top_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_TOP_RIGHT]) : top_left_color;
-                Color bottom_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_RIGHT]) : top_left_color;
-                DrawRectangleGradientEx(rectangle, top_left_color, bottom_left_color, top_right_color, bottom_right_color);
-            } break;
-            case Draw_Kind_QUADRILATERAL: {
-                // TODO(felix): support actual quad, not just rectangle
+                    Rectangle rectangle = {
+                        .x = c->position[0],
+                        .y = c->position[1],
+                        .width = c->rectangle.size[0],
+                        .height = c->rectangle.size[1],
+                    };
+                    Color top_left_color = rl_color_from_v4(c->color[Draw_Color_TOP_LEFT]);
+                    Color bottom_left_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_LEFT]) : top_left_color;
+                    Color top_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_TOP_RIGHT]) : top_left_color;
+                    Color bottom_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_RIGHT]) : top_left_color;
+                    DrawRectangleGradientEx(rectangle, top_left_color, bottom_left_color, top_right_color, bottom_right_color);
+                } break;
+                case Draw_Kind_QUADRILATERAL: {
+                    // TODO(felix): support actual quad, not just rectangle
 
-                Rectangle rectangle = {
-                    .x = c->quadrilateral[Draw_Corner_TOP_LEFT][0],
-                    .y = c->quadrilateral[Draw_Corner_TOP_LEFT][1],
-                };
-                rectangle.width = c->quadrilateral[Draw_Corner_BOTTOM_RIGHT][0] - rectangle.x;
-                rectangle.height = c->quadrilateral[Draw_Corner_BOTTOM_RIGHT][1] - rectangle.y;
+                    Rectangle rectangle = {
+                        .x = c->quadrilateral[Draw_Corner_TOP_LEFT][0],
+                        .y = c->quadrilateral[Draw_Corner_TOP_LEFT][1],
+                    };
+                    rectangle.width = c->quadrilateral[Draw_Corner_BOTTOM_RIGHT][0] - rectangle.x;
+                    rectangle.height = c->quadrilateral[Draw_Corner_BOTTOM_RIGHT][1] - rectangle.y;
 
-                Color top_left_color = rl_color_from_v4(c->color[Draw_Color_TOP_LEFT]);
-                Color bottom_left_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_LEFT]) : top_left_color;
-                Color top_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_TOP_RIGHT]) : top_left_color;
-                Color bottom_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_RIGHT]) : top_left_color;
-                DrawRectangleGradientEx(rectangle, top_left_color, bottom_left_color, top_right_color, bottom_right_color);
-            } break;
-            default: unreachable;
+                    Color top_left_color = rl_color_from_v4(c->color[Draw_Color_TOP_LEFT]);
+                    Color bottom_left_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_LEFT]) : top_left_color;
+                    Color top_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_TOP_RIGHT]) : top_left_color;
+                    Color bottom_right_color = c->gradient ? rl_color_from_v4(c->color[Draw_Color_BOTTOM_RIGHT]) : top_left_color;
+                    DrawRectangleGradientEx(rectangle, top_left_color, bottom_left_color, top_right_color, bottom_right_color);
+                } break;
+                default: unreachable;
+            }
         }
 
         EndDrawing();
