@@ -188,20 +188,8 @@ static void sokol_init(void *user_data) {
             .height = atlas_dimension,
         });
 
-        // TODO(felix): embed via metaprogram
-        String font_ttf_file = {0};
-        #if BASE_OS == BASE_OS_EMSCRIPTEN
-        {
-            #include "inter.c"
-            font_ttf_file.data = (u8 *)inter_ttf_bytes;
-            font_ttf_file.count = sizeof inter_ttf_bytes;
-        }
-        #else
-        {
-            font_ttf_file = os_read_entire_file(platform->base.persistent_arena, "deps/Inter-4.1/InterVariable.ttf");
-        }
-        #endif
-        assert(font_ttf_file.count != 0);
+        String font_ttf_file = { .data = (u8 *)font_ttf_chars, .count = font_ttf_size };
+
         platform->font_id = fonsAddFontMem(platform->fontstash_context, "sans", font_ttf_file.data, (i32)font_ttf_file.count, false);
         fonsSetFont(platform->fontstash_context, platform->font_id);
     }

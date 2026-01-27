@@ -717,6 +717,7 @@ cpu_draw_Font cpu_draw_default_font = {
     #include <math.h>
     #define CPU_DRAW_SINF sinf
     #define CPU_DRAW_COSF cosf
+    #define CPU_DRAW_ROUNDF roundf
 #endif
 
 #define CPU_DRAW__SWAP(a, b) do {\
@@ -731,7 +732,7 @@ cpu_draw_Font cpu_draw_default_font = {
 CPU_DRAW_FUNCTION void cpu_draw_line(cpu_draw_Surface surface, int start_x, int start_y, int end_x, int end_y, unsigned color) {
     // Reference: https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
 
-    _Bool steep = CPU_DRAW__ABS(end_y - start_y) >= CPU_DRAW__ABS(end_x - start_x);
+    _Bool steep = CPU_DRAW__ABS(end_y - start_y) > CPU_DRAW__ABS(end_x - start_x);
     if (steep) {
         _Bool bottom_to_top = start_y > end_y;
         if (bottom_to_top) {
@@ -796,6 +797,11 @@ CPU_DRAW_FUNCTION void cpu_draw_pixel_if_in_bounds(cpu_draw_Surface surface, int
 }
 
 CPU_DRAW_FUNCTION void cpu_draw_rectangle(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned color) {
+    left = CPU_DRAW__MAX(left, 0);
+    right = CPU_DRAW__MIN(right + 1, surface.width);
+    top = CPU_DRAW__MAX(top, 0);
+    bottom = CPU_DRAW__MIN(bottom + 1, surface.height);
+
     int row = top * surface.stride;
     for (int y = top; y < bottom; y += 1, row += surface.stride) {
         for (int x = left; x < right; x += 1) {
@@ -818,7 +824,7 @@ static inline cpu_draw__V2 cpu_draw__v2_rotate(cpu_draw__V2 v, float radians) {
     float x = vx * cos_angle - vy * sin_angle;
     float y = vx * sin_angle + vy * cos_angle;
 
-    cpu_draw__V2 result = { .x = (int)(x + 0.5f), .y = (int)(y + 0.5f) };
+    cpu_draw__V2 result = { .x = (int)CPU_DRAW_ROUNDF(x), .y = (int)CPU_DRAW_ROUNDF(y) };
     return result;
 }
 static inline cpu_draw__V2 cpu_draw__v2_sub(cpu_draw__V2 b, cpu_draw__V2 a) {
@@ -827,11 +833,6 @@ static inline cpu_draw__V2 cpu_draw__v2_sub(cpu_draw__V2 b, cpu_draw__V2 a) {
 }
 
 CPU_DRAW_FUNCTION void cpu_draw_rectangle_rotated(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned color, float radians, int pivot_x, int pivot_y) {
-    if (radians == 0) {
-        cpu_draw_rectangle(surface, left, top, right, bottom, color);
-        return;
-    }
-
     enum { TOP_LEFT, BOTTOM_LEFT, BOTTOM_RIGHT, TOP_RIGHT };
     cpu_draw__V2 corners[4] = {
         [TOP_LEFT] = { .x = left, .y = top },
@@ -869,7 +870,7 @@ CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, cpu_draw_Font fon
         int spacing = 1; // TODO(felix): configurable
 
         if (only_measure_width != 0) {
-            *only_measure_width += glyph.width + spacing;
+            *only_measure_width += glyph.width + !(i + 1 == length) * spacing;
         } else {
             for (int row = 0; row < font.height; row += 1) {
                 int y = top + row;
@@ -902,15 +903,16 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle(cpu_draw_Surface surface, int ax, int a
     if (bound_max_y < 0 || surface.height <= bound_min_y) return;
 
     float total_area = cpu_draw__signed_triangle_area(ax, ay, bx, by, cx, cy);
+    if (total_area == 0) return;
     float reciprocal_total_area = 1.f / total_area;
 
     bound_min_x = CPU_DRAW__MAX(0, bound_min_x);
     bound_min_y = CPU_DRAW__MAX(0, bound_min_y);
-    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x);
-    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y);
+    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x + 1);
+    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y + 1);
 
-    for (int x = bound_min_x; x <= bound_max_x; x += 1) {
-        for (int y = bound_min_y; y <= bound_max_y; y += 1) {
+    for (int x = bound_min_x; x < bound_max_x; x += 1) {
+        for (int y = bound_min_y; y < bound_max_y; y += 1) {
             float alpha = cpu_draw__signed_triangle_area(x, y, bx, by, cx, cy) * reciprocal_total_area;
             float beta = cpu_draw__signed_triangle_area(x, y, cx, cy, ax, ay) * reciprocal_total_area;
             float gamma = cpu_draw__signed_triangle_area(x, y, ax, ay, bx, by) * reciprocal_total_area;
@@ -924,11 +926,6 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle(cpu_draw_Surface surface, int ax, int a
 }
 
 CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, int ax, int ay, int bx, int by, int cx, int cy, unsigned acolor, unsigned bcolor, unsigned ccolor) {
-    if (acolor == bcolor && bcolor == ccolor) {
-        cpu_draw_triangle(surface, ax, ay, bx, by, cx, cy, acolor);
-        return;
-    }
-
     int bound_min_x = CPU_DRAW__MIN(CPU_DRAW__MIN(ax, bx), cx);
     int bound_min_y = CPU_DRAW__MIN(CPU_DRAW__MIN(ay, by), cy);
     int bound_max_x = CPU_DRAW__MAX(CPU_DRAW__MAX(ax, bx), cx);
@@ -938,6 +935,7 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
     if (bound_max_y < 0 || surface.height <= bound_min_y) return;
 
     float total_area = cpu_draw__signed_triangle_area(ax, ay, bx, by, cx, cy);
+    if (total_area == 0) return;
     float reciprocal_total_area = 1.f / total_area;
 
     unsigned colors[3] = { acolor, bcolor, ccolor };
@@ -951,11 +949,11 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
 
     bound_min_x = CPU_DRAW__MAX(0, bound_min_x);
     bound_min_y = CPU_DRAW__MAX(0, bound_min_y);
-    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x);
-    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y);
+    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x + 1);
+    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y + 1);
 
-    for (int x = bound_min_x; x <= bound_max_x; x += 1) {
-        for (int y = bound_min_y; y <= bound_max_y; y += 1) {
+    for (int x = bound_min_x; x < bound_max_x; x += 1) {
+        for (int y = bound_min_y; y < bound_max_y; y += 1) {
             float alpha = cpu_draw__signed_triangle_area(x, y, bx, by, cx, cy) * reciprocal_total_area;
             float beta = cpu_draw__signed_triangle_area(x, y, cx, cy, ax, ay) * reciprocal_total_area;
             float gamma = cpu_draw__signed_triangle_area(x, y, ax, ay, bx, by) * reciprocal_total_area;

@@ -19,6 +19,7 @@ struct Platform {
 #define CPU_DRAW_FUNCTION static
 #define CPU_DRAW_SINF sinf
 #define CPU_DRAW_COSF cosf
+#define CPU_DRAW_ROUNDF roundf
 #include "cpu_draw.h"
 
 static V2 platform_measure_text(Platform_Base *platform, String text, f32 font_size) {
@@ -266,21 +267,21 @@ static void program(void) {
                     i32 top = (i32)c->position.y;
                     i32 width = (i32)c->rectangle.size.x;
                     i32 height = (i32)c->rectangle.size.y;
-
-                    i32 bottom = CLAMP(top + height, 0, virtual_height);
-                    i32 right = CLAMP(left + width, 0, virtual_width);
-                    top = CLAMP(top, 0, virtual_height - 1);
-                    left = CLAMP(left, 0, virtual_width - 1);
+                    i32 bottom = top + height;
+                    i32 right = left + width;
 
                     f32 theta = c->rectangle.rotation_radians;
+                    if (theta == 0) {
+                        cpu_draw_rectangle(surface, left, top, right, bottom, argb);
+                    } else {
+                        V2 pivot = {0};
+                        if (v2_equals(c->rectangle.pivot, (V2){0})) {
+                            V2 add = v2_scale(c->rectangle.size, 0.5f);
+                            pivot = v2_add(c->position, add);
+                        } else pivot = c->rectangle.pivot;
 
-                    V2 pivot = {0};
-                    if (v2_equals(c->rectangle.pivot, (V2){0})) {
-                        V2 add = v2_scale(c->rectangle.size, 0.5f);
-                        pivot = v2_add(c->position, add);
-                    } else pivot = c->rectangle.pivot;
-
-                    cpu_draw_rectangle_rotated(surface, left, top, right, bottom, argb, theta, (int)pivot.x, (int)pivot.y);
+                        cpu_draw_rectangle_rotated(surface, left, top, right, bottom, argb, theta, (int)pivot.x, (int)pivot.y);
+                    }
                 } break;
                 case Draw_Kind_QUADRILATERAL: {
                     int coordinates[2 * Draw_Corner_COUNT] = {0};
@@ -296,14 +297,19 @@ static void program(void) {
                     int *br = &coordinates[Draw_Corner_BOTTOM_RIGHT * 2];
                     int *tr = &coordinates[Draw_Corner_TOP_RIGHT * 2];
 
+                    bool gradient = false;
+                    u32 tl_color = argb;
+                    u32 bl_color = argb;
+                    u32 br_color = argb;
+                    u32 tr_color = argb;
                     if (c->gradient) {
-                        u32 tl_color = argb;
-                        u32 bl_color = argb;
-                        u32 br_color = argb;
-                        u32 tr_color = argb;
                         bl_color = platform__argb_from_rgba(c->color[Draw_Color_BOTTOM_LEFT]);
                         br_color = platform__argb_from_rgba(c->color[Draw_Color_BOTTOM_RIGHT]);
                         tr_color = platform__argb_from_rgba(c->color[Draw_Color_TOP_RIGHT]);
+                        gradient = tl_color != bl_color || bl_color != br_color || br_color != tr_color || tr_color != tl_color;
+                    }
+
+                    if (gradient) {
                         cpu_draw_triangle_interpolate(surface, tl[0], tl[1], bl[0], bl[1], br[0], br[1], tl_color, bl_color, br_color);
                         cpu_draw_triangle_interpolate(surface, tl[0], tl[1], br[0], br[1], tr[0], tr[1], tl_color, br_color, tr_color);
                     } else {

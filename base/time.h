@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-01-08
+// https://github.com/felix-u 2026-01-20
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(TIME_H)
@@ -18,6 +18,8 @@
             #pragma comment(lib, "Kernel32.lib")
         #endif
         #include <windows.h>
+    #elif defined(TIME_OS_POSIX)
+        #include <time.h>
     #endif
 #endif
 
@@ -50,6 +52,13 @@ TIME_FUNCTION double time_now(void) {
         LARGE_INTEGER ticks = {0};
         QueryPerformanceCounter(&ticks);
         result = (f64)ticks.QuadPart / (double)(ticks_per_second.QuadPart);
+    }
+    #elif defined(TIME_OS_POSIX)
+    {
+        struct timespec spec = {0};
+        clock_gettime(CLOCK_REALTIME, &spec);
+        double nanoseconds = (double)spec.tv_nsec;
+        result = (double)spec.tv_sec + nanoseconds * 0.000001;
     }
     #else
         #error "UNIMPLEMENTED"

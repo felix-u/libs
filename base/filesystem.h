@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-01-12
+// https://github.com/felix-u 2026-01-20
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(FILESYSTEM_H)
@@ -33,7 +33,7 @@ typedef enum {
 
 FILESYSTEM_FUNCTION              _Bool fs_close(fs_File file);
 FILESYSTEM_FUNCTION               void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size);
-FILESYSTEM_FUNCTION              _Bool fs_file_exists(const char *path);
+FILESYSTEM_FUNCTION              _Bool fs_exists(const char *path);
 FILESYSTEM_FUNCTION            fs_File fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size);
 FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path);
 FILESYSTEM_FUNCTION              _Bool fs_file_write(fs_File file, void *bytes, unsigned long long size);
@@ -107,10 +107,23 @@ FILESYSTEM_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsign
     #endif
 }
 
-FILESYSTEM_FUNCTION _Bool fs_file_exists(const char *path) {
-    fs_File file = fs_open(path, 0);
-    _Bool exists = file.handle != 0;
-    if (exists) fs_close(file);
+FILESYSTEM_FUNCTION _Bool fs_exists(const char *path) {
+    _Bool exists = 0;
+
+    #if defined(FS_OS_WINDOWS)
+    {
+        unsigned long attributes = GetFileAttributesA(path);
+        exists = attributes != INVALID_FILE_ATTRIBUTES;
+    }
+    #elif defined(FS_OS_POSIX)
+    {
+        struct stat status = {0};
+        exists = stat(path, &status) == 0;
+    }
+    #else
+        #error "UNSUPPORTED OS"
+    #endif
+
     return exists;
 }
 
@@ -188,8 +201,7 @@ FILESYSTEM_FUNCTION _Bool fs_make_directory(const char *relative_path) {
 
     #if defined(FS_OS_WINDOWS)
     {
-        BOOL win32_ok = CreateDirectoryA(relative_path, 0);
-        ok = !!win32_ok;
+        ok = !!CreateDirectoryA(relative_path, 0);
     }
     #elif defined(FS_OS_POSIX)
     {
@@ -227,9 +239,7 @@ FILESYSTEM_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
         if (read) mode = "rb";
         if (write) mode = "wb";
         FILE *handle = fopen(path, mode);
-
-        if (handle == 0) result.error = fs_Error_UNKNOWN;
-        else result.handle = handle;
+        result.handle = handle;
     }
     #else
         #error "UNSUPPORTED OS"
@@ -270,8 +280,7 @@ FILESYSTEM_FUNCTION _Bool fs_remove_file(const char *relative_path) {
 
     #if defined(FS_OS_WINDOWS)
     {
-        int ok_bool = DeleteFileA(relative_path);
-        ok = !!ok_bool;
+        ok = !!DeleteFileA(relative_path);
     }
     #elif defined(FS_OS_POSIX)
     {

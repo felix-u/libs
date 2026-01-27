@@ -195,14 +195,17 @@ define_container_types(ipointer)
     breakpoint; os_abort(); \
 } while (0)
 
-static void reserve_(Array_void *a, u64 item_size, u64 new_capacity, bool zero);
-#define reserve(a, c) do { \
+static void reserve_exactly_(Array_void *a, u64 item_size, u64 new_capacity, bool zero);
+static u64 grow_capacity(u64 current, u64 minimum);
+#define reserve(a, c) reserve_exactly((a), grow_capacity((a)->capacity, (c)))
+#define reserve_exactly(a, c) do { \
     static_assert(sizeof *(a) == sizeof(Array(void)), "parameter must point to an Array(T)"); \
-    reserve_((Array_void *)(a), sizeof *((a)->data), (c), true); \
+    reserve_exactly_((Array_void *)(a), sizeof *((a)->data), (c), true); \
 } while (0)
 #define reserve_unused(a, c) reserve((a), (a)->count + (c))
+#define reserve_unused_exactly(a, c) reserve_exactly((a), (a)->count + (c))
 #define push(a, o) do { \
-    reserve((a), (a)->count * 2 + !(a)->count); \
+    reserve_unused((a), 1); \
     (a)->data[(a)->count++] = (o); \
 } while (0)
 #define push_assume_capacity(a, o) do { \
@@ -483,6 +486,12 @@ static void log_internal_with_location(const char *file, u64 line, const char *f
 static void print(const char *format, ...);
 static void print_(const char *format, va_list arguments);
 
+#define CLEX_FUNCTION static
+#include "base/clex.h"
+
+#define OBJECT_FUNCTION static
+#include "base/object_files.h"
+
 typedef enum {
     Build_Compiler_MSVC,
     Build_Compiler_CLANG,
@@ -656,7 +665,7 @@ typedef enum {
     Ui_Color_COUNT,
 } Ui_Color;
 
-structdef(Ui_Box_Style) {
+structdef(Ui_Style) {
     f32 font_size;
     V2 inner_padding;
     V2 child_gap;
@@ -667,15 +676,15 @@ structdef(Ui_Box_Style) {
 };
 
 typedef enum {
-    Ui_Box_Style_Kind_INACTIVE,
-    Ui_Box_Style_Kind_HOVERED,
-    Ui_Box_Style_Kind_CLICKED,
+    Ui_Style_Kind_INACTIVE,
+    Ui_Style_Kind_HOVERED,
+    Ui_Style_Kind_CLICKED,
 
-    Ui_Box_Style_Kind_COUNT,
-} Ui_Box_Style_Kind;
+    Ui_Style_Kind_COUNT,
+} Ui_Style_Kind;
 
-structdef(Ui_Box_Style_Set) {
-    Ui_Box_Style kinds[Ui_Box_Style_Kind_COUNT];
+structdef(Ui_Style_Set) {
+    Ui_Style kinds[Ui_Style_Kind_COUNT];
 };
 
 typedef u32 Ui_Box_Id;
@@ -696,15 +705,15 @@ structdef(Ui_Box) {
     // frame data computed
     bool hovered, clicked; // interaction
     Ui_Box_Rectangle target_rectangle;
-    Ui_Box_Style_Set target_style_set;
+    Ui_Style_Set target_style_set;
 
     // cached data
     String hash_string;
 
     // cached data computed
     Ui_Box_Rectangle display_rectangle;
-    Ui_Box_Style display_style;
-    Ui_Box_Style_Kind target_style_kind;
+    Ui_Style display_style;
+    Ui_Style_Kind target_style_kind;
 };
 
 typedef Ui_Box *Ui_Box_Pointer;
@@ -724,7 +733,7 @@ structdef(Ui) {
     Ui_Box *current_parent;
 
     struct {
-        Ui_Box_Style_Set stack[UI_MAX_BOX_COUNT];
+        Ui_Style_Set stack[UI_MAX_BOX_COUNT];
         u64 count;
     } style;
 
@@ -744,7 +753,7 @@ static   void  ui_pop_parent(Ui *ui);
 #define ui_style(ui) ui_defer_loop(ui_push_style(ui), ui_pop_style(ui))
 
 static             void  ui_pop_style(Ui *ui);
-static Ui_Box_Style_Set *ui_push_style(Ui *ui);
+static Ui_Style_Set *ui_push_style(Ui *ui);
 static           Ui_Box *ui_push(Ui *ui, bool parent, Ui_Box_Flags flags, const char *format, ...);
 static           Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *format, va_list arguments);
 static           Ui_Box *ui_text(Ui *ui, const char *format, ...);
@@ -908,10 +917,12 @@ static inline bool ascii_is_hexadecimal(u8 c) { return ('0' <= c && c <= '9') ||
 
 static inline bool ascii_is_whitespace(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
 
-static void reserve_(Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
+static void reserve_exactly_(Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
     if (a->capacity >= new_capacity) return;
 
     u64 byte_count = new_capacity * item_size;
+    assert(byte_count >= new_capacity); // overflow
+
     void *raw = arena_make_(a->arena, byte_count, 1, false);
     memcpy(raw, a->data, a->count * item_size);
 
@@ -923,6 +934,14 @@ static void reserve_(Array_void *a, u64 item_size, u64 new_capacity, bool zero) 
 
     a->data = raw;
     a->capacity = new_capacity;
+}
+
+static u64 grow_capacity(u64 current, u64 minimum) {
+    if (current >= minimum) return current;
+    if (minimum >= 0x7fffffffffffffff) return minimum;
+    current += !current;
+    while (current < minimum) current *= 2;
+    return current;
 }
 
 static Arena arena_from_memory(u8 *bytes, u64 count) {
@@ -1561,6 +1580,9 @@ static u64 int_from_string_base(String s, u64 base) {
 #define STR_ASSERT assert
 #include "str.h"
 
+#if defined(TIME_OS_POSIX)
+    #include <time.h>
+#endif
 #define TIME_IMPLEMENTATION
 #include "time.h"
 
@@ -1805,7 +1827,7 @@ static String string_builder_string(String_Builder builder) {
 
 static inline void string_builder_null_terminate(String_Builder *builder) {
     // Avoid push(0) because we don't want to increase the string length
-    reserve_unused(builder, 1);
+    reserve_unused_exactly(builder, 1);
     builder->data[builder->count] = 0;
 }
 
@@ -2023,6 +2045,14 @@ static void print_(const char *format, va_list arguments) {
     scratch_end(temp);
 }
 
+#define CLEX_IMPLEMENTATION
+#define CLEX_ASSERT assert
+#include "base/clex.h"
+
+#define OBJECT_IMPLEMENTATION
+#define OBJECT_ASSERT assert
+#include "base/object_files.h"
+
 #define BUILD_FLAGS_MAX 16
 
 static const char *build_compiler_initial_command[Build_Compiler_COUNT][BUILD_FLAGS_MAX] = {
@@ -2196,7 +2226,31 @@ static void build_push_arguments(Array_cstring *strings, const char **arguments)
     for (const char **a = arguments; *a != 0; a += 1) push(strings, *a);
 }
 
-// TODO(felix): remove PDB on windows (MSVC incremental PDB info is broken and -incremental:no seems not to work)
+static String string_from_clex_data(clex_Data data) {
+    String result = { .data = (u8 *)data.start, .count = (u64)(data.end - data.start) };
+    return result;
+}
+
+static bool build_expect_include(clex_Lexer *lexer, String *file) {
+    clex_lex(lexer);
+    String token_data = string_from_clex_data(lexer->token.data);
+    bool ok = lexer->token.kind == clex_Token_PREPROCESSOR_DIRECTIVE;
+    ok = ok && string_equals(token_data, string("include"));
+    if (!ok) {
+        log_error("expected `#include`");
+        return false;
+    }
+
+    clex_Lexer include = clex_init(lexer->token.data2.start, lexer->token.data2.end, 0);
+    clex_lex(&include);
+    if (include.token.kind != clex_Token_STRING) {
+        log_error("expected string after `#include`");
+        return false;
+    }
+    *file = string_from_clex_data(include.token.data);
+    return true;
+}
+
 static u32 build_default_everything(Arena arena, const char *program_name, u8 target_os) {
     Scratch scratch = scratch_begin(&arena);
 
@@ -2212,25 +2266,232 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     u8 path_separator = (BASE_OS & BASE_OS_ANY_POSIX) ? '/' : '\\';
     String dependency_directory = string_print(&arena, "..%cdeps", path_separator);
 
-    String platform = {0};
-    String code = os_read_entire_file(scratch.arena, &c_file_path[3]);
-    String needle = string("meta(platform = ");
-    for (u64 i = 0; i < code.count; i += 1) {
-        String range = string_range(code, i, code.count);
-        if (!string_starts_with(range, needle)) continue;
+    Array_cstring platform_objects = { .arena = scratch.arena };
 
-        bool commented = false;
-        for (u64 j = i - 1; j > 1 && code.data[j] != '\n'; j -= 1) {
-            commented = code.data[j] == '/' && code.data[j - 1] == '/';
-            if (commented) break;
+    const char *build_directory = "build";
+    bool build_directory_ok = fs_exists(build_directory);
+    if (!build_directory_ok) {
+        build_directory_ok = fs_make_directory(build_directory);
+        if (!build_directory_ok) {
+            log_error("failure creating directory '%s'", build_directory);
         }
-        if (commented) continue;
+    }
 
-        u64 start = i + needle.count;
-        u64 end = start + 1;
-        while (code.data[end] != ')') end += 1;
-        platform = string_range(code, start, end);
-        break;
+    const char *code_path = &c_file_path[3];
+    String platform = {0};
+    String code = os_read_entire_file(scratch.arena, code_path);
+
+    String_Builder metaprogram_code = { .arena = &arena };
+    String metaprogram_output_file = {0};
+
+    clex_Lexer lexer = clex_init((const char *)code.data, (const char *)&code.data[code.count], 0);
+    while (clex_lex(&lexer)) {
+        if (lexer.token.kind != clex_Token_IDENTIFIER) continue;
+
+        String token_data = string_from_clex_data(lexer.token.data);
+        if (!string_equals(token_data, string("meta"))) continue;
+
+        clex_lex(&lexer);
+        if (lexer.token.kind != '(') continue;
+
+        clex_lex(&lexer);
+        if (lexer.token.kind != clex_Token_IDENTIFIER) {
+            log_error("expected directive at start of `meta(...)` section");
+            return 1;
+        }
+        token_data = string_from_clex_data(lexer.token.data);
+
+        if (string_equals(token_data, string("platform"))) {
+            if (platform.count != 0) {
+                log_error("directive `meta(platform)` can only be used once");
+                return 1;
+            }
+
+            clex_lex(&lexer);
+            if (lexer.token.kind != ')') {
+                log_error("expected ')' closing meta(...) block");
+                return 1;
+            }
+
+            String file = {0};
+            if (!build_expect_include(&lexer, &file)) return 1;
+
+            u64 slash = 0;
+            while (slash < file.count && file.data[slash] != '/') slash += 1;
+            if (slash != file.count) file = string_range(file, slash + 1, file.count);
+
+            u64 dot = 0;
+            while (dot < file.count && file.data[dot] != '.') dot += 1;
+            if (dot != file.count) file = string_range(file, 0, dot);
+
+            platform = file;
+        } else if (string_equals(token_data, string("generate_here"))) {
+            if (metaprogram_output_file.count != 0) {
+                log_error("directive `meta(generate_here)` can only be used once");
+                return 1;
+            }
+
+            clex_lex(&lexer);
+            if (!build_expect_include(&lexer, &metaprogram_output_file)) return 1;
+        } else if (string_equals(token_data, string("embed"))) {
+            const char *usage = "`meta(embed \"path/to/file\") extern const char variable_name[];`";
+
+            clex_lex(&lexer);
+            if (lexer.token.kind != clex_Token_STRING) {
+                log_error("expected path, like this: %s", usage);
+                return 1;
+            }
+            String input_file = string_from_clex_data(lexer.token.data);
+
+            clex_lex(&lexer);
+            if (lexer.token.kind != ')') {
+                log_error("expected ')' closing meta(...) block");
+                return 1;
+            }
+
+            // TODO(felix): get actual type info once we've got a C parser
+
+            String names[2] = {0};
+            for (u64 i = 0; i < 2; i += 1) {
+                clex_lex(&lexer);
+                String extern_ = string_from_clex_data(lexer.token.data);
+                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(extern_, string("extern"))) {
+                    log_error("expected this: %s", usage);
+                    return 1;
+                }
+
+                clex_lex(&lexer);
+                String const_ = string_from_clex_data(lexer.token.data);
+                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(const_, string("const"))) {
+                    log_error("expected this: %s", usage);
+                    return 1;
+                }
+
+                clex_lex(&lexer);
+                String type_ = string_from_clex_data(lexer.token.data);
+                String expected_type = i == 0 ? string("char") : string("u64");
+                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(type_, expected_type)) {
+                    log_error("expected this: %s", usage);
+                    return 1;
+                }
+
+                clex_lex(&lexer);
+                if (lexer.token.kind != clex_Token_IDENTIFIER) {
+                    log_error("expected this: %s", usage);
+                    return 1;
+                }
+                names[i] = string_from_clex_data(lexer.token.data);
+
+                if (i == 0) {
+                    clex_lex(&lexer);
+                    if (lexer.token.kind != '[') {
+                        log_error("expected this: %s", usage);
+                        return 1;
+                    }
+                    clex_lex(&lexer);
+                    if (lexer.token.kind != ']') {
+                        log_error("expected this: %s", usage);
+                        return 1;
+                    }
+                }
+
+                clex_lex(&lexer);
+                if (lexer.token.kind != ';') {
+                    log_error("expected this: %s", usage);
+                    return 1;
+                }
+            }
+
+            String variable_name = names[0];
+            String array_length_name = names[1];
+
+            String input = os_read_entire_file(&arena, cstring_from_string(&arena, input_file));
+            if (input.count == 0) return 1;
+
+            bool embed_via_object = target_os == BASE_OS_WINDOWS;
+            if (embed_via_object) {
+                object_Bundle_Flags flags = object_Bundle_COFF | object_Bundle_READ;
+                u64 byte_count;
+
+                const char *array_name = (const char *)variable_name.data;
+                u32 array_name_length = (u32)variable_name.count;
+
+                const char *length_name = (const char *)array_length_name.data;
+                u32 length_name_length = (u32)array_length_name.count;
+
+                object_bundle(array_name, array_name_length, length_name, length_name_length, input.data, (u32)input.count, 0, &byte_count, flags);
+                assert(byte_count > 0);
+
+                u8 *bytes = arena_make(&arena, byte_count, u8);
+                u8 *written = object_bundle(array_name, array_name_length, length_name, length_name_length, input.data, (u32)input.count, bytes, &byte_count, flags);
+                if (written != bytes) {
+                    log_error("failure generating object file to embed '%S'", input_file);
+                    return 1;
+                }
+
+                const char *output_name = cstring_print(&arena, "meta.generated.%s", object_extension);
+                const char *output_in_build_directory = cstring_print(&arena, "%s/%s", build_directory, output_name);
+                bool ok = os_write_entire_file(output_in_build_directory, (String){ .data = bytes, byte_count });
+                if (!ok) return 1;
+                push(&platform_objects, output_name);
+            } else {
+                String qualifiers = string("static const char ");
+                String assignment = string("[] = {");
+                String closing = string("\n};\n");
+                String example_byte_as_hex = string("0x00,");
+                u64 chars_per_row_exponent = 5;
+                u64 chars_per_row = (u64)1 << chars_per_row_exponent;
+                u64 rows = input.count / chars_per_row + 1;
+
+                String indent = string("\n    ");
+                u64 bytes_for_indentation = rows * indent.count;
+                u64 bytes_total = bytes_for_indentation + rows * (chars_per_row * example_byte_as_hex.count);
+                bytes_total += qualifiers.count + variable_name.count + assignment.count + closing.count;
+
+                String length_qualifiers = string("static const u64 ");
+                String length_assignment = string(" = ");
+                String length_closing = string(";\n");
+                u64 max_digits = sizeof(u64) * 8;
+                bytes_total += length_qualifiers.count + array_length_name.count + length_assignment.count + max_digits + length_closing.count;
+
+                reserve(&metaprogram_code, bytes_total);
+                push_many_assume_capacity(&metaprogram_code, qualifiers.data, qualifiers.count);
+                push_many_assume_capacity(&metaprogram_code, variable_name.data, variable_name.count);
+                push_many_assume_capacity(&metaprogram_code, assignment.data, assignment.count);
+
+                u64 column_mask = chars_per_row - 1;
+                for (u64 i = 0; i < input.count; i += 1) {
+                    u64 column = i & column_mask;
+
+                    if (column == 0) push_many_assume_capacity(&metaprogram_code, indent.data, indent.count);
+
+                    const char *chars = "0123456789abcdef";
+                    u8 byte = input.data[i];
+                    string_builder_print(&metaprogram_code, "0x%c%c,", chars[byte >> 4], chars[byte & 0x0f]);
+                }
+                push_many_assume_capacity(&metaprogram_code, closing.data, closing.count);
+
+                push_many_assume_capacity(&metaprogram_code, length_qualifiers.data, length_qualifiers.count);
+                push_many_assume_capacity(&metaprogram_code, array_length_name.data, array_length_name.count);
+                push_many_assume_capacity(&metaprogram_code, length_assignment.data, length_assignment.count);
+                string_builder_print(&metaprogram_code, "%llu", input.count);
+                push_many_assume_capacity(&metaprogram_code, length_closing.data, length_closing.count);
+            }
+        } else {
+            log_error("unsupported metaprogram directive '%S'", token_data);
+            return 1;
+        }
+    }
+
+    if (metaprogram_output_file.count == 0) {
+        log_error("missing `meta(bind)` followed by #include to designate codegen destination");
+        return 1;
+    }
+
+    {
+        const char *file = cstring_from_string(&arena, metaprogram_output_file);
+        String output = string_builder_string(metaprogram_code);
+        if (!os_write_entire_file(file, output)) return 1;
     }
 
     bool is_raylib = string_equals(platform, string("base_platform_raylib"));
@@ -2239,43 +2500,14 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
     bool compile_platform = platform.count != 0;
     const char *platform_c_file = cstring_print(scratch.arena, "../src/base/%S.c", platform);
-    Array_cstring platform_objects = { .arena = scratch.arena };
 
+    // TODO(felix): should be handled by metaprogram
     if (is_raylib) {
         push(&platform_objects, cstring_print(scratch.arena, "%S/raylib-5.5_win64_msvc16/lib/raylib.lib", dependency_directory));
     } else if (is_sdl_gles) {
         push(&platform_objects, cstring_print(scratch.arena, "%S/SDL3-3.2.28/lib/x64/SDL3.lib", dependency_directory));
     } else if (!is_wingdi) {
         push(&platform_objects, cstring_print(scratch.arena, "%S.%s", platform, object_extension));
-    }
-
-    // TODO(felix): actual embed system, and remove this
-    bool temporary_hack_embed_font = target_os == BASE_OS_EMSCRIPTEN;
-    if (temporary_hack_embed_font) {
-        const char *inter_c_path = "src/inter.c";
-        if (!fs_file_exists(inter_c_path)) {
-            const char *inter_path = "deps/Inter-4.1/InterVariable.ttf";
-            String bytes = os_read_entire_file(&arena, inter_path);
-            String_Builder builder = { .arena = &arena };
-            reserve(&builder, 100 + bytes.count * 7);
-            string_builder_print(&builder, "static const char inter_ttf_bytes[] = {\n    ");
-            u8 column = 0;
-            for (u64 i = 0; i < bytes.count; i += 1) {
-                u8 *byte = &bytes.data[i];
-                string_builder_print(&builder, "0x");
-                string_builder_print(&builder, "%x", *byte);
-                string_builder_print(&builder, ", ");
-                column += 1;
-                if (column > 16) {
-                    column = 0;
-                    string_builder_print(&builder, "\n    ");
-                }
-            }
-            string_builder_print(&builder, "\n};");
-
-            String b = string_builder_string(builder);
-            os_write_entire_file(inter_c_path, b);
-        }
     }
 
     String shdc_per_os[BASE_OS_COUNT] = {
@@ -2290,10 +2522,12 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         shdc = buffer;
     }
 
+    // TODO(felix): should be handled by metaprogram
     const char *include_paths[] = {
         cstring_print(&arena, "-I%S", dependency_directory),
         // cstring_print(&arena, "-I%S/SDL3-3.2.28/include", dependency_directory),
         // cstring_print(&arena, "-I%S/wgpu-windows-x86_64-msvc-debug/include/webgpu", dependency_directory),
+        "-I../",
         "-I../src",
         0,
     };
@@ -2313,6 +2547,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         build_push_arguments(&common[c], include_paths);
     }
 
+    // TODO(felix): should be handled by metaprogram
     // bool link_crt = !is_wingdi;
     bool link_crt = true;
 
@@ -2325,6 +2560,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         const char **link_initial = build_compiler_link_flags[c][target_os];
         build_push_arguments(&link[c], link_initial);
         if (is_raylib) {
+            // TODO(felix): should be handled by metaprogram
             push_many(&link[c], platform_objects.data, platform_objects.count);
             push(&link[c], "/NODEFAULTLIB:msvcrt");
         }
@@ -2339,6 +2575,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             const char **initial = build_compiler_mode_flags[mode][c];
             build_push_arguments(f, initial);
 
+            // TODO(felix): should be handled by metaprogram (?)
             if (mode == Build_Mode_DEBUG) {
                 push(f, "-DBUILD_DEBUG=1");
                 if (link_crt && compiler != Build_Compiler_EMCC) {
@@ -2371,12 +2608,6 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     push_many(&compile, link[compiler].data, link[compiler].count);
     push(&compile, cstring_print(&arena, "%s%s.%s", build_compiler_out[compiler], program_name, binary_extension));
 
-    const char *build_directory = "build";
-    bool build_directory_ok = fs_file_exists(build_directory);
-    if (!build_directory_ok) {
-        build_directory_ok = fs_make_directory(build_directory);
-    }
-
     bool dependencies_ok = false;
     if (target_os == BASE_OS_EMSCRIPTEN) {
         String shell = string_print(&arena, build_emscripten_html, program_name);
@@ -2385,7 +2616,8 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     } else if (is_raylib || is_sdl_gles || is_wingdi) {
         dependencies_ok = true;
     } else {
-        dependencies_ok = !compile_platform || fs_file_exists(cstring_print(&arena, "build/%S.%s", platform, object_extension));
+        // TODO(felix): should be handled by metaprogram
+        dependencies_ok = !compile_platform || fs_exists(cstring_print(&arena, "build/%S.%s", platform, object_extension));
         bool compile_dependencies = build_directory_ok && !dependencies_ok;
         if (compile_dependencies) {
             if (BASE_OS == BASE_OS_MACOS) {
@@ -2408,6 +2640,8 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     bool is_sokol = string_equals(platform, string("base_platform_sokol"));
     bool shaders_ok = !is_sokol;
     if (is_sokol && dependencies_ok) {
+        // TODO(felix): should be handled by metaprogram
+
         const char *shader_file = "./src/shader.c";
         fs_remove_file(shader_file);
 
@@ -2446,6 +2680,13 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
     u32 exit_code = 1;
     if (shaders_ok) {
+        const char *pdb_file = cstring_print(&arena, "%s/%s.pdb", build_directory, program_name);
+        bool delete_pdb_first_because_msvc_incremental_is_broken = (target_os == BASE_OS_WINDOWS && compiler == Build_Compiler_MSVC && fs_exists(pdb_file));
+        if (delete_pdb_first_because_msvc_incremental_is_broken) {
+            bool ok = fs_remove_file(pdb_file);
+            if (!ok) log_error("failure removing old pdb '%s', but continuing anyway!", pdb_file);
+        }
+
         push(&compile, 0);
         exit_code = os_process_run(arena, compile.data, build_directory, fs_Process_Flag_PRINT_COMMAND_BEFORE_RUNNING | fs_Process_Flag_PRINT_EXIT_CODE);
     }
@@ -2472,19 +2713,19 @@ static void ui_begin(Ui *ui) {
 
     ui->scale = ui->platform->frame.dpi_scale;
 
-    Ui_Box_Style_Set default_style = {0};
-    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BACKGROUND] = 0xd8d8d8ff;
-    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_FOREGROUND] = 0x000000ff;
-    default_style.kinds[Ui_Box_Style_Kind_INACTIVE].color[Ui_Color_BORDER] = 0x6d6d6dff;
-    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BACKGROUND] = 0x9b9b9bff;
-    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_FOREGROUND] = 0x000000ff;
-    default_style.kinds[Ui_Box_Style_Kind_HOVERED].color[Ui_Color_BORDER] = 0x515151ff;
-    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BACKGROUND] = 0x000000ff;
-    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_FOREGROUND] = 0x000000ff;
-    default_style.kinds[Ui_Box_Style_Kind_CLICKED].color[Ui_Color_BORDER] = 0xffffffff;
+    Ui_Style_Set default_style = {0};
+    default_style.kinds[Ui_Style_Kind_INACTIVE].color[Ui_Color_BACKGROUND] = 0xd8d8d8ff;
+    default_style.kinds[Ui_Style_Kind_INACTIVE].color[Ui_Color_FOREGROUND] = 0x000000ff;
+    default_style.kinds[Ui_Style_Kind_INACTIVE].color[Ui_Color_BORDER] = 0x6d6d6dff;
+    default_style.kinds[Ui_Style_Kind_HOVERED].color[Ui_Color_BACKGROUND] = 0x9b9b9bff;
+    default_style.kinds[Ui_Style_Kind_HOVERED].color[Ui_Color_FOREGROUND] = 0x000000ff;
+    default_style.kinds[Ui_Style_Kind_HOVERED].color[Ui_Color_BORDER] = 0x515151ff;
+    default_style.kinds[Ui_Style_Kind_CLICKED].color[Ui_Color_BACKGROUND] = 0x000000ff;
+    default_style.kinds[Ui_Style_Kind_CLICKED].color[Ui_Color_FOREGROUND] = 0x000000ff;
+    default_style.kinds[Ui_Style_Kind_CLICKED].color[Ui_Color_BORDER] = 0xffffffff;
 
-	for (Ui_Box_Style_Kind kind = 0; kind < Ui_Box_Style_Kind_COUNT; kind += 1) {
-		Ui_Box_Style *style = &default_style.kinds[kind];
+	for (Ui_Style_Kind kind = 0; kind < Ui_Style_Kind_COUNT; kind += 1) {
+		Ui_Style *style = &default_style.kinds[kind];
 
         style->font_size = 14.f;
 		style->inner_padding.x = 5.f;
@@ -2520,7 +2761,7 @@ static void ui_default_render_passthrough(Ui *ui) {
     for (u64 i = 0; i < ui->to_render.count; i += 1) {
         Ui_Box *box = ui->to_render.boxes[i];
 
-        Ui_Box_Style style = box->display_style;
+        Ui_Style style = box->display_style;
         u32 background_color = style.color[Ui_Color_BACKGROUND];
         u32 border_color = style.color[Ui_Color_BORDER];
         u32 foreground_color = style.color[Ui_Color_FOREGROUND];
@@ -2572,13 +2813,13 @@ static void ui_default_render_passthrough(Ui *ui) {
 }
 
 static void ui_layout_standalone(Ui *ui, Ui_Box *box) {
-    Ui_Box_Style_Kind old_style_kind = box->target_style_kind;
-    if ((box->flags & Ui_Box_Flag_CLICKABLE) && box->clicked) box->target_style_kind = Ui_Box_Style_Kind_CLICKED;
-    else if ((box->flags & Ui_Box_Flag_HOVERABLE) && box->hovered) box->target_style_kind = Ui_Box_Style_Kind_HOVERED;
-    else box->target_style_kind = Ui_Box_Style_Kind_INACTIVE;
+    Ui_Style_Kind old_style_kind = box->target_style_kind;
+    if ((box->flags & Ui_Box_Flag_CLICKABLE) && box->clicked) box->target_style_kind = Ui_Style_Kind_CLICKED;
+    else if ((box->flags & Ui_Box_Flag_HOVERABLE) && box->hovered) box->target_style_kind = Ui_Style_Kind_HOVERED;
+    else box->target_style_kind = Ui_Style_Kind_INACTIVE;
 
-    Ui_Box_Style *target_style = &box->target_style_set.kinds[box->target_style_kind];
-    Ui_Box_Style *style = &box->display_style;
+    Ui_Style *target_style = &box->target_style_set.kinds[box->target_style_kind];
+    Ui_Style *style = &box->display_style;
 
     bool lerp_style = box->target_style_kind <= old_style_kind;
     lerp_style = lerp_style && !(box->flags & Ui_Box_Flag__FIRST_FRAME);
@@ -2716,9 +2957,9 @@ static void ui_pop_style(Ui *ui) {
     ui->style.count -= 1;
 }
 
-static Ui_Box_Style_Set *ui_push_style(Ui *ui) {
+static Ui_Style_Set *ui_push_style(Ui *ui) {
     assert(ui->style.count < UI_MAX_BOX_COUNT);
-    Ui_Box_Style_Set top = ui->style.stack[ui->style.count - 1];
+    Ui_Style_Set top = ui->style.stack[ui->style.count - 1];
     ui->style.stack[ui->style.count++] = top;
     return &ui->style.stack[ui->style.count - 1];
 }
@@ -2845,7 +3086,7 @@ static Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *for
     }
 
     box->target_style_set = ui->style.stack[ui->style.count - 1];
-    if (box_is_new) box->display_style = box->target_style_set.kinds[Ui_Box_Style_Kind_INACTIVE];
+    if (box_is_new) box->display_style = box->target_style_set.kinds[Ui_Style_Kind_INACTIVE];
 
     box->display_string = display_string;
     if (display_string.count > 0) {

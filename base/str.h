@@ -10,6 +10,11 @@ typedef struct {
     unsigned long long count;
 } String;
 
+typedef struct {
+    unsigned long long index;
+    _Bool ok;
+} String_Contains;
+
 #define STRING_LITERAL_CONSTANT(s)  { .data = (unsigned char *)(s), .count = sizeof(s) - 1 }
 #define STRING_LITERAL(s) (String)STRING_LITERAL_CONSTANT(s)
 
@@ -17,10 +22,11 @@ typedef struct {
     #define STR_FUNCTION
 #endif
 
-STR_FUNCTION  _Bool string_equals(String a, String b);
-STR_FUNCTION String string_from_cstring(const char *s);
-STR_FUNCTION String string_range(String s, unsigned long long start, unsigned long long end);
-STR_FUNCTION  _Bool string_starts_with(String s, String start);
+STR_FUNCTION String_Contains string_contains(String s, String substring);
+STR_FUNCTION           _Bool string_equals(String a, String b);
+STR_FUNCTION          String string_from_cstring(const char *s);
+STR_FUNCTION          String string_range(String s, unsigned long long start, unsigned long long end);
+STR_FUNCTION           _Bool string_starts_with(String s, String start);
 
 
 #endif // STR_H
@@ -33,6 +39,30 @@ STR_FUNCTION  _Bool string_starts_with(String s, String start);
     #include <assert.h>
     #define STR_ASSERT assert
 #endif
+
+STR_FUNCTION String_Contains string_contains(String s, String substring) {
+    String_Contains result = {0};
+
+    for (unsigned long long i = 0; i + substring.count <= s.count; i += 1) {
+        u8 *maybe_substring = &s.data[i];
+
+        _Bool found = 1;
+        for (unsigned long long j = 0; j < substring.count; j += 1) {
+            if (maybe_substring[j] != substring.data[j]) {
+                found = 0;
+                break;
+            }
+        }
+
+        if (found) {
+            result.index = i;
+            result.ok = 1;
+            break;
+        }
+    }
+
+    return result;
+}
 
 static _Bool string_equals(String a, String b) {
     if (a.count != b.count) return 0;
