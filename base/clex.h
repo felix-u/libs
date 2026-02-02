@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-01-26
+// https://github.com/felix-u 2026-02-02
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -353,7 +353,7 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 // these are just repeated operators with no special meaning conveyed by this
                 case '!': case '~': case '^': case '*': {
                     clex_Token token = {
-                        .kind = *operator,
+                        .kind = (clex_Token_Kind)*operator,
                         .data = { .start = operator + 1, .end = operator + 2 },
                     };
                     clex__push_token(&tokens, token);

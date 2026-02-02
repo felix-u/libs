@@ -195,7 +195,7 @@ static void sokol_init(void *user_data) {
     }
 
     V4 clear_color = rgba_float_from_hex(platform->base.clear_color);
-    platform->pass_action.colors[0].clear_value = bit_cast(sg_color) clear_color;
+    memcpy(&platform->pass_action.colors[0].clear_value, &clear_color, sizeof clear_color);
 }
 
 static void sokol_frame(void *user_data) {
@@ -214,7 +214,7 @@ static void sokol_frame(void *user_data) {
     sg_apply_pipeline(platform->pipeline);
 
     V4 clear_color = rgba_float_from_hex(platform->base.clear_color);
-    platform->pass_action.colors[0].clear_value = bit_cast(sg_color) clear_color;
+    memcpy(&platform->pass_action.colors[0].clear_value, &clear_color, sizeof clear_color);
     app_update_and_render(&platform->base);
 
     for (u64 i = 0; i < platform->base.draw_commands.count; i += 1) {
@@ -273,7 +273,8 @@ static void sokol_frame(void *user_data) {
                 vertex_parameters.border_color = rgba_float_from_hex(command->rectangle.border_color);
 
                 static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
-                fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
+                fragment_parameters_t fragment_parameters;
+                memcpy(&fragment_parameters, &vertex_parameters, sizeof vertex_parameters);
 
                 sg_apply_uniforms(UB_vertex_parameters, &SG_RANGE(vertex_parameters));
                 sg_apply_uniforms(UB_fragment_parameters, &SG_RANGE(fragment_parameters));
@@ -301,7 +302,8 @@ static void sokol_frame(void *user_data) {
                 vertex_parameters.border_color = rgba_float_from_hex(command->rectangle.border_color);
 
                 static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
-                fragment_parameters_t fragment_parameters = bit_cast(fragment_parameters_t) vertex_parameters;
+                fragment_parameters_t fragment_parameters;
+                memcpy(&fragment_parameters, &vertex_parameters, sizeof vertex_parameters);
 
                 sg_apply_uniforms(UB_vertex_parameters, &SG_RANGE(vertex_parameters));
                 sg_apply_uniforms(UB_fragment_parameters, &SG_RANGE(fragment_parameters));

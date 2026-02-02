@@ -196,7 +196,8 @@ static void program(void) {
 
     // TODO(felix): init font
 
-    f64 time_samples[16] = {0};
+    #define PLATFORM__TIME_SAMPLES 16
+    f64 time_samples[PLATFORM__TIME_SAMPLES] = {0};
     u64 time_sample_i = 0;
     static bool filled_samples = false;
 
@@ -207,17 +208,17 @@ static void program(void) {
         frame_start_time = time_now();
 
         if (!filled_samples) {
-            for (u64 i = 0; i < count_of(time_samples); i += 1) time_samples[i] = elapsed;
+            for (u64 i = 0; i < PLATFORM__TIME_SAMPLES; i += 1) time_samples[i] = elapsed;
             filled_samples = true;
         } else {
             time_samples[time_sample_i] = elapsed;
             time_sample_i += 1;
-            time_sample_i %= count_of(time_samples);
+            time_sample_i %= PLATFORM__TIME_SAMPLES;
         }
 
         elapsed = 0;
-        for (u64 i = 0; i < count_of(time_samples); i += 1) elapsed += time_samples[i];
-        elapsed /= count_of(time_samples);
+        for (u64 i = 0; i < PLATFORM__TIME_SAMPLES; i += 1) elapsed += time_samples[i];
+        elapsed /= PLATFORM__TIME_SAMPLES;
 
         platform.base.frame.seconds_since_last_frame = (f32)elapsed;
 
@@ -234,7 +235,7 @@ static void program(void) {
         if (platform.base.should_quit) break;
 
         for (u64 i = 0; i < 2; i += 1) {
-            frame->mouse_position.v[i] = platform.real_mouse_position.v[i] * (frame->window_size.v[i] / platform.real_window_size.v[i]);
+            v(frame->mouse_position)[i] = v(platform.real_mouse_position)[i] * (v(frame->window_size)[i] / v(platform.real_window_size)[i]);
         }
 
         app_update_and_render(&platform.base);
@@ -288,7 +289,7 @@ static void program(void) {
                     for (Draw_Corner corner = 0; corner < Draw_Corner_COUNT; corner += 1) {
                         V2 position = c->quadrilateral[corner];
                         for (int axis = 0; axis < 2; axis += 1) {
-                            coordinates[corner * 2 + axis] = (int)(position.v[axis] + 0.5f);
+                            coordinates[corner * 2 + axis] = (int)(v(position)[axis] + 0.5f);
                         }
                     }
 

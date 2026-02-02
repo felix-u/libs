@@ -152,10 +152,10 @@ typedef      intptr_t ipointer;
 #define TIME_NO_SYSTEM_INCLUDE
 #include "time.h"
 
-#define count_of(a) (sizeof(a) / sizeof(*(a)))
-
 typedef struct Arena Arena;
 #define Array(T) struct { T *data; u64 count, capacity; Arena *arena; }
+
+typedef Array(void) Array_void;
 
 #define MapU64(type) struct { \
     Array(type) values; \
@@ -163,29 +163,7 @@ typedef struct Arena Arena;
     u64 *value_index_from_key_hash; \
 }
 
-#define define_container_types(type) \
-    typedef Array(type) Array_##type; \
-    typedef MapU64(type) Map_##type; \
-
-#define structdef(Name) \
-    typedef struct Name Name; \
-    define_container_types(Name)\
-    struct Name
-
-define_container_types(void)
-typedef MapU64(bool) Map_bool;
-define_container_types(u8)
-define_container_types(u16)
-define_container_types(u32)
-typedef MapU64(u64) Map_u64;
-define_container_types(i8)
-define_container_types(i16)
-define_container_types(i32)
-define_container_types(i64)
-define_container_types(f32)
-define_container_types(f64)
-define_container_types(upointer)
-define_container_types(ipointer)
+typedef MapU64(void) Map_void;
 
 #define log_error(...) log_internal("error: " __VA_ARGS__)
 
@@ -227,8 +205,6 @@ static u64 grow_capacity(u64 current, u64 minimum);
     } \
 } while (0)
 #define swap_remove(a, i) ((a)->data[(i)] = (a)->data[--(a)->count])
-
-#define bit_cast(type) *(type *)&
 
 // NOTE(felix): these are function-like macros and so I would've liked them to be lowercase, but windows.h defines lowercase min,max and it's too much of a hassle to work out, especially with more than one translation unit. This is the simpler solution by far.
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -284,7 +260,7 @@ static void    scratch_end(Scratch scratch);
 
 static const char **os_get_arguments(Arena *, u64 *out_count);
 
-structdef(Map_Result) { u64 index; void *pointer; bool is_new; };
+typedef struct { u64 index; void *pointer; bool is_new; } Map_Result;
 
 #define map_get(map, key, put) map_get_((Map_void *)(map), (key), (put), sizeof *(map)->values.data)
 static Map_Result map_get_(Map_void *map, u64 key, void *put, u64 item_size);
@@ -294,45 +270,16 @@ static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index);
 
 // TODO(felix): square root, etc. via intrinsics, not math.h (avoid linking UCRT)
 
-typedef union {
-    struct { f32 x, y; };
-    f32 v[2];
-} V2;
-
-typedef union {
-    struct { f32 x, y, z; };
-    struct { f32 r, g, b; };
-
-    struct { V2 xy; f32 _0; };
-    struct { f32 _1; V2 yz; };
-    struct { V2 uv; f32 _2; };
-    struct { f32 _3; V2 vw; };
-    struct { V2 rg; f32 _4; };
-    struct { f32 _5; V2 gb; };
-
-    f32 v[3];
-} V3;
-
-typedef union {
-    struct { f32 x, y, z, w; };
-    struct { f32 r, g, b, a; };
-    struct { V2 top_left, bottom_right; };
-    struct { f32 left, top, right, bottom; };
-
-    struct { V2 xy, zw; };
-    struct { f32 _0; V2 yz; f32 _1; };
-    struct { V2 rg, ba; };
-    struct { f32 _2; V2 gb; f32 _3; };
-
-    struct { V3 xyz; f32 _4; };
-    struct { V3 rgb; f32 _5; };
-    struct { f32 _6; V3 yzw; };
-    struct { f32 _7; V3 gba; };
-
-    f32 v[4];
-} V4;
-
+#define v(vector) (&(vector).x)
+typedef struct { f32 x, y; } V2;
+typedef struct { f32 x, y, z; } V3;
+typedef struct { f32 x, y, z, w; } V4;
 typedef V4 Quat;
+
+#define v4_left(v) ((v).x)
+#define v4_top(v) ((v).y)
+#define v4_right(v) ((v).z)
+#define v4_bottom(v) ((v).w)
 
 typedef union {
     f32 c[3][3];
@@ -423,6 +370,7 @@ static force_inline V4   v4_scale(V4 v, f32 s);
 static       inline V4   v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds);
 static force_inline V4   v4_sub(V4 a, V4 b);
 static force_inline V4   v4v(V3 xyz, f32 w);
+static force_inline V3   v4_xyz(V4 v);
 
 static inline Quat quat_from_rotation(V3 axis, f32 angle);
 static inline Quat quat_mul_quat(Quat a, Quat b);
@@ -528,7 +476,7 @@ typedef enum {
     App_Mouse_Button_MAX_VALUE,
 } App_Mouse_Button;
 
-structdef(App_Frame_Info) {
+typedef struct {
     V2 window_size;
     f32 dpi_scale;
     f32 seconds_since_last_frame;
@@ -537,7 +485,7 @@ structdef(App_Frame_Info) {
     bool mouse_down[App_Mouse_Button_MAX_VALUE];
     bool key_down[App_Key_MAX_VALUE];
     bool key_pressed[App_Key_MAX_VALUE];
-};
+} App_Frame_Info;
 
 typedef enum {
     Draw_Kind_NIL = 0,
@@ -570,7 +518,7 @@ typedef enum {
     Draw_Corner_COUNT,
 } Draw_Corner;
 
-structdef(Draw_Command) {
+typedef struct {
     Draw_Kind kind;
     V2 position;
     u32 color[Draw_Color_MAX_VALUE];
@@ -594,16 +542,17 @@ structdef(Draw_Command) {
             f32 thickness;
         } line;
     };
-};
+} Draw_Command;
+typedef Array(Draw_Command) Array_Draw_Command;
 
-structdef(Platform_Base) {
+typedef struct {
     App_Frame_Info frame;
     Arena *persistent_arena;
     Arena *frame_arena;
     Array_Draw_Command draw_commands;
     bool should_quit;
     u32 clear_color;
-};
+} Platform_Base;
 
 #if PLATFORM_NONE
     typedef Platform_Base Platform;
@@ -643,10 +592,10 @@ enum {
 };
 #define Ui_Box_Flag_ANY_VISIBLE (Ui_Box_Flag_DRAW_BACKGROUND | Ui_Box_Flag_DRAW_BORDER | Ui_Box_Flag_DRAW_TEXT)
 
-structdef(Ui_Box_Rectangle) {
+typedef struct {
     V2 top_left;
     V2 size;
-};
+} Ui_Box_Rectangle;
 
 typedef enum {
     Ui_Size_Kind_NIL = 0,
@@ -665,7 +614,7 @@ typedef enum {
     Ui_Color_COUNT,
 } Ui_Color;
 
-structdef(Ui_Style) {
+typedef struct {
     f32 font_size;
     V2 inner_padding;
     V2 child_gap;
@@ -673,7 +622,7 @@ structdef(Ui_Style) {
     f32 border_width;
     f32 border_radius;
     f32 animation_speed;
-};
+} Ui_Style;
 
 typedef enum {
     Ui_Style_Kind_INACTIVE,
@@ -683,14 +632,14 @@ typedef enum {
     Ui_Style_Kind_COUNT,
 } Ui_Style_Kind;
 
-structdef(Ui_Style_Set) {
+typedef struct {
     Ui_Style kinds[Ui_Style_Kind_COUNT];
-};
+} Ui_Style_Set;
 
 typedef u32 Ui_Box_Id;
-define_container_types(Ui_Box_Id)
 
-structdef(Ui_Box) {
+typedef struct Ui_Box Ui_Box;
+struct Ui_Box {
     // frame data
     Ui_Box_Flags flags;
     String display_string;
@@ -717,11 +666,10 @@ structdef(Ui_Box) {
 };
 
 typedef Ui_Box *Ui_Box_Pointer;
-define_container_types(Ui_Box_Pointer)
 
 #define UI_MAX_BOX_COUNT 128
 
-structdef(Ui) {
+typedef struct {
     Platform_Base *platform;
 
     u64 used_box_count;
@@ -741,7 +689,7 @@ structdef(Ui) {
         Ui_Box *boxes[UI_MAX_BOX_COUNT];
         u64 count;
     } to_render;
-};
+} Ui;
 
 static   void  ui_begin(Ui *ui);
 static Ui_Box *ui_button(Ui *ui, const char *format, ...);
@@ -1105,8 +1053,8 @@ static Map_Result map_get_(Map_void *map, u64 key, void *put, u64 item_size) {
 
 static bool intersect_point_in_rectangle(V2 point, V4 rectangle) {
     bool result = true;
-    result = result && rectangle.left < point.x && point.x < rectangle.right;
-    result = result && rectangle.top < point.y && point.y < rectangle.bottom;
+    result = result && v4_left(rectangle) < point.x && point.x < v4_right(rectangle);
+    result = result && v4_top(rectangle) < point.y && point.y < v4_bottom(rectangle);
     return result;
 }
 
@@ -1119,17 +1067,17 @@ static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * pi_
 static V4 rgba_float_from_hex(u32 hex) {
     f32 pack = 1.f / 255.f;
     V4 result = {
-        .r = pack * (hex >> 24),
-        .g = pack * ((hex >> 16) & 0xff),
-        .b = pack * ((hex >> 8) & 0xff),
-        .a = pack * (hex & 0xff),
+        pack * (hex >> 24),
+        pack * ((hex >> 16) & 0xff),
+        pack * ((hex >> 8) & 0xff),
+        pack * (hex & 0xff),
     };
     return result;
 }
 
 static u32 rgba_hex_from_float(V4 rgba) {
     u32 c[4];
-    for (u64 i = 0; i < 4; i += 1) c[i] = (u32)(rgba.v[i] * 255.f + 0.5f);
+    for (u64 i = 0; i < 4; i += 1) c[i] = (u32)(v(rgba)[i] * 255.f + 0.5f);
     u32 result = (c[0] << 24) | (c[1] << 16) | (c[2] << 8) | c[3];
     return result;
 }
@@ -1192,7 +1140,7 @@ static force_inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v
 
 static inline V2 v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds) {
     for (u64 i = 0; i < 2; i += 1) {
-        a.v[i] = stable_lerp(a.v[i], b.v[i], k, delta_time_seconds);
+        v(a)[i] = stable_lerp(v(a)[i], v(b)[i], k, delta_time_seconds);
     }
     return a;
 }
@@ -1250,7 +1198,11 @@ static inline V3 v3_unproject(V3 pos, M4 view_projection) {
     M4 view_projection_inv = m4_inverse(view_projection);
     Quat q = v4v(pos, 1.f);
     Quat q_trans = m4_mul_v4(view_projection_inv, q);
-    return v3_scale(q_trans.xyz, 1.f / q_trans.w);
+
+    V3 q_trans_xyz;
+    memcpy(&q_trans_xyz, &q_trans, sizeof q_trans_xyz);
+
+    return v3_scale(q_trans_xyz, 1.f / q_trans.w);
 }
 
 static force_inline V3 v3_up_from_view(M4 view) {
@@ -1259,7 +1211,11 @@ static force_inline V3 v3_up_from_view(M4 view) {
 
 static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
 
-static inline f32 v4_dot(V4 a, V4 b) { return v3_dot(a.xyz, b.xyz) + a.w * b.w; }
+static inline f32 v4_dot(V4 a, V4 b) {
+    f32 dot = 0;
+    for (u64 i = 0; i < 4; i += 1) dot += v(a)[i] * v(b)[i];
+    return dot;
+}
 
 static force_inline bool v4_equal(V4 a, V4 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
@@ -1282,7 +1238,7 @@ static force_inline V4 v4_scale(V4 v, f32 s) { return (V4){ .x = v.x * s, .y = v
 
 static inline V4 v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds) {
     for (u64 i = 0; i < 4; i += 1) {
-        a.v[i] = stable_lerp(a.v[i], b.v[i], k, delta_time_seconds);
+        v(a)[i] = stable_lerp(v(a)[i], v(b)[i], k, delta_time_seconds);
     }
     return a;
 }
@@ -1290,6 +1246,11 @@ static inline V4 v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds) {
 static force_inline V4 v4_sub(V4 a, V4 b) { return (V4){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w }; }
 
 static V4 v4v(V3 xyz, f32 w) { return (V4){ .x = xyz.x, .y = xyz.y, .z = xyz.z, .w = w }; }
+
+static force_inline V3 v4_xyz(V4 v) {
+    V3 result = { .x = v.x, .y = v.y, .z = v.z };
+    return result;
+}
 
 static inline Quat quat_from_rotation(V3 axis, f32 angle) {
     f32 half_angle = angle / 2.f;
@@ -1312,9 +1273,13 @@ static inline Quat quat_mul_quat(Quat a, Quat b) {
 }
 
 static inline V3 quat_rotate_v3(Quat q, V3 v) {
-    Quat qv = { .xyz = v };
+    Quat qv = { .x = v.x, .y = v.y, .z = v.z };
     Quat q_conjugate = (Quat){ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
-    return quat_mul_quat(quat_mul_quat(q, qv), q_conjugate).xyz;
+    Quat result_as_quat = quat_mul_quat(quat_mul_quat(q, qv), q_conjugate);
+
+    V3 result;
+    memcpy(&result, &result_as_quat, sizeof result);
+    return result;
 }
 
 static force_inline M3 m3_fill_diagonal(f32 value) {
@@ -1421,11 +1386,8 @@ static inline M4 m4_from_rotation(V3 axis, f32 angle) {
 }
 
 static inline M4 m4_from_top_left_m3(M3 m) {
-    M4 result = { .columns = {
-        [0].xyz = m.columns[0],
-        [1].xyz = m.columns[1],
-        [2].xyz = m.columns[2],
-    } };
+    M4 result = {0};
+    for (u64 i = 0; i < 3; i += 1) memcpy(&result.columns[i], &m.columns[i], sizeof *m.columns);
     return result;
 }
 
@@ -1440,10 +1402,10 @@ static inline M4 m4_from_translation(V3 translation) {
 static inline M4 m4_inverse(M4 m) {
     V4 *cols = m.columns;
 
-    V3 cross_0_1 = v3_cross(cols[0].xyz, cols[1].xyz);
-    V3 cross_2_3 = v3_cross(cols[2].xyz, cols[3].xyz);
-    V3 sub_1_0 = v3_sub(v3_scale(cols[0].xyz, cols[1].w), v3_scale(cols[1].xyz, cols[0].w));
-    V3 sub_3_2 = v3_sub(v3_scale(cols[2].xyz, cols[3].w), v3_scale(cols[3].xyz, cols[2].w));
+    V3 cross_0_1 = v3_cross(v4_xyz(cols[0]), v4_xyz(cols[1]));
+    V3 cross_2_3 = v3_cross(v4_xyz(cols[2]), v4_xyz(cols[3]));
+    V3 sub_1_0 = v3_sub(v3_scale(v4_xyz(cols[0]), cols[1].w), v3_scale(v4_xyz(cols[1]), cols[0].w));
+    V3 sub_3_2 = v3_sub(v3_scale(v4_xyz(cols[2]), cols[3].w), v3_scale(v4_xyz(cols[3]), cols[2].w));
 
     float inv_det = 1.0f / (v3_dot(cross_0_1, sub_3_2) + v3_dot(cross_2_3, sub_1_0));
     cross_0_1 = v3_scale(cross_0_1, inv_det);
@@ -1452,10 +1414,10 @@ static inline M4 m4_inverse(M4 m) {
     sub_3_2 = v3_scale(sub_3_2, inv_det);
 
     return m4_transpose((M4){ .columns = {
-        [0] = v4v(v3_add(v3_cross(cols[1].xyz, sub_3_2), v3_scale(cross_2_3, cols[1].w)), -v3_dot(cols[1].xyz, cross_2_3)),
-        [1] = v4v(v3_sub(v3_cross(sub_3_2, cols[0].xyz), v3_scale(cross_2_3, cols[0].w)),  v3_dot(cols[0].xyz, cross_2_3)),
-        [2] = v4v(v3_add(v3_cross(cols[3].xyz, sub_1_0), v3_scale(cross_0_1, cols[3].w)), -v3_dot(cols[3].xyz, cross_0_1)),
-        [3] = v4v(v3_sub(v3_cross(sub_1_0, cols[2].xyz), v3_scale(cross_0_1, cols[2].w)),  v3_dot(cols[2].xyz, cross_0_1)),
+        [0] = v4v(v3_add(v3_cross(v4_xyz(cols[1]), sub_3_2), v3_scale(cross_2_3, cols[1].w)), -v3_dot(v4_xyz(cols[1]), cross_2_3)),
+        [1] = v4v(v3_sub(v3_cross(sub_3_2, v4_xyz(cols[0])), v3_scale(cross_2_3, cols[0].w)),  v3_dot(v4_xyz(cols[0]), cross_2_3)),
+        [2] = v4v(v3_add(v3_cross(v4_xyz(cols[3]), sub_1_0), v3_scale(cross_0_1, cols[3].w)), -v3_dot(v4_xyz(cols[3]), cross_0_1)),
+        [3] = v4v(v3_sub(v3_cross(sub_1_0, v4_xyz(cols[2])), v3_scale(cross_0_1, cols[2].w)),  v3_dot(v4_xyz(cols[2]), cross_0_1)),
     } });
 }
 
@@ -1771,7 +1733,9 @@ static void string_builder_print_(String_Builder *builder, const char *fmt_c, va
 
                 f64 f64_value = va_arg(arguments, f64);
 
-                u64 bits = bit_cast(u64) f64_value;
+                u64 bits;
+                memcpy(&bits, &f64_value, sizeof f64_value);
+
                 i64 biased_exponent = (bits >> 52) & 0x7ff;
                 u64 mantissa_mask = UINT64_MAX >> 12;
                 u64 mantissa = bits & mantissa_mask;
@@ -2405,13 +2369,21 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             String variable_name = names[0];
             String array_length_name = names[1];
 
-            String input = os_read_entire_file(&arena, cstring_from_string(&arena, input_file));
-            if (input.count == 0) return 1;
+            String input = {0};
+            const char *input_path = cstring_from_string(&arena, input_file);
 
-            bool embed_via_object = target_os == BASE_OS_WINDOWS;
+            bool embed_via_object = target_os == BASE_OS_WINDOWS || target_os == BASE_OS_MACOS;
             if (embed_via_object) {
-                object_Bundle_Flags flags = object_Bundle_COFF | object_Bundle_READ;
-                u64 byte_count;
+                fs_File input_file_handle = fs_file_open_and_get_size(input_path, 0, &input.count);
+                if (input.count == 0) {
+                    log_error("unable to open file '%s'", input_path);
+                    return 1;
+                }
+
+                object_Bundle_Flags flags = object_Bundle_READ;
+                if (target_os == BASE_OS_WINDOWS) flags |= object_Bundle_COFF;
+                else if (target_os == BASE_OS_MACOS) flags |= object_Bundle_MACHO;
+                else unreachable;
 
                 const char *array_name = (const char *)variable_name.data;
                 u32 array_name_length = (u32)variable_name.count;
@@ -2419,15 +2391,20 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 const char *length_name = (const char *)array_length_name.data;
                 u32 length_name_length = (u32)array_length_name.count;
 
-                object_bundle(array_name, array_name_length, length_name, length_name_length, input.data, (u32)input.count, 0, &byte_count, flags);
-                assert(byte_count > 0);
+                u64 byte_count;
+                u8 *to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, 0, &byte_count, flags);
+                assert(to_write == 0 && byte_count > 0);
 
                 u8 *bytes = arena_make(&arena, byte_count, u8);
-                u8 *written = object_bundle(array_name, array_name_length, length_name, length_name_length, input.data, (u32)input.count, bytes, &byte_count, flags);
-                if (written != bytes) {
+                to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, bytes, &byte_count, flags);
+                if (to_write == 0) {
                     log_error("failure generating object file to embed '%S'", input_file);
                     return 1;
                 }
+
+                u64 read_count = fs_read_entire_file(input_file_handle, (char *)to_write, input.count);
+                assert(read_count == input.count);
+                fs_close(input_file_handle);
 
                 const char *output_name = cstring_print(&arena, "meta.generated.%s", object_extension);
                 const char *output_in_build_directory = cstring_print(&arena, "%s/%s", build_directory, output_name);
@@ -2435,6 +2412,9 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 if (!ok) return 1;
                 push(&platform_objects, output_name);
             } else {
+                input = os_read_entire_file(&arena, input_path);
+                if (input.count == 0) return 1;
+
                 String qualifiers = string("static const char ");
                 String assignment = string("[] = {");
                 String closing = string("\n};\n");
@@ -2533,7 +2513,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     };
 
     Array_cstring common[Build_Compiler_COUNT] = {0};
-    for (u64 c = 0; c < count_of(common); c += 1) {
+    for (u64 c = 0; c < Build_Compiler_COUNT; c += 1) {
         common[c].arena = &arena;
 
         if (BASE_OS == BASE_OS_WINDOWS) {
@@ -2552,7 +2532,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     bool link_crt = true;
 
     Array_cstring link[Build_Compiler_COUNT] = {0};
-    for (u64 c = 0; c < count_of(link); c += 1) {
+    for (u64 c = 0; c < Build_Compiler_COUNT; c += 1) {
         link[c].arena = &arena;
 
         if (link_crt) push(&link[c], "-DLINK_CRT=1");
@@ -2567,8 +2547,8 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     Array_cstring flags[Build_Mode_COUNT][Build_Compiler_COUNT] = {0};
-    for (u64 mode = 0; mode < count_of(flags); mode += 1) {
-        for (u64 c = 0; c < count_of(flags[0]); c += 1) {
+    for (u64 mode = 0; mode < Build_Mode_COUNT; mode += 1) {
+        for (u64 c = 0; c < Build_Compiler_COUNT; c += 1) {
             Array_cstring *f = &flags[mode][c];
             f->arena = &arena;
 
@@ -2791,10 +2771,10 @@ static void ui_default_render_passthrough(Ui *ui) {
 
             V2 position = box->display_rectangle.top_left;
             for_ui_axis (axis) {
-                f32 add = box->display_style.inner_padding.v[axis];
+                f32 add = v(box->display_style.inner_padding)[axis];
                 add += !!(box->flags & Ui_Box_Flag_DRAW_BORDER) * box->display_style.border_width;
                 add *= ui->scale;
-                position.v[axis] += add;
+                v(position)[axis] += add;
             }
 
             Draw_Command command = {
@@ -2845,8 +2825,8 @@ static void ui_layout_standalone(Ui *ui, Ui_Box *box) {
     } else *style = *target_style;
 
     for_ui_axis (axis) {
-		box->target_rectangle.size.v[axis] += ui->scale * 2.f * style->border_width * !!(box->flags & Ui_Box_Flag_DRAW_BORDER);
-		box->target_rectangle.size.v[axis] += ui->scale * 2.f * style->inner_padding.v[axis];
+		v(box->target_rectangle.size)[axis] += ui->scale * 2.f * style->border_width * !!(box->flags & Ui_Box_Flag_DRAW_BORDER);
+		v(box->target_rectangle.size)[axis] += ui->scale * 2.f * v(style->inner_padding)[axis];
 
         switch (box->size_kind[axis]) {
             case Ui_Size_Kind_NIL: unreachable;
@@ -2868,25 +2848,25 @@ static void ui_layout_dependent_descendant(Ui *ui, Ui_Box *box) {
         case Ui_Size_Kind_TEXT: break;
         case Ui_Size_Kind_SUM_OF_CHILDREN: {
             for (Ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                box->target_rectangle.size.v[axis] += child->target_rectangle.size.v[axis];
-				box->target_rectangle.size.v[axis] += ui->scale * box->display_style.child_gap.v[axis];
+                v(box->target_rectangle.size)[axis] += v(child->target_rectangle.size)[axis];
+				v(box->target_rectangle.size)[axis] += ui->scale * v(box->display_style.child_gap)[axis];
             }
 
             bool has_at_least_one_child = box->first_child != 0;
-            box->target_rectangle.size.v[axis] -= has_at_least_one_child * ui->scale * box->display_style.child_gap.v[axis];
+            v(box->target_rectangle.size)[axis] -= has_at_least_one_child * ui->scale * v(box->display_style.child_gap)[axis];
         } break;
         case Ui_Size_Kind_LARGEST_CHILD: {
             f32 largest = 0;
             for (Ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                f32 size = child->target_rectangle.size.v[axis];
+                f32 size = v(child->target_rectangle.size)[axis];
                 largest = MAX(largest, size);
             }
-            box->target_rectangle.size.v[axis] += largest;
+            v(box->target_rectangle.size)[axis] += largest;
         } break;
         default: unreachable;
     }
 
-    for_ui_axis (axis) assert(box->target_rectangle.size.v[axis] != 0);
+    for_ui_axis (axis) assert(v(box->target_rectangle.size)[axis] != 0);
 }
 
 static void ui_layout_relative_positions_and_rectangle(Ui *ui, Ui_Box *box) {
@@ -2894,27 +2874,33 @@ static void ui_layout_relative_positions_and_rectangle(Ui *ui, Ui_Box *box) {
         Ui_Axis layout_axis = (Ui_Axis)box->parent->flags & Ui_Box_Flag_CHILD_AXIS;
 
         if (box->previous_sibling != 0) {
-            box->target_rectangle.top_left.v[layout_axis] = box->previous_sibling->target_rectangle.top_left.v[layout_axis];
-            box->target_rectangle.top_left.v[layout_axis] += box->previous_sibling->target_rectangle.size.v[layout_axis];
-            box->target_rectangle.top_left.v[layout_axis] += ui->scale * box->parent->display_style.child_gap.v[layout_axis];
+            v(box->target_rectangle.top_left)[layout_axis] = v(box->previous_sibling->target_rectangle.top_left)[layout_axis];
+            v(box->target_rectangle.top_left)[layout_axis] += v(box->previous_sibling->target_rectangle.size)[layout_axis];
+            v(box->target_rectangle.top_left)[layout_axis] += ui->scale * v(box->parent->display_style.child_gap)[layout_axis];
         } else {
-            box->target_rectangle.top_left.v[layout_axis] = box->parent->target_rectangle.top_left.v[layout_axis];
-			box->target_rectangle.top_left.v[layout_axis] += ui->scale * box->parent->display_style.inner_padding.v[layout_axis];
-			box->target_rectangle.top_left.v[layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
+            v(box->target_rectangle.top_left)[layout_axis] = v(box->parent->target_rectangle.top_left)[layout_axis];
+			v(box->target_rectangle.top_left)[layout_axis] += ui->scale * v(box->parent->display_style.inner_padding)[layout_axis];
+			v(box->target_rectangle.top_left)[layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
         }
 
         Ui_Axis non_layout_axis = !layout_axis;
-        box->target_rectangle.top_left.v[non_layout_axis] = box->parent->target_rectangle.top_left.v[non_layout_axis];
-        box->target_rectangle.top_left.v[non_layout_axis] += ui->scale * box->parent->display_style.inner_padding.v[non_layout_axis];
-        box->target_rectangle.top_left.v[non_layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
+        v(box->target_rectangle.top_left)[non_layout_axis] = v(box->parent->target_rectangle.top_left)[non_layout_axis];
+        v(box->target_rectangle.top_left)[non_layout_axis] += ui->scale * v(box->parent->display_style.inner_padding)[non_layout_axis];
+        v(box->target_rectangle.top_left)[non_layout_axis] += !!(box->parent->flags & Ui_Box_Flag_DRAW_BORDER) * box->parent->display_style.border_width * ui->scale;
     }
 
     bool animate = !!(box->flags & Ui_Box_Flag_ANIMATE);
     animate = animate && !(box->flags & Ui_Box_Flag__FIRST_FRAME);
     if (animate) {
-        V4 display = bit_cast(V4) box->display_rectangle;
-        display = v4_stable_lerp(display, bit_cast(V4) box->target_rectangle, box->display_style.animation_speed, ui->platform->frame.seconds_since_last_frame);
-        box->display_rectangle = bit_cast(Ui_Box_Rectangle) display;
+        V4 display_as_v4;
+        memcpy(&display_as_v4, &box->display_rectangle, sizeof box->display_rectangle);
+
+        V4 target_as_v4;
+        memcpy(&target_as_v4, &box->target_rectangle, sizeof box->target_rectangle);
+
+        display_as_v4 = v4_stable_lerp(display_as_v4, target_as_v4, box->display_style.animation_speed, ui->platform->frame.seconds_since_last_frame);
+
+        memcpy(&box->display_rectangle, &display_as_v4, sizeof display_as_v4);
     } else {
         box->display_rectangle = box->target_rectangle;
     }
@@ -3092,7 +3078,7 @@ static Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *for
     if (display_string.count > 0) {
         f32 font_size = box->display_style.font_size * ui->scale;
         box->target_rectangle.size = platform_measure_text(ui->platform, box->display_string, font_size);
-        for_ui_axis (axis) assert(box->target_rectangle.size.v[axis] != 0);
+        for_ui_axis (axis) assert(v(box->target_rectangle.size)[axis] != 0);
     }
 
     if (box->parent != 0) {
@@ -3112,8 +3098,12 @@ static Ui_Box *ui_pushv(Ui *ui, bool parent, Ui_Box_Flags flags, const char *for
 
     box->target_style_set = ui->style.stack[ui->style.count - 1];
 
-    V4 rectangle = bit_cast(V4) box->display_rectangle.top_left;
-    rectangle.zw = v2_add(box->display_rectangle.top_left, box->display_rectangle.size);
+    V4 rectangle;
+    memcpy(&rectangle, &box->display_rectangle, sizeof box->display_rectangle);
+
+    V2 bottom_right = v2_add(box->display_rectangle.top_left, box->display_rectangle.size);
+    v4_bottom(rectangle) = bottom_right.y;
+    v4_right(rectangle) = bottom_right.x;
 
     box->hovered = !!(box->flags & Ui_Box_Flag_HOVERABLE) && intersect_point_in_rectangle(ui->platform->frame.mouse_position, rectangle);
     box->clicked = box->hovered && !!(box->flags & Ui_Box_Flag_CLICKABLE) && ui->platform->frame.mouse_clicked[App_Mouse_Button_LEFT];
