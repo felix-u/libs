@@ -21,9 +21,6 @@
 	#define SOKOL_D3D11
 #elif BASE_OS == BASE_OS_MACOS
 	#define SOKOL_METAL
-#elif BASE_OS == BASE_OS_EMSCRIPTEN
-	// #define SOKOL_WGPU
-	#define SOKOL_GLES3
 #else
 	#error "unsupported OS"
 #endif
@@ -37,14 +34,23 @@
 #if defined(BASE_PLATFORM_IMPLEMENTATION)
 	#define SOKOL_IMPL
 	#define FONTSTASH_IMPLEMENTATION
+    #define FLT_MAX 3.40282347e38f
+#else
+    typedef  u8  uint8_t;
+    typedef u16 uint16_t;
+    typedef u32 uint32_t;
+    typedef u64 uint64_t;
 #endif
 
-#include "sokol/sokol_gfx.h"
-#include "sokol/sokol_gl.h"
-#include <stdio.h>
+// TODO(felix): a metaprogram "#include capture" system would let us override the system directories to provide our own stubs for stdint, etc.
+
+#include "sokol/sokol_gfx.h" // NOTE(felix): guarded 3 stdlib includes starting on line 1927, and 3 more starting line 5219
+#include "sokol/sokol_gl.h" // NOTE(felix): commented out 3 stdlib includes starting on line 697
+
+#include "sokol/sokol_app.h" // NOTE(felix): commented out 3 stdlib includes on line 1295
 #include "fontstash/fontstash.h"
+
 #include "sokol/sokol_fontstash.h" // NOTE(felix): commented out the 3 stdlib includes on line 187
-#include "sokol/sokol_app.h"
 #include "sokol/sokol_glue.h"
 
 #if COMPILER_CLANG
@@ -115,6 +121,9 @@ static void sokol_event(const sapp_event *event, void *user_data) {
         } break;
         case SAPP_EVENTTYPE_MOUSE_MOVE: {
             info->mouse_position = (V2){ .x = event->mouse_x, .y = event->mouse_y };
+        } break;
+        case SAPP_EVENTTYPE_MOUSE_SCROLL: {
+            info->scroll = event->scroll_y * 0.25f;
         } break;
         default: break;
     }
@@ -188,9 +197,9 @@ static void sokol_init(void *user_data) {
             .height = atlas_dimension,
         });
 
-        String font_ttf_file = { .data = (u8 *)font_ttf_chars, .count = font_ttf_size };
+        String font_ttf_file = { .data = platform__font_ttf_chars, .count = platform__font_ttf_size };
 
-        platform->font_id = fonsAddFontMem(platform->fontstash_context, "sans", font_ttf_file.data, (i32)font_ttf_file.count, false);
+        platform->font_id = fonsAddFontMem(platform->fontstash_context, "sans", (unsigned char *)font_ttf_file.data, (i32)font_ttf_file.count, false);
         fonsSetFont(platform->fontstash_context, platform->font_id);
     }
 
@@ -243,13 +252,7 @@ static void sokol_frame(void *user_data) {
                 assert(command->rectangle.size.x >= 0);
                 assert(command->rectangle.size.y >= 0);
 
-                V2 pivot = {0};
-                if (v2_equals(command->rectangle.pivot, (V2){0})) {
-                    V2 add = v2_scale(command->rectangle.size, 0.5f);
-                    pivot = v2_add(command->position, add);
-                } else pivot = command->rectangle.pivot;
-
-                M3 model = m3_from_rotation(command->rectangle.rotation_radians, pivot);
+                M3 model = m3_fill_diagonal(1.f);
 
                 u32 *c = command->color;
 
@@ -272,7 +275,7 @@ static void sokol_frame(void *user_data) {
                 vertex_parameters.top_right_color = rgba_float_from_hex(command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID]);
                 vertex_parameters.border_color = rgba_float_from_hex(command->rectangle.border_color);
 
-                static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
+                _Static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
                 fragment_parameters_t fragment_parameters;
                 memcpy(&fragment_parameters, &vertex_parameters, sizeof vertex_parameters);
 
@@ -290,10 +293,10 @@ static void sokol_frame(void *user_data) {
 
                 vertex_parameters.framebuffer_size = platform->base.frame.window_size;
 
-                vertex_parameters.quad_top_left = command->quadrilateral[Draw_Corner_TOP_LEFT];
-                vertex_parameters.quad_bottom_left = command->quadrilateral[Draw_Corner_BOTTOM_LEFT];
-                vertex_parameters.quad_bottom_right = command->quadrilateral[Draw_Corner_BOTTOM_RIGHT];
-                vertex_parameters.quad_top_right = command->quadrilateral[Draw_Corner_TOP_RIGHT];
+                vertex_parameters.quad_top_left = command->quadrilateral.corners[Draw_Corner_TOP_LEFT];
+                vertex_parameters.quad_bottom_left = command->quadrilateral.corners[Draw_Corner_BOTTOM_LEFT];
+                vertex_parameters.quad_bottom_right = command->quadrilateral.corners[Draw_Corner_BOTTOM_RIGHT];
+                vertex_parameters.quad_top_right = command->quadrilateral.corners[Draw_Corner_TOP_RIGHT];
 
                 vertex_parameters.color = rgba_float_from_hex(c[Draw_Color_SOLID]);
                 vertex_parameters.bottom_left_color = rgba_float_from_hex(command->gradient ? c[Draw_Color_BOTTOM_LEFT] : c[Draw_Color_SOLID]);
@@ -301,7 +304,7 @@ static void sokol_frame(void *user_data) {
                 vertex_parameters.top_right_color = rgba_float_from_hex(command->gradient ? c[Draw_Color_TOP_RIGHT] : c[Draw_Color_SOLID]);
                 vertex_parameters.border_color = rgba_float_from_hex(command->rectangle.border_color);
 
-                static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
+                _Static_assert(sizeof(vertex_parameters_t) == sizeof(fragment_parameters_t), "");
                 fragment_parameters_t fragment_parameters;
                 memcpy(&fragment_parameters, &vertex_parameters, sizeof vertex_parameters);
 
@@ -323,6 +326,7 @@ static void sokol_frame(void *user_data) {
     sg_end_pass();
     sg_commit();
 
+    platform->base.frame.scroll = 0;
     memset(platform->base.frame.mouse_clicked, 0, sizeof platform->base.frame.mouse_clicked);
     memset(platform->base.frame.key_pressed, 0, sizeof platform->base.frame.key_pressed);
     scratch_end(scratch);
@@ -334,12 +338,14 @@ static V2 platform_measure_text(Platform_Base *platform, String text, f32 font_s
     FONScontext *fontstash_context = ((Platform *)platform)->fontstash_context;
     fonsSetSize(fontstash_context, font_size);
 
+    f32 ascender, descender, line_height;
+    fonsVertMetrics(fontstash_context, &ascender, &descender, &line_height);
+
     f32 bounds[4] = {0};
     String s = text;
-    V2 result = {
-        .x = fonsTextBounds(fontstash_context, 0, 0, (char *)s.data, (char *)s.data + s.count, bounds),
-        .y = bounds[3] - bounds[1],
-    };
+    f32 advance = fonsTextBounds(fontstash_context, 0, 0, (char *)s.data, (char *)s.data + s.count, bounds);
+
+    V2 result = { .x = advance, .y = line_height };
     return result;
 }
 

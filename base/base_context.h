@@ -1,15 +1,31 @@
 // Based on information from https://sourceforge.net/p/predef/wiki/Home/
 
-#define BASE_OS_NONE (0)
-#define BASE_OS_WINDOWS (1 << 0)
-#define BASE_OS_MACOS (1 << 1)
-#define BASE_OS_LINUX (1 << 2)
-#define BASE_OS_EMSCRIPTEN (1 << 3)
-#define BASE_OS_COUNT (1 << 4)
-#define BASE_OS_ANY_POSIX (BASE_OS_MACOS | BASE_OS_LINUX | BASE_OS_EMSCRIPTEN)
+#if !defined(BASE_CONTEXT_H)
+#define BASE_CONTEXT_H
 
-#if defined(__EMSCRIPTEN__)
-    #define BASE_OS BASE_OS_EMSCRIPTEN
+#if __STDC_VERSION__ >= 202311L
+    #define BASE_C_VERSION 2023
+#elif __STDC_VERSION__ >= 201112L
+    #define BASE_C_VERSION 2011
+#elif __STDC_VERSION__ >= 199901L
+    #define BASE_C_VERSION 1999
+#elif defined(__STDC__)
+    #define BASE_C_VERSION 1989
+#else
+    #define BASE_C_VERSION 0
+#endif
+
+#define BASE_OS_WINDOWS (1 << 0)
+#define BASE_OS_MACOS   (1 << 1)
+#define BASE_OS_LINUX   (1 << 2)
+#define BASE_OS_WASM    (1 << 3)
+#define BASE_OS_COUNT   (1 << 4)
+#define BASE_OS_ANY_POSIX (BASE_OS_MACOS | BASE_OS_LINUX)
+
+#if defined(BASE_OS)
+    //
+#elif defined(__wasm__) || defined(__wasm32__)
+    #define BASE_OS BASE_OS_WASM
 #elif defined(__linux__) || defined(__gnu_linux__)
     #define BASE_OS BASE_OS_LINUX
 #elif defined(__APPLE__) && defined(__MACH__)
@@ -17,7 +33,7 @@
 #elif defined(_WIN32)
     #define BASE_OS BASE_OS_WINDOWS
 #else
-    #define BASE_OS BASE_OS_NONE
+    #error "could not context-crack OS; define BASE_OS manually before including this file"
 #endif // OS_...
 
 #if defined(__clang__)
@@ -62,16 +78,17 @@
         #define WINDOWS_SUBSYSTEM_WINDOWS 0
         #define WINDOWS_SUBSYSTEM_CONSOLE 1
     #elif !defined(WINDOWS_SUBSYSTEM_WINDOWS)
-        static_assert(WINDOWS_SUBSYSTEM_CONSOLE == 1, "");
         #define WINDOWS_SUBSYSTEM_WINDOWS 0
     #elif !defined(WINDOWS_SUBSYSTEM_CONSOLE)
-        static_assert(WINDOWS_SUBSYSTEM_WINDOWS == 1, "");
         #define WINDOWS_SUBSYSTEM_CONSOLE 0
     #else
-        static_assert(!WINDOWS_SUBSYSTEM_WINDOWS || !WINDOWS_SUBSYSTEM_CONSOLE, "");
+        #error "unreachable"
     #endif
 #endif
 
 #if !defined(PLATFORM_NONE)
     #define PLATFORM_NONE 0
 #endif
+
+
+#endif // BASE_CONTEXT_H

@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-01-08
+// https://github.com/felix-u 2026-04-06
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(CPU_DRAW_H)
@@ -8,26 +8,44 @@
 typedef struct {
     unsigned *pixels;
     int stride;
-    int width;
     int height;
+    int clip_left;
+    int clip_top;
+    int clip_right;
+    int clip_bottom;
 } cpu_draw_Surface;
 
-#if !defined(CPU_DRAW_MAX_FONT_WIDTH)
-    #define CPU_DRAW_MAX_FONT_WIDTH 8
+#if !defined(CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8)
+    #define CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 2
 #endif
-#if !defined(CPU_DRAW_MAX_FONT_HEIGHT)
-    #define CPU_DRAW_MAX_FONT_HEIGHT 12
+#if !defined(CPU_DRAW_GLYPH_MAX_HEIGHT)
+    #define CPU_DRAW_GLYPH_MAX_HEIGHT 16
 #endif
 
 typedef struct {
-    unsigned char width;
-    unsigned char pixels[CPU_DRAW_MAX_FONT_WIDTH * CPU_DRAW_MAX_FONT_HEIGHT];
+    signed char width;
+    signed char bound_width, bound_height, bound_left, bound_bottom;
+    unsigned char bytes[CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 * CPU_DRAW_GLYPH_MAX_HEIGHT];
 } cpu_draw_Glyph;
 
 typedef struct {
     int height;
+    int ascent, descent;
     cpu_draw_Glyph glyphs[96];
 } cpu_draw_Font;
+
+#if !defined(CPU_DRAW_SPRITE_MAX_WIDTH_OVER_8)
+    #define CPU_DRAW_SPRITE_MAX_WIDTH_OVER_8 CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8
+#endif
+#if !defined(CPU_DRAW_SPRITE_MAX_HEIGHT)
+    #define CPU_DRAW_SPRITE_MAX_HEIGHT CPU_DRAW_GLYPH_MAX_HEIGHT
+#endif
+
+typedef struct {
+    signed char width;
+    signed char height;
+    unsigned char bytes[CPU_DRAW_SPRITE_MAX_WIDTH_OVER_8 * CPU_DRAW_GLYPH_MAX_HEIGHT];
+} cpu_draw_Sprite;
 
 #if !defined(CPU_DRAW_FUNCTION)
     #define CPU_DRAW_FUNCTION
@@ -37,674 +55,14 @@ CPU_DRAW_FUNCTION void cpu_draw_line(cpu_draw_Surface surface, int start_x, int 
 CPU_DRAW_FUNCTION void cpu_draw_pixel_if_in_bounds(cpu_draw_Surface surface, int x, int y, unsigned color);
 CPU_DRAW_FUNCTION void cpu_draw_rectangle(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned color);
 CPU_DRAW_FUNCTION void cpu_draw_rectangle_rotated(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned color, float radians, int pivot_x, int pivot_y);
-CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, cpu_draw_Font font, int left, int top, unsigned color, const char *text, int length, int *only_measure_width);
+CPU_DRAW_FUNCTION void cpu_draw_rounded_rectangle(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned fill_color, unsigned border_color, int border_radius, int border_width);
+CPU_DRAW_FUNCTION void cpu_draw_sdf_corners(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned fill_color, unsigned border_color, int border_radius, int border_width);
+CPU_DRAW_FUNCTION void cpu_draw_sprite_1bit(cpu_draw_Surface surface, int x, int y, cpu_draw_Sprite sprite, unsigned color);
+CPU_DRAW_FUNCTION cpu_draw_Surface cpu_draw_subsurface(cpu_draw_Surface surface, int x, int y, int width, int height);
+CPU_DRAW_FUNCTION cpu_draw_Surface cpu_draw_surface(unsigned *pixels, int stride, int width, int height);
+CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, const cpu_draw_Font *font, int left, int top, unsigned color, const char *text, int length, int *only_measure_width);
 CPU_DRAW_FUNCTION void cpu_draw_triangle(cpu_draw_Surface surface, int ax, int ay, int bx, int by, int cx, int cy, unsigned color);
 CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, int ax, int ay, int bx, int by, int cx, int cy, unsigned acolor, unsigned bcolor, unsigned ccolor);
-
-cpu_draw_Font cpu_draw_default_font = {
-    .height = 5,
-    .glyphs = {
-        [' ' - 32] = { .width = 2 },
-        ['!' - 32] = { .width = 1, .pixels = {
-            1,
-            1,
-            1,
-            0,
-            1,
-        } },
-        ['"' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            0, 0, 0,
-            0, 0, 0,
-            0, 0, 0,
-        } },
-        ['#' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-        } },
-        ['$' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            0, 1, 1,
-            0, 1, 0,
-            1, 1, 0,
-            0, 1, 0,
-        } },
-        ['%' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            0, 0, 1,
-            0, 1, 0,
-            1, 0, 0,
-            1, 0, 1,
-        } },
-        ['&' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 0, 1,
-            1, 1, 0,
-            1, 0, 1,
-            0, 1, 1,
-        } },
-        ['\'' - 32] = { .width = 1, .pixels = {
-            1,
-            1,
-            0,
-            0,
-            0,
-        } },
-        ['(' - 32] = { .width = 2, .pixels = {
-            0, 1,
-            1, 0,
-            1, 0,
-            1, 0,
-            0, 1,
-        } },
-        [')' - 32] = { .width = 2, .pixels = {
-            1, 0,
-            0, 1,
-            0, 1,
-            0, 1,
-            1, 0,
-        } },
-        ['*' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            0, 1, 0,
-            1, 0, 1,
-            0, 0, 0,
-        } },
-        ['+' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 1, 0,
-            1, 1, 1,
-            0, 1, 0,
-            0, 0, 0,
-        } },
-        [',' - 32] = { .width = 2, .pixels = {
-            0, 0,
-            0, 0,
-            0, 0,
-            0, 1,
-            1, 0,
-        } },
-        ['-' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 0, 0,
-            1, 1, 1,
-            0, 0, 0,
-            0, 0, 0,
-        } },
-        ['.' - 32] = { .width = 1, .pixels = {
-            0,
-            0,
-            0,
-            0,
-            1,
-        } },
-        ['/' - 32] = { .width = 3, .pixels = {
-            0, 0, 1,
-            0, 0, 1,
-            0, 1, 0,
-            1, 0, 0,
-            1, 0, 0,
-        } },
-        ['0' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['1' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['2' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 1,
-            0, 0, 1,
-            1, 1, 0,
-            1, 1, 1,
-        } },
-        ['3' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 0, 1,
-            1, 1, 1,
-            0, 0, 1,
-            1, 1, 1,
-        } },
-        ['4' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-            0, 0, 1,
-            0, 0, 1,
-        } },
-        ['5' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 0,
-            0, 0, 1,
-            1, 1, 0,
-        } },
-        ['6' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['7' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 0, 1,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['8' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['9' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-            0, 0, 1,
-            1, 1, 1,
-        } },
-        [':' - 32] = { .width = 1, .pixels = {
-            0,
-            0,
-            1,
-            0,
-            1,
-        } },
-        [';' - 32] = { .width = 2, .pixels = {
-            0, 0,
-            0, 1,
-            0, 0,
-            0, 1,
-            1, 0,
-        } },
-        ['<' - 32] = { .width = 3, .pixels = {
-            0, 0, 1,
-            0, 1, 0,
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1,
-        } },
-        ['=' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            0, 0, 0,
-            1, 1, 1,
-            0, 0, 0,
-        } },
-        ['>' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1,
-            0, 1, 0,
-            1, 0, 0,
-        } },
-        ['?' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            0, 0, 1,
-            0, 1, 0,
-            0, 0, 0,
-            0, 1, 0,
-        } },
-        ['@' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['A' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['B' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 0,
-        } },
-        ['C' - 32] = { .width = 3, .pixels = {
-            0, 1, 1,
-            1, 0, 0,
-            1, 0, 0,
-            1, 0, 0,
-            0, 1, 1,
-        } },
-        ['D' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 0,
-        } },
-        ['E' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['F' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-            1, 0, 0,
-            1, 0, 0,
-        } },
-        ['G' - 32] = { .width = 3, .pixels = {
-            0, 1, 1,
-            1, 0, 0,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-        } },
-        ['H' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['I' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            1, 1, 1,
-        } },
-        ['J' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-        } },
-        ['K' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['L' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            1, 0, 0,
-            1, 0, 0,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['M' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['N' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 1, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['O' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-        } },
-        ['P' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            1, 0, 1,
-            1, 1, 0,
-            1, 0, 0,
-            1, 0, 0,
-        } },
-        ['Q' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-            0, 0, 1,
-        } },
-        ['R' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            1, 0, 1,
-            1, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['S' - 32] = { .width = 3, .pixels = {
-            0, 1, 1,
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1,
-            1, 1, 0,
-        } },
-        ['T' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['U' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['V' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-        } },
-        ['W' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-        } },
-        ['X' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['Y' - 32] = { .width = 3, .pixels = {
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['Z' - 32] = { .width = 3, .pixels = {
-            1, 1, 1,
-            0, 0, 1,
-            0, 1, 0,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['[' - 32] = { .width = 2, .pixels = {
-            1, 1,
-            1, 0,
-            1, 0,
-            1, 0,
-            1, 1,
-        } },
-        ['\\' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1,
-            0, 0, 1,
-        } },
-        [']' - 32] = { .width = 2, .pixels = {
-            1, 1,
-            0, 1,
-            0, 1,
-            0, 1,
-            1, 1,
-        } },
-        ['^' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-            0, 0, 0,
-            0, 0, 0,
-        } },
-        ['_' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 0, 0,
-            0, 0, 0,
-            0, 0, 0,
-            1, 1, 1,
-        } },
-        ['`' - 32] = { .width = 2, .pixels = {
-            1, 0,
-            0, 1,
-            0, 0,
-            0, 0,
-            0, 0,
-        } },
-        ['a' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['b' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['c' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 0, 0,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['d' - 32] = { .width = 3, .pixels = {
-            0, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['e' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['f' - 32] = { .width = 3, .pixels = {
-            0, 1, 1,
-            0, 1, 0,
-            1, 1, 1,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['g' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 1, 1,
-            0, 0, 1,
-            1, 1, 1,
-        } },
-        ['h' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['i' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            1, 1, 1,
-        } },
-        ['j' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 1, 1,
-            0, 0, 1,
-            1, 0, 1,
-            0, 1, 1,
-        } },
-        ['k' - 32] = { .width = 3, .pixels = {
-            1, 0, 0,
-            1, 0, 1,
-            1, 1, 0,
-            1, 1, 0,
-            1, 0, 1,
-        } },
-        ['l' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 1,
-        } },
-        ['m' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['n' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-        } },
-        ['o' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['p' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 0,
-        } },
-        ['q' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            1, 0, 1,
-            1, 1, 1,
-            0, 0, 1,
-        } },
-        ['r' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 0,
-            1, 0, 1,
-            1, 0, 0,
-            1, 0, 0,
-        } },
-        ['s' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            0, 1, 1,
-            1, 1, 0,
-            0, 0, 1,
-            1, 1, 0,
-        } },
-        ['t' - 32] = { .width = 3, .pixels = {
-            0, 1, 0,
-            1, 1, 1,
-            0, 1, 0,
-            0, 1, 0,
-            0, 1, 0,
-        } },
-        ['u' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-        } },
-        ['v' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 0, 1,
-            0, 1, 0,
-        } },
-        ['w' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            1, 0, 1,
-            1, 1, 1,
-            1, 0, 1,
-        } },
-        ['x' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            0, 1, 0,
-            0, 1, 0,
-            1, 0, 1,
-        } },
-        ['y' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 1,
-            1, 1, 1,
-            0, 0, 1,
-            1, 1, 0,
-        } },
-        ['z' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 1, 1,
-            0, 1, 1,
-            1, 0, 0,
-            1, 1, 1,
-        } },
-        ['{' - 32] = { .width = 3, .pixels = {
-            0, 1, 1,
-            0, 1, 0,
-            1, 0, 0,
-            0, 1, 0,
-            0, 1, 1,
-        } },
-        ['|' - 32] = { .width = 1, .pixels = {
-            1,
-            1,
-            0,
-            1,
-            1,
-        } },
-        ['}' - 32] = { .width = 3, .pixels = {
-            1, 1, 0,
-            0, 1, 0,
-            0, 0, 1,
-            0, 1, 0,
-            1, 1, 0,
-        } },
-        ['~' - 32] = { .width = 3, .pixels = {
-            0, 0, 0,
-            1, 0, 0,
-            1, 1, 1,
-            0, 0, 1,
-            0, 0, 0,
-        } },
-    },
-};
 
 
 #endif // CPU_DRAW_H
@@ -713,11 +71,17 @@ cpu_draw_Font cpu_draw_default_font = {
 #if defined(CPU_DRAW_IMPLEMENTATION)
 
 
+#if !defined(CPU_DRAW_ASSERT)
+    #include <assert.h>
+    #define CPU_DRAW_ASSERT assert
+#endif
+
 #if !defined(CPU_DRAW_SINF)
     #include <math.h>
     #define CPU_DRAW_SINF sinf
     #define CPU_DRAW_COSF cosf
     #define CPU_DRAW_ROUNDF roundf
+    #define CPU_DRAW_SQRTF sqrtf
 #endif
 
 #define CPU_DRAW__SWAP(a, b) do {\
@@ -731,6 +95,8 @@ cpu_draw_Font cpu_draw_default_font = {
 
 CPU_DRAW_FUNCTION void cpu_draw_line(cpu_draw_Surface surface, int start_x, int start_y, int end_x, int end_y, unsigned color) {
     // Reference: https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
+
+    // TODO(felix): investigate possibility of hoisting bounds check out of loop
 
     _Bool steep = CPU_DRAW__ABS(end_y - start_y) > CPU_DRAW__ABS(end_x - start_x);
     if (steep) {
@@ -752,11 +118,10 @@ CPU_DRAW_FUNCTION void cpu_draw_line(cpu_draw_Surface surface, int start_x, int 
         int difference = 2 * dx - dy;
         int x = start_x;
 
-        // TODO(felix): investigate
-        // start_y = CPU_DRAW__MAX(0, start_y);
-        // end_y = CPU_DRAW__MIN(end_y, surface.height - 1);
+        start_y = CPU_DRAW__MAX(start_y, surface.clip_top);
+        end_y = CPU_DRAW__MIN(end_y, surface.clip_bottom);
 
-        for (int y = start_y; y <= end_y; y += 1) {
+        for (int y = start_y; y < end_y; y += 1) {
             cpu_draw_pixel_if_in_bounds(surface, x, y, color);
             if (difference > 0) {
                 x += x_add;
@@ -793,14 +158,16 @@ CPU_DRAW_FUNCTION void cpu_draw_line(cpu_draw_Surface surface, int start_x, int 
 }
 
 CPU_DRAW_FUNCTION void cpu_draw_pixel_if_in_bounds(cpu_draw_Surface surface, int x, int y, unsigned color) {
-    if (0 <= x && x < surface.width && 0 <= y && y < surface.height) surface.pixels[y * surface.stride + x] = color;
+    _Bool draw = surface.clip_left <= x && x < surface.clip_right;
+    draw = draw && surface.clip_top <= y && y < surface.clip_bottom;
+    if (draw) surface.pixels[y * surface.stride + x] = color;
 }
 
 CPU_DRAW_FUNCTION void cpu_draw_rectangle(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned color) {
-    left = CPU_DRAW__MAX(left, 0);
-    right = CPU_DRAW__MIN(right + 1, surface.width);
-    top = CPU_DRAW__MAX(top, 0);
-    bottom = CPU_DRAW__MIN(bottom + 1, surface.height);
+    left = CPU_DRAW__MAX(left, surface.clip_left);
+    right = CPU_DRAW__MIN(right, surface.clip_right);
+    top = CPU_DRAW__MAX(top, surface.clip_top);
+    bottom = CPU_DRAW__MIN(bottom, surface.clip_bottom);
 
     int row = top * surface.stride;
     for (int y = top; y < bottom; y += 1, row += surface.stride) {
@@ -859,31 +226,130 @@ CPU_DRAW_FUNCTION void cpu_draw_rectangle_rotated(cpu_draw_Surface surface, int 
     cpu_draw_triangle(surface, tl.x, tl.y, br.x, br.y, tr.x, tr.y, color);
 }
 
-CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, cpu_draw_Font font, int left, int top, unsigned color, const char *text, int length, int *only_measure_width) {
+CPU_DRAW_FUNCTION void cpu_draw_rounded_rectangle(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned fill_color, unsigned border_color, int border_radius, int border_width) {
+    cpu_draw_sdf_corners(surface, left, top, right, bottom, fill_color, border_color, border_radius, border_width);
+
+    // TODO(felix): bound here, then use non-bounds-checked cpu_draw function variants below
+
+    int in_left = left + border_radius;
+    int in_right = right - border_radius;
+    int in_top = top + border_radius;
+    int in_bottom = bottom - border_radius;
+
+    if (fill_color != 0) {
+        // top between corners
+        cpu_draw_rectangle(surface, in_left, top + border_width, in_right, in_top, fill_color);
+        // middle
+        cpu_draw_rectangle(surface, left + border_width, in_top, right - border_width, in_bottom, fill_color);
+        // bottom between corners
+        cpu_draw_rectangle(surface, in_left, in_bottom, in_right, bottom - border_width, fill_color);
+    }
+
+    if (border_color != 0) {
+        // top between corners
+        cpu_draw_rectangle(surface, in_left, top, in_right, top + border_width, border_color);
+        // middle left
+        cpu_draw_rectangle(surface, left, in_top, left + border_width, in_bottom, border_color);
+        // middle right
+        cpu_draw_rectangle(surface, right - border_width, in_top, right, in_bottom, border_color);
+        // bottom between corners
+        cpu_draw_rectangle(surface, in_left, bottom - border_width, in_right, bottom, border_color);
+    }
+}
+
+CPU_DRAW_FUNCTION void cpu_draw_sdf_corners(cpu_draw_Surface surface, int left, int top, int right, int bottom, unsigned fill_color, unsigned border_color, int border_radius, int border_width) {
+    float radius = (float)border_radius;
+
+    int x_add[4] = { 1, -1, 1, -1 };
+    int y_add[4] = { 1, 1, -1, -1 };
+    int x_bound[4] = { left, right, left, right };
+    int y_bound[4] = { top, top, bottom, bottom };
+
+    for (int corner = 0; corner < 4; corner += 1) {
+        int x_sign = x_add[corner];
+        int y_sign = y_add[corner];
+
+        for (int x = 0; x < border_radius; x += 1) {
+            float distance_x = (float)(border_radius - x);
+
+            for (int y = 0; y < border_radius; y += 1) {
+                float distance_y = (float)(border_radius - y);
+                float distance = CPU_DRAW_SQRTF(distance_x * distance_x + distance_y * distance_y);
+
+                if (distance >= radius) continue;
+
+                int x_coordinate = x_bound[corner] + x * x_sign - (x_sign == -1);
+                int y_coordinate = y_bound[corner] + y * y_sign - (y_sign == -1);
+                if (radius - distance <= (float)border_width && border_color != 0) {
+                    cpu_draw_pixel_if_in_bounds(surface, x_coordinate, y_coordinate, border_color);
+                } else if (fill_color != 0) {
+                    cpu_draw_pixel_if_in_bounds(surface, x_coordinate, y_coordinate, fill_color);
+                }
+            }
+        }
+    }
+}
+
+CPU_DRAW_FUNCTION void cpu_draw_sprite_1bit(cpu_draw_Surface surface, int x, int y, cpu_draw_Sprite sprite, unsigned color) {
+    // TODO(felix): move bounds checks outside loop
+    for (int row = 0; row < (int)sprite.height; row += 1) {
+        for (int column = 0; column < (int)sprite.width; column += 1) {
+            unsigned char bits = sprite.bytes[row * CPU_DRAW_SPRITE_MAX_WIDTH_OVER_8 + column / 8];
+            unsigned char bit = (bits >> (7 - (column & 7))) & 1;
+            if (bit != 0) cpu_draw_pixel_if_in_bounds(surface, x + column, y + row, color);
+        }
+    }
+}
+
+CPU_DRAW_FUNCTION cpu_draw_Surface cpu_draw_subsurface(cpu_draw_Surface surface, int x, int y, int width, int height) {
+    surface.clip_left = x;
+    surface.clip_top = y;
+    surface.clip_right = x + width;
+    surface.clip_bottom = y + height;
+    return surface;
+}
+
+CPU_DRAW_FUNCTION cpu_draw_Surface cpu_draw_surface(unsigned *pixels, int stride, int width, int height) {
+    cpu_draw_Surface surface = {
+        .pixels = pixels,
+        .stride = stride,
+        .clip_right = width,
+        .clip_bottom = height,
+    };
+    return surface;
+}
+
+CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, const cpu_draw_Font *font, int left, int top, unsigned color, const char *text, int length, int *only_measure_width) {
     if (only_measure_width != 0) *only_measure_width = 0;
 
     int x = left;
     for (int i = 0; i < length; i += 1) {
         char c = text[i];
-        cpu_draw_Glyph glyph = font.glyphs[c - 32];
+        CPU_DRAW_ASSERT(c != 0);
+        CPU_DRAW_ASSERT((unsigned long long)(c - 32) < (sizeof font->glyphs / sizeof *font->glyphs));
 
-        int spacing = 1; // TODO(felix): configurable
+        cpu_draw_Glyph glyph = font->glyphs[c - 32];
 
         if (only_measure_width != 0) {
-            *only_measure_width += glyph.width + !(i + 1 == length) * spacing;
+            *only_measure_width += glyph.width;
         } else {
-            for (int row = 0; row < font.height; row += 1) {
-                int y = top + row;
-                for (int column = 0; column < glyph.width; column += 1) {
-                    int local_x = x + column;
-                    _Bool in_bounds = (0 <= local_x && local_x < surface.width) && (0 <= y && y < surface.height);
+            for (int row = 0; row < glyph.bound_height; row += 1) {
+                int y = top + font->ascent - glyph.bound_bottom - glyph.bound_height + row;
+                for (int column = 0; column < glyph.bound_width; column += 1) {
+                    // TODO(felix): move bounds check outside
+                    int local_x = x + glyph.bound_left + column;
+
+                    _Bool in_bounds = (surface.clip_left <= local_x && local_x < surface.clip_right);
+                    in_bounds = in_bounds && (surface.clip_top <= y && y < surface.clip_bottom);
                     if (!in_bounds) continue;
 
-                    unsigned char pixel = glyph.pixels[row * glyph.width + column];
-                    if (pixel != 0) surface.pixels[y * surface.stride + local_x] = color;
+                    unsigned char bits = glyph.bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + column / 8];
+                    unsigned char bit = (bits >> (7 - (column & 7))) & 1;
+                    if (bit != 0) surface.pixels[y * surface.stride + local_x] = color;
                 }
             }
-            x += glyph.width + spacing;
+
+            x += glyph.width;
         }
     }
 }
@@ -899,17 +365,17 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle(cpu_draw_Surface surface, int ax, int a
     int bound_max_x = CPU_DRAW__MAX(CPU_DRAW__MAX(ax, bx), cx);
     int bound_max_y = CPU_DRAW__MAX(CPU_DRAW__MAX(ay, by), cy);
 
-    if (bound_max_x < 0 || surface.width <= bound_min_x) return;
-    if (bound_max_y < 0 || surface.height <= bound_min_y) return;
+    if (bound_max_x < surface.clip_left || surface.clip_right <= bound_min_x) return;
+    if (bound_max_y < surface.clip_top || surface.clip_bottom <= bound_min_y) return;
 
     float total_area = cpu_draw__signed_triangle_area(ax, ay, bx, by, cx, cy);
-    if (total_area == 0) return;
+    if (total_area == 0.f) return;
     float reciprocal_total_area = 1.f / total_area;
 
     bound_min_x = CPU_DRAW__MAX(0, bound_min_x);
     bound_min_y = CPU_DRAW__MAX(0, bound_min_y);
-    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x + 1);
-    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y + 1);
+    bound_max_x = CPU_DRAW__MIN(surface.clip_right, bound_max_x + 1);
+    bound_max_y = CPU_DRAW__MIN(surface.clip_bottom, bound_max_y + 1);
 
     for (int x = bound_min_x; x < bound_max_x; x += 1) {
         for (int y = bound_min_y; y < bound_max_y; y += 1) {
@@ -931,11 +397,11 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
     int bound_max_x = CPU_DRAW__MAX(CPU_DRAW__MAX(ax, bx), cx);
     int bound_max_y = CPU_DRAW__MAX(CPU_DRAW__MAX(ay, by), cy);
 
-    if (bound_max_x < 0 || surface.width <= bound_min_x) return;
-    if (bound_max_y < 0 || surface.height <= bound_min_y) return;
+    if (bound_max_x < 0 || surface.clip_right <= bound_min_x) return;
+    if (bound_max_y < 0 || surface.clip_bottom <= bound_min_y) return;
 
     float total_area = cpu_draw__signed_triangle_area(ax, ay, bx, by, cx, cy);
-    if (total_area == 0) return;
+    if (total_area == 0.f) return;
     float reciprocal_total_area = 1.f / total_area;
 
     unsigned colors[3] = { acolor, bcolor, ccolor };
@@ -949,8 +415,8 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
 
     bound_min_x = CPU_DRAW__MAX(0, bound_min_x);
     bound_min_y = CPU_DRAW__MAX(0, bound_min_y);
-    bound_max_x = CPU_DRAW__MIN(surface.width, bound_max_x + 1);
-    bound_max_y = CPU_DRAW__MIN(surface.height, bound_max_y + 1);
+    bound_max_x = CPU_DRAW__MIN(surface.clip_right, bound_max_x + 1);
+    bound_max_y = CPU_DRAW__MIN(surface.clip_bottom, bound_max_y + 1);
 
     for (int x = bound_min_x; x < bound_max_x; x += 1) {
         for (int y = bound_min_y; y < bound_max_y; y += 1) {

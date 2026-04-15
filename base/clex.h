@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-02-02
+// https://github.com/felix-u 2026-03-07
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -293,7 +293,7 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 l->c += 2;
                 while (l->c < l->end) {
                     char c = *l->c & 0x20;
-                    if (!(('0' <= c && c <= '9') || ('a' <= c && c <= 'f'))) break;
+                    if (!(('0' <= *l->c && *l->c <= '9') || ('a' <= c && c <= 'f'))) break;
                     l->c += 1;
                 }
 
@@ -309,7 +309,7 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
             }
 
             if ('1' <= *next && *next <= '7') {
-                CLEX_ASSERT(0 && "TODO(felix)");
+                CLEX_ASSERT(0 && "TODO(felix): octal");
             }
 
             if (*next == '8' || *next == '9') goto error;
@@ -419,7 +419,14 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
             for (l->c += 1; l->c < l->end; l->c += 1) {
                 if (*l->c == '"') break;
                 if (*l->c == '\\') {
-                    CLEX_ASSERT(0 && "TODO(felix): escape sequences");
+                    if (l->c >= l->end) goto error;
+
+                    switch (*(++l->c)) {
+                        case '"': case '?': case '\\': case 'a': case 'b': case 'f': case 'n': case 'r': case 't': case 'v': break;
+                        case '0': CLEX_ASSERT(0 && "TODO(felix): octal digit escape sequence");
+                        case 'x': CLEX_ASSERT(0 && "TODO(felix): hex digit escape sequence");
+                        default: goto error;
+                    }
                 }
                 if (clex__is_newline(l, l->c)) goto error;
             }

@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2025-12-24
+// https://github.com/felix-u 2026-02-09
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(STR_H)
@@ -6,7 +6,7 @@
 
 
 typedef struct {
-    unsigned char *data;
+    const char *data;
     unsigned long long count;
 } String;
 
@@ -15,14 +15,21 @@ typedef struct {
     _Bool ok;
 } String_Contains;
 
-#define STRING_LITERAL_CONSTANT(s)  { .data = (unsigned char *)(s), .count = sizeof(s) - 1 }
+typedef struct {
+    String head, tail;
+    _Bool ok;
+} String_Cut;
+
+#define STRING_LITERAL_CONSTANT(s)  { .data = (s), .count = sizeof(s) - 1 }
 #define STRING_LITERAL(s) (String)STRING_LITERAL_CONSTANT(s)
 
 #if !defined(STR_FUNCTION)
     #define STR_FUNCTION
 #endif
 
+STR_FUNCTION           _Bool cstring_equals(const char *a, const char *b);
 STR_FUNCTION String_Contains string_contains(String s, String substring);
+STR_FUNCTION      String_Cut string_cut_last(String s, char c);
 STR_FUNCTION           _Bool string_equals(String a, String b);
 STR_FUNCTION          String string_from_cstring(const char *s);
 STR_FUNCTION          String string_range(String s, unsigned long long start, unsigned long long end);
@@ -40,11 +47,20 @@ STR_FUNCTION           _Bool string_starts_with(String s, String start);
     #define STR_ASSERT assert
 #endif
 
+STR_FUNCTION _Bool cstring_equals(const char *a, const char *b) {
+    if (*a == 0 || *b == 0) return 0;
+    while (*a != 0 && *a == *b) {
+        a += 1;
+        b += 1;
+    }
+    return *a == *b;
+}
+
 STR_FUNCTION String_Contains string_contains(String s, String substring) {
     String_Contains result = {0};
 
     for (unsigned long long i = 0; i + substring.count <= s.count; i += 1) {
-        u8 *maybe_substring = &s.data[i];
+        const char *maybe_substring = &s.data[i];
 
         _Bool found = 1;
         for (unsigned long long j = 0; j < substring.count; j += 1) {
@@ -64,6 +80,22 @@ STR_FUNCTION String_Contains string_contains(String s, String substring) {
     return result;
 }
 
+STR_FUNCTION String_Cut string_cut_last(String s, char c) {
+    String_Cut cut = { .head = s, .tail = s };
+
+    for (unsigned long long i = 0; i < s.count; i += 1) {
+        unsigned long long index = s.count - 1 - i;
+        if (s.data[index] == c) {
+            cut.head = string_range(s, 0, index);
+            cut.tail = string_range(s, index + 1, s.count);
+            cut.ok = 1;
+            break;
+        }
+    }
+
+    return cut;
+}
+
 static _Bool string_equals(String a, String b) {
     if (a.count != b.count) return 0;
     for (unsigned long long i = 0; i < a.count; i += 1) {
@@ -73,9 +105,8 @@ static _Bool string_equals(String a, String b) {
 }
 
 static String string_from_cstring(const char *s) {
-    STR_ASSERT(s != 0);
-    String result = { .data = (unsigned char *)s };
-    while (s[result.count] != 0) result.count += 1;
+    String result = { .data = s };
+    if (s != 0) while (s[result.count] != 0) result.count += 1;
     return result;
 }
 

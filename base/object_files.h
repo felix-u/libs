@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-02-02
+// https://github.com/felix-u 2026-02-11
 // Public domain. NO WARRANTY - use at your own risk
 
 
@@ -323,7 +323,7 @@ enum {
     object_MachO_File_CODE_LINKED_FOR_APP                                  = 1 << 25,
     object_MachO_File_NLIST_TABLE_OMITS_SOME_SYMBOLS_IN_DYLD_INFO          = 1 << 26,
     object_MachO_File_ALLOW_SPECIAL_LOAD_COMMANDS_ON_OTHER_OS              = 1 << 27,
-    object_MachO_File_DYLIB_PART_OF_DYLD_SHARED_CACHE                      = 1 << 31,
+    #define object_MachO_File_DYLIB_PART_OF_DYLD_SHARED_CACHE               (1 << 31)
 };
 
 typedef unsigned object_MachO_File_Header_Magic;
@@ -387,7 +387,7 @@ OBJECT_STATIC_ASSERT(sizeof(object_MachO_Load_Command_Segment_64_Bit) == 72, "co
 
 typedef unsigned object_MachO_Segment_Section_Flag_Or_Type;
 enum {
-    object_MachO_Segment_Section_Flag_ONLY_MACHINE_INSTRUCTIONS           = 1 << 31,
+    #define object_MachO_Segment_Section_Flag_ONLY_MACHINE_INSTRUCTIONS    (1 << 31)
     object_MachO_Segment_Section_Flag_CONTAINS_COALESCED_SYMBOLS          = 1 << 30,
     object_MachO_Segment_Section_Flag_STRIP_STATIC_SYMBOLS_IF_MH_DYLDLINK = 1 << 29,
     object_MachO_Segment_Section_Flag_NO_DEAD_STRIPPING                   = 1 << 28,
@@ -536,7 +536,7 @@ OBJECT_STATIC_ASSERT(sizeof(object_MachO_Symbol_64_Bit) == 16, "code assumes no 
 #if !defined(OBJECT_MEMCPY)
     #define OBJECT_MEMCPY object__memcpy
     static inline void *object__memcpy(void *destination, const void *source, unsigned long long count) {
-        for (unsigned long long i = 0; i < count; i += 1) ((char *)destination)[i] = ((char *)source)[i];
+        for (unsigned long long i = 0; i < count; i += 1) ((char *)destination)[i] = ((const char *)source)[i];
         return destination;
     }
 #endif

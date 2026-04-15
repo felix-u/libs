@@ -1,15 +1,21 @@
-// https://github.com/felix-u 2026-01-20
+// https://github.com/felix-u 2026-02-23
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(FILESYSTEM_H)
 #define FILESYSTEM_H
 
 
-#if defined(_WIN32)
+#if defined(__wasm__) || defined(__wasm32__)
+    #define FS_OS_WASM
+#elif defined(_WIN32)
     #define FS_OS_WINDOWS
 #else
     // NOTE(felix): it may be good to distinguish between non-Windows OSes
     #define FS_OS_POSIX
+#endif
+
+#if !defined(FILESYSTEM_NO_SYSTEM_INCLUDE) && defined(FS_OS_POSIX)
+    #include <stdio.h>
 #endif
 
 typedef struct {
@@ -18,7 +24,7 @@ typedef struct {
     #elif defined(FS_OS_POSIX)
         FILE *handle;
     #else
-        #error "UNSUPPORTED OS"
+        int _stub;
     #endif
 } fs_File;
 
@@ -27,7 +33,7 @@ typedef struct {
 #endif
 
 typedef enum {
-    fs_File_Flag_READ = 1 << 0,
+    fs_File_Flag_READ  = 1 << 0,
     fs_File_Flag_WRITE = 1 << 1,
 } fs_File_Flags;
 
@@ -36,7 +42,7 @@ FILESYSTEM_FUNCTION               void fs_absolute_path(const char *path, char *
 FILESYSTEM_FUNCTION              _Bool fs_exists(const char *path);
 FILESYSTEM_FUNCTION            fs_File fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size);
 FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path);
-FILESYSTEM_FUNCTION              _Bool fs_file_write(fs_File file, void *bytes, unsigned long long size);
+FILESYSTEM_FUNCTION              _Bool fs_file_write(fs_File file, const void *bytes, unsigned long long size);
 FILESYSTEM_FUNCTION              _Bool fs_make_directory(const char *relative_path);
 FILESYSTEM_FUNCTION            fs_File fs_open(const char *path, fs_File_Flags flags);
 FILESYSTEM_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *buffer, unsigned long long size);
@@ -113,7 +119,7 @@ FILESYSTEM_FUNCTION _Bool fs_exists(const char *path) {
     #if defined(FS_OS_WINDOWS)
     {
         unsigned long attributes = GetFileAttributesA(path);
-        exists = attributes != INVALID_FILE_ATTRIBUTES;
+        exists = attributes != (unsigned long)(-1);
     }
     #elif defined(FS_OS_POSIX)
     {
@@ -168,7 +174,7 @@ FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path) {
     return result;
 }
 
-FILESYSTEM_FUNCTION _Bool fs_file_write(fs_File file, void *bytes, unsigned long long size) {
+FILESYSTEM_FUNCTION _Bool fs_file_write(fs_File file, const void *bytes, unsigned long long size) {
     _Bool ok = 0;
     if (file.handle == 0) return ok;
 
@@ -228,10 +234,21 @@ FILESYSTEM_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
 
     #if defined(FS_OS_WINDOWS)
     {
-        unsigned long desired_access = (read * GENERIC_READ) | (write * GENERIC_WRITE);
-        unsigned long creation_disposition = (read * OPEN_EXISTING) | (write * CREATE_ALWAYS);
-        void *handle = CreateFileA(path, desired_access, FILE_SHARE_READ | FILE_SHARE_DELETE, 0, creation_disposition, FILE_ATTRIBUTE_NORMAL, 0);
-        if (handle != INVALID_HANDLE_VALUE) result.handle = handle;
+        // https://learn.microsoft.com/en-us/windows/win32/secauthz/generic-access-rights
+        enum { generic_write = 0x40000000 };
+        unsigned long generic_read = 0x80000000; // (not representable in enum by int)
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+        enum { create_always = 2, create_new = 1, open_always = 4, open_existing = 3, truncate_existing = 5 };
+        enum { file_share_delete = 4, file_share_read = 1, file_share_write = 2 };
+        enum { file_attribute_normal = 128 };
+
+        unsigned long desired_access = (read * generic_read) | (write * generic_write);
+        unsigned long creation_disposition = (read * open_existing) | (write * create_always);
+        void *handle = CreateFileA(path, desired_access, file_share_read | file_share_delete, 0, creation_disposition, file_attribute_normal, 0);
+
+        void *invalid_handle_value = (void *)(long long)-1;
+        if (handle != invalid_handle_value) result.handle = handle;
     }
     #elif defined(FS_OS_POSIX)
     {
