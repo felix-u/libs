@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-04-06
+// https://github.com/felix-u 2026-04-16
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(CPU_DRAW_H)
@@ -326,6 +326,33 @@ CPU_DRAW_FUNCTION void cpu_draw_text(cpu_draw_Surface surface, const cpu_draw_Fo
     for (int i = 0; i < length; i += 1) {
         char c = text[i];
         CPU_DRAW_ASSERT(c != 0);
+
+        _Bool is_ascii = (c & 0x80) == 0x00;
+        if (!is_ascii) {
+            int bytes_in_codepoint = 0;
+            if ((c & 0xc0) == 0xc0) {
+                bytes_in_codepoint = 2;
+                if ((c & 0x20) == 0x20) {
+                    bytes_in_codepoint = 3;
+                    if ((c & 0x10) == 0x10) {
+                        bytes_in_codepoint = 4;
+                        CPU_DRAW_ASSERT((c & 0x08) == 0x08);
+                    }
+                }
+            }
+            if (bytes_in_codepoint == 0) CPU_DRAW_ASSERT(0 && "malformed codepoint");
+
+            CPU_DRAW_ASSERT(i + bytes_in_codepoint <= length);
+            for (int j = 1; j < bytes_in_codepoint; j += 1) {
+                c = text[i + j];
+                CPU_DRAW_ASSERT((c & 0x80) == 0x80);
+                CPU_DRAW_ASSERT((c & 0x40) == 0x00);
+            }
+            i += bytes_in_codepoint - 1;
+
+            c = 127;
+        }
+
         CPU_DRAW_ASSERT((unsigned long long)(c - 32) < (sizeof font->glyphs / sizeof *font->glyphs));
 
         cpu_draw_Glyph glyph = font->glyphs[c - 32];

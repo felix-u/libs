@@ -1,8 +1,8 @@
-// https://github.com/felix-u 2026-02-23
+// https://github.com/felix-u 2026-04-15
 // Public domain. NO WARRANTY - use at your own risk.
 
-#if !defined(FILESYSTEM_H)
-#define FILESYSTEM_H
+#if !defined(FS_H)
+#define FS_H
 
 
 #if defined(__wasm__) || defined(__wasm32__)
@@ -14,7 +14,7 @@
     #define FS_OS_POSIX
 #endif
 
-#if !defined(FILESYSTEM_NO_SYSTEM_INCLUDE) && defined(FS_OS_POSIX)
+#if !defined(FS_NO_SYSTEM_INCLUDE) && defined(FS_OS_POSIX)
     #include <stdio.h>
 #endif
 
@@ -28,39 +28,57 @@ typedef struct {
     #endif
 } fs_File;
 
-#if !defined(FILESYSTEM_FUNCTION)
-    #define FILESYSTEM_FUNCTION
-#endif
+typedef struct {
+    const char *folder_path;
+
+    #if defined(FS_OS_WINDOWS)
+        void *handle;
+        WIN32_FIND_DATAA data;
+        _Bool is_first_file;
+
+        char path[260 + 1];
+        char name[260 + 1];
+    #else
+        int _stub;
+    #endif
+} fs_Folder_Iterator;
 
 typedef enum {
     fs_File_Flag_READ  = 1 << 0,
     fs_File_Flag_WRITE = 1 << 1,
 } fs_File_Flags;
 
-FILESYSTEM_FUNCTION              _Bool fs_close(fs_File file);
-FILESYSTEM_FUNCTION               void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size);
-FILESYSTEM_FUNCTION              _Bool fs_exists(const char *path);
-FILESYSTEM_FUNCTION            fs_File fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size);
-FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path);
-FILESYSTEM_FUNCTION              _Bool fs_file_write(fs_File file, const void *bytes, unsigned long long size);
-FILESYSTEM_FUNCTION              _Bool fs_make_directory(const char *relative_path);
-FILESYSTEM_FUNCTION            fs_File fs_open(const char *path, fs_File_Flags flags);
-FILESYSTEM_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *buffer, unsigned long long size);
-FILESYSTEM_FUNCTION              _Bool fs_remove_file(const char *relative_path);
-
-
-#endif // FILESYSTEM_H
-
-
-#if defined(FILESYSTEM_IMPLEMENTATION)
-
-
-#if !defined(FILESYSTEM_ASSERT)
-    #include <assert.h>
-    #define FILESYSTEM_ASSERT assert
+#if !defined(FS_FUNCTION)
+    #define FS_FUNCTION
 #endif
 
-#if !defined(FILESYSTEM_NO_SYSTEM_INCLUDE)
+FS_FUNCTION _Bool              fs_close(fs_File file);
+FS_FUNCTION void               fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size);
+FS_FUNCTION _Bool              fs_exists(const char *path);
+FS_FUNCTION fs_File            fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size);
+FS_FUNCTION unsigned long long fs_file_size(const char *path);
+FS_FUNCTION _Bool              fs_file_write(fs_File file, const void *bytes, unsigned long long size);
+FS_FUNCTION _Bool              fs_folder_iterate(fs_Folder_Iterator *it);
+FS_FUNCTION fs_Folder_Iterator fs_folder_iterator(const char *relative_path);
+FS_FUNCTION void               fs_folder_iterator_end(fs_Folder_Iterator *it);
+FS_FUNCTION _Bool              fs_make_folder(const char *relative_path);
+FS_FUNCTION fs_File            fs_open(const char *path, fs_File_Flags flags);
+FS_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *buffer, unsigned long long size);
+FS_FUNCTION _Bool              fs_remove_file(const char *relative_path);
+
+
+#endif // FS_H
+
+
+#if defined(FS_IMPLEMENTATION)
+
+
+#if !defined(FS_ASSERT)
+    #include <assert.h>
+    #define FS_ASSERT assert
+#endif
+
+#if !defined(FS_NO_SYSTEM_INCLUDE)
     #if defined(FS_OS_WINDOWS)
         #if defined(_MSC_VER)
             #pragma comment(lib, "Kernel32.lib")
@@ -72,7 +90,15 @@ FILESYSTEM_FUNCTION              _Bool fs_remove_file(const char *relative_path)
     #endif
 #endif
 
-FILESYSTEM_FUNCTION _Bool fs_close(fs_File file) {
+#define FS_OS_WINDOWS_INVALID_HANDLE_VALUE ((void *)(long long)-1)
+
+#if defined(FS_OS_WINDOWS)
+    #define FS_PATH_SEPARATOR '\\'
+#else
+    #define FS_PATH_SEPARATOR '/'
+#endif
+
+FS_FUNCTION _Bool fs_close(fs_File file) {
     _Bool ok = 0;
     if (file.handle == 0) return ok;
 
@@ -92,12 +118,12 @@ FILESYSTEM_FUNCTION _Bool fs_close(fs_File file) {
     return ok;
 }
 
-FILESYSTEM_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size) {
+FS_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size) {
     #if defined(FS_OS_WINDOWS)
     {
         fs_File temp = fs_open(path, 0);
         if (temp.handle != 0) {
-            FILESYSTEM_ASSERT(buffer_size <= 0xffffffff);
+            FS_ASSERT(buffer_size <= 0xffffffff);
             unsigned long size = (unsigned long)buffer_size;
             GetFinalPathNameByHandleA(temp.handle, buffer, size, 0);
         }
@@ -105,7 +131,7 @@ FILESYSTEM_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsign
     }
     #elif defined(FS_OS_POSIX)
     {
-        FILESYSTEM_ASSERT(buffer_size >= 4096);
+        FS_ASSERT(buffer_size >= 4096);
         realpath(path, buffer);
     }
     #else
@@ -113,7 +139,7 @@ FILESYSTEM_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsign
     #endif
 }
 
-FILESYSTEM_FUNCTION _Bool fs_exists(const char *path) {
+FS_FUNCTION _Bool fs_exists(const char *path) {
     _Bool exists = 0;
 
     #if defined(FS_OS_WINDOWS)
@@ -133,7 +159,7 @@ FILESYSTEM_FUNCTION _Bool fs_exists(const char *path) {
     return exists;
 }
 
-FILESYSTEM_FUNCTION fs_File fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size) {
+FS_FUNCTION fs_File fs_file_open_and_get_size(const char *path, fs_File_Flags flags, unsigned long long *size) {
     fs_File file = fs_open(path, flags);
     if (file.handle != 0) {
         #if defined(FS_OS_WINDOWS)
@@ -152,7 +178,7 @@ FILESYSTEM_FUNCTION fs_File fs_file_open_and_get_size(const char *path, fs_File_
     return file;
 }
 
-FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path) {
+FS_FUNCTION unsigned long long fs_file_size(const char *path) {
     unsigned long long result = 0;
 
     #if defined(FS_OS_WINDOWS)
@@ -174,13 +200,13 @@ FILESYSTEM_FUNCTION unsigned long long fs_file_size(const char *path) {
     return result;
 }
 
-FILESYSTEM_FUNCTION _Bool fs_file_write(fs_File file, const void *bytes, unsigned long long size) {
+FS_FUNCTION _Bool fs_file_write(fs_File file, const void *bytes, unsigned long long size) {
     _Bool ok = 0;
     if (file.handle == 0) return ok;
 
     #if defined(FS_OS_WINDOWS)
     {
-        FILESYSTEM_ASSERT(size <= 0xffffffff);
+        FS_ASSERT(size <= 0xffffffff);
         ok = !!WriteFile(file.handle, bytes, (unsigned long)size, 0, 0);
     }
     #elif defined(FS_OS_POSIX)
@@ -202,7 +228,111 @@ FILESYSTEM_FUNCTION _Bool fs_file_write(fs_File file, const void *bytes, unsigne
     return ok;
 }
 
-FILESYSTEM_FUNCTION _Bool fs_make_directory(const char *relative_path) {
+static void fs__folder_iterator_fill_info(fs_Folder_Iterator *it) {
+    if (it->handle != 0) {
+        #if defined(FS_OS_WINDOWS)
+        {
+            int i = 0;
+            while (i < (int)(sizeof it->data.cFileName) && it->data.cFileName[i] != 0) {
+                it->name[i] = it->data.cFileName[i];
+                i += 1;
+            }
+            it->name[i] = 0;
+        }
+        #else
+        {
+            FS_ASSERT(0 && "unimplemented for this OS");
+        }
+        #endif
+
+        int i = 0;
+        while (it->folder_path[i] != 0) {
+            it->path[i] = it->folder_path[i];
+            i += 1;
+        }
+
+        it->path[i++] = FS_PATH_SEPARATOR;
+
+        for (int j = 0; it->name[j] != 0; j += 1, i += 1) {
+            it->path[i] = it->name[j];
+        }
+
+        FS_ASSERT(i < (int)(sizeof it->path));
+        it->path[i++] = 0;
+    }
+}
+
+FS_FUNCTION _Bool fs_folder_iterate(fs_Folder_Iterator *it) {
+    _Bool keep_going = 0;
+
+    if (it->handle != 0) {
+        #if defined(FS_OS_WINDOWS)
+        {
+            if (it->is_first_file) {
+                it->is_first_file = 0;
+                keep_going = 1;
+            } else {
+                keep_going = !!FindNextFileA(it->handle, &it->data);
+            }
+        }
+        #else
+        {
+            FS_ASSERT(0 && "unimplemented for this OS");
+        }
+        #endif
+    }
+
+    fs__folder_iterator_fill_info(it);
+    return keep_going;
+}
+
+FS_FUNCTION fs_Folder_Iterator fs_folder_iterator(const char *relative_path) {
+    fs_Folder_Iterator it = { .folder_path = relative_path };
+
+    #if defined(FS_OS_WINDOWS)
+    {
+        char glob[261] = {0};
+        int i = 0;
+        while (it.folder_path[i] != 0 && i < (int)(sizeof glob)) {
+            glob[i] = it.folder_path[i];
+            i += 1;
+        }
+
+        FS_ASSERT(i + 2 < (int)(sizeof glob));
+        glob[i++] = '\\';
+        glob[i++] = '*';
+
+        it.handle = FindFirstFileA(glob, &it.data);
+        if (it.handle == FS_OS_WINDOWS_INVALID_HANDLE_VALUE) it.handle = 0;
+        else it.is_first_file = 1;
+    }
+    #else
+    {
+        FS_ASSERT(0 && "unimplemented for this OS");
+    }
+    #endif
+
+    fs__folder_iterator_fill_info(&it);
+    return it;
+}
+
+FS_FUNCTION void fs_folder_iterator_end(fs_Folder_Iterator *it) {
+    if (it->handle == 0) return;
+
+    #if defined(FS_OS_WINDOWS)
+    {
+        _Bool ok = !!FindClose(it->handle);
+        (void)ok;
+    }
+    #else
+    {
+        (void)it;
+        FS_ASSERT(0 && "unimplemented for this OS");
+    }
+    #endif
+}
+
+FS_FUNCTION _Bool fs_make_folder(const char *relative_path) {
     _Bool ok = 0;
 
     #if defined(FS_OS_WINDOWS)
@@ -222,15 +352,15 @@ FILESYSTEM_FUNCTION _Bool fs_make_directory(const char *relative_path) {
     return ok;
 }
 
-FILESYSTEM_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
+FS_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
     fs_File result = {0};
 
     flags += !flags * fs_File_Flag_READ;
 
     _Bool read = !!(flags & fs_File_Flag_READ);
     _Bool write = !!(flags & fs_File_Flag_WRITE);
-    FILESYSTEM_ASSERT(read || write);
-    FILESYSTEM_ASSERT(read ^ write); // TODO(felix): correctly handle read+write
+    FS_ASSERT(read || write);
+    FS_ASSERT(read ^ write); // TODO(felix): correctly handle read+write
 
     #if defined(FS_OS_WINDOWS)
     {
@@ -242,13 +372,16 @@ FILESYSTEM_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
         enum { create_always = 2, create_new = 1, open_always = 4, open_existing = 3, truncate_existing = 5 };
         enum { file_share_delete = 4, file_share_read = 1, file_share_write = 2 };
         enum { file_attribute_normal = 128 };
+        enum { file_flag_backup_semantics = 0x02000000 };
 
         unsigned long desired_access = (read * generic_read) | (write * generic_write);
         unsigned long creation_disposition = (read * open_existing) | (write * create_always);
-        void *handle = CreateFileA(path, desired_access, file_share_read | file_share_delete, 0, creation_disposition, file_attribute_normal, 0);
+        // file_flag_backup_semantics required to open directories
+        unsigned long flags_and_attributes = (unsigned long)file_attribute_normal | (unsigned long)file_flag_backup_semantics;
 
-        void *invalid_handle_value = (void *)(long long)-1;
-        if (handle != invalid_handle_value) result.handle = handle;
+        void *handle = CreateFileA(path, desired_access, file_share_read | file_share_delete, 0, creation_disposition, flags_and_attributes, 0);
+
+        if (handle != FS_OS_WINDOWS_INVALID_HANDLE_VALUE) result.handle = handle;
     }
     #elif defined(FS_OS_POSIX)
     {
@@ -265,10 +398,10 @@ FILESYSTEM_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
     return result;
 }
 
-FILESYSTEM_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *buffer, unsigned long long size) {
+FS_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *buffer, unsigned long long size) {
     unsigned long long read = 0;
     if (file.handle == 0) return read;
-    FILESYSTEM_ASSERT(buffer != 0);
+    FS_ASSERT(buffer != 0);
 
     #if defined(FS_OS_WINDOWS)
     {
@@ -292,7 +425,7 @@ FILESYSTEM_FUNCTION unsigned long long fs_read_entire_file(fs_File file, char *b
     return read;
 }
 
-FILESYSTEM_FUNCTION _Bool fs_remove_file(const char *relative_path) {
+FS_FUNCTION _Bool fs_remove_file(const char *relative_path) {
     _Bool ok = 0;
 
     #if defined(FS_OS_WINDOWS)
@@ -311,4 +444,4 @@ FILESYSTEM_FUNCTION _Bool fs_remove_file(const char *relative_path) {
     return ok;
 }
 
-#endif // FILESYSTEM_IMPLEMENTATION
+#endif // FS_IMPLEMENTATION

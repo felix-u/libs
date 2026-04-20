@@ -53,6 +53,7 @@ _Static_assert(sizeof(f64) == 8, "");
 #define UINT64_MAX ((u64)-1)
 #define INT64_MIN ((i64)0x8000000000000000)
 #define INT64_MAX ((i64)0x7fffffffffffffff)
+#define INT32_MAX ((i32)0x7fffffff)
 
 
 #if !defined(LINK_CRT)
@@ -227,7 +228,30 @@ _Static_assert(sizeof(f64) == 8, "");
     WIN32_CALL(int)           CreateProcessA(const char *application_name, char *command_line, struct _SECURITY_ATTRIBUTES *process_attributes, struct _SECURITY_ATTRIBUTES *thread_attributes, int should_inherit_handles, unsigned long creation_flags, void *environment, const char *current_directory, STARTUPINFOA *, PROCESS_INFORMATION *);
     WIN32_CALL(int)           DeleteFileA(const char *file_name);
     WIN32_CALL(void)          ExitProcess(unsigned exit_code);
-    WIN32_CALL(unsigned short *)     GetCommandLineW(void);
+    WIN32_CALL(int) FindClose(void *find_file_handle);
+    typedef struct {
+        unsigned long dwLowDateTime;
+        unsigned long dwHighDateTime;
+    } FILETIME;
+    #define MAX_PATH 260
+    typedef struct {
+        unsigned long dwFileAttributes;
+        FILETIME ftCreationTime;
+        FILETIME ftLastAccessTime;
+        FILETIME ftLastWriteTime;
+        unsigned long nFileSizeHigh;
+        unsigned long nFileSizeLow;
+        unsigned long dwReserved0;
+        unsigned long dwReserved1;
+        char cFileName[MAX_PATH];
+        char cAlternateFileName[14];
+        unsigned long dwFileType; // Obsolete. Do not use.
+        unsigned long dwCreatorType; // Obsolete. Do not use
+        unsigned short wFinderFlags; // Obsolete. Do not use
+    } WIN32_FIND_DATAA;
+    WIN32_CALL(void *) FindFirstFileA(const char *file_name, WIN32_FIND_DATAA *);
+    WIN32_CALL(int) FindNextFileA(void *find_file_handle, WIN32_FIND_DATAA *);
+    WIN32_CALL(unsigned short *) GetCommandLineW(void);
     WIN32_CALL(int)           GetExitCodeProcess(void *process, unsigned long *exit_code);
     WIN32_CALL(unsigned long) GetFileAttributesA(const char *file_name);
     #if !defined(_WINNT_)
@@ -250,6 +274,7 @@ _Static_assert(sizeof(f64) == 8, "");
 
     meta(link "Shell32.lib")
     WIN32_CALL(unsigned short **) CommandLineToArgvW(const unsigned short *command_line, int *number_of_arguments);
+    WIN32_CALL(void *) ShellExecuteA(void *handle, const char *operation, const char *file, const char *parameters, const char *directory, int show_command_count);
 #elif BASE_OS == BASE_OS_WASM
     typedef u64 size_t;
     #define os_abort() // TODO(felix)
@@ -305,8 +330,8 @@ _Static_assert(sizeof(f64) == 8, "");
 
 #define STR_FUNCTION static
 #include "str.h"
-#define string STRING_LITERAL
-#define string_constant STRING_LITERAL_CONSTANT
+#define S STRING_LITERAL
+#define Sc STRING_LITERAL_CONSTANT
 
 #define SMALL_SNPRINTF_FUNCTION static
 #define SMALL_SNPRINTF_NO_STD_INCLUDE
@@ -320,11 +345,12 @@ _Static_assert(sizeof(f64) == 8, "");
 #include "prng.h"
 
 typedef struct Arena Arena;
-#define Array(T) struct { T *data; u64 count, capacity; Arena *arena; }
+#define Array(T) struct { T *data; u64 count, capacity; }
 
 typedef Array(void) Array_void;
 
 #define MapU64(type) struct { \
+    Arena *arena; \
     Array(type) values; \
     u64 *keys; \
     u64 *value_index_from_key_hash; \
@@ -345,17 +371,17 @@ static void log_internal_with_location_v(const char *file, u64 line, const char 
     breakpoint; os_abort(); \
 } while (0)
 
-static void reserve_exactly_(Array_void *a, u64 item_size, u64 new_capacity, bool zero);
+static void reserve_exactly_(Arena *arena ,Array_void *a, u64 item_size, u64 new_capacity, bool zero);
 static u64 grow_capacity(u64 current, u64 minimum);
-#define reserve(a, c) reserve_exactly((a), grow_capacity((a)->capacity, (c)))
-#define reserve_exactly(a, c) do { \
+#define reserve(arena, a, c) reserve_exactly((arena), (a), grow_capacity((a)->capacity, (c)))
+#define reserve_exactly(arena, a, c) do { \
     _Static_assert(sizeof *(a) == sizeof(Array_void), "parameter must point to an Array(T)"); \
-    reserve_exactly_((Array_void *)(a), sizeof *((a)->data), (c), true); \
+    reserve_exactly_((arena), (Array_void *)(a), sizeof *((a)->data), (c), true); \
 } while (0)
-#define reserve_unused(a, c) reserve((a), (a)->count + (c))
-#define reserve_unused_exactly(a, c) reserve_exactly((a), (a)->count + (c))
-#define push(a, o) do { \
-    reserve_unused((a), 1); \
+#define reserve_unused(arena, a, c) reserve((arena), (a), (a)->count + (c))
+#define reserve_unused_exactly(arena, a, c) reserve_exactly((arena), (a), (a)->count + (c))
+#define push(arena, a, o) do { \
+    reserve_unused((arena), (a), 1); \
     (a)->data[(a)->count++] = (o); \
 } while (0)
 #define push_assume_capacity(a, o) do { \
@@ -363,8 +389,8 @@ static u64 grow_capacity(u64 current, u64 minimum);
     assert((a)->count + 1 <= (a)->capacity); \
     (a)->data[(a)->count++] = (o); \
 } while (0)
-#define push_many(a, items, num) do { \
-    reserve_unused((a), (num)); \
+#define push_many(arena, a, items, num) do { \
+    reserve_unused((arena), (a), (num)); \
     for (u64 i__pm__ = 0; i__pm__ < (num); i__pm__ += 1) { \
         (a)->data[(a)->count++] = (items)[i__pm__]; \
     } \
@@ -391,20 +417,7 @@ static void swap_remove_(Array_void *array, u64 index, u64 item_size);
 #define CLAMP_HIGH MIN
 #define CLAMP(value, low, high) CLAMP_HIGH(CLAMP_LOW((value), (low)), (high))
 
-// TODO(felix): rename/replace
-#if BASE_OS == BASE_OS_WINDOWS
-	static inline int memcmp_(const void *a_, const void *b_, u64 byte_count);
-	#if BASE_OS == BASE_OS_WINDOWS
-	    #pragma function(memcpy)
-	#endif
-	void *memcpy(void *destination_, const void *source_, u64 byte_count);
-	#if BASE_OS == BASE_OS_WINDOWS
-	    #pragma function(memset)
-	#endif
-	extern void *memset(void *destination_, int byte_, u64 byte_count);
-#endif
-
-static inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
+static force_inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
     const u8 *a = a_, *b = b_;
     for (u64 i = 0; i < byte_count; i += 1) {
         if (a[i] != b[i]) return a[i] - b[i];
@@ -412,30 +425,78 @@ static inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
     return 0;
 }
 
-#if !LINK_CRT
-    #if COMPILER_MSVC
-        #pragma function(memcpy)
-        void *memcpy(void *destination_, const void *source_, u64 byte_count) {
-            u8 *destination = destination_;
-            const u8 *source = source_;
-            if (byte_count != 0) {
-                assert(destination != 0);
-                assert(source != 0);
-            }
-            for (u64 i = 0; i < byte_count; i += 1) destination[i] = source[i];
-            return destination;
-        }
+static force_inline void *memcpy_(void *destination_, const void *source_, u64 byte_count) {
+    u8 *destination = destination_;
+    const u8 *source = source_;
+    if (byte_count != 0) {
+        assert(destination != 0);
+        assert(source != 0);
+    }
+    for (u64 i = 0; i < byte_count; i += 1) destination[i] = source[i];
+    return destination;
+}
 
-        #pragma function(memset)
-    	extern void *memset(void *destination_, int byte_, u64 byte_count) {
-    	    assert(byte_ < 256);
-    	    u8 byte = (u8)byte_;
-    	    u8 *destination = destination_;
-    	    assert(destination != 0);
-    	    for (u64 i = 0; i < byte_count; i += 1) destination[i] = byte;
-    	    return destination;
-    	}
-    #elif COMPILER_CLANG
+static force_inline void *memset_(void *destination_, int byte_, u64 byte_count) {
+    assert(byte_ < 256);
+    u8 byte = (u8)byte_;
+    u8 *destination = destination_;
+    assert(destination != 0);
+    for (u64 i = 0; i < byte_count; i += 1) destination[i] = byte;
+    return destination;
+}
+
+#if !LINK_CRT
+    #pragma function(memcmp)
+    #pragma function(memcpy)
+    #pragma function(memset)
+
+    int memcmp(const void *a, const void *b, u64 byte_count) {
+        return memcmp_(a, b, byte_count);
+    }
+
+    void *memcpy(void *destination, const void *source, u64 byte_count) {
+        return memcpy_(destination, source, byte_count);
+    }
+
+    void *memset(void *destination, int byte, u64 byte_count) {
+        return memset_(destination, byte, byte_count);
+    }
+#endif
+
+static force_inline f32 ceilf_(f32 x) {
+    assert((f32)INT64_MIN <= x && x <= (f32)INT64_MAX);
+    i64 as_i64 = (i64)x;
+    f32 result = (f32)((f32)as_i64 + (f32)(x > (f32)as_i64));
+    return result;
+}
+
+static force_inline f32 floorf_(f32 x) {
+    assert((f32)INT64_MIN <= x && x <= (f32)INT64_MAX);
+    i64 as_i64 = (i64)x;
+    f32 result = (f32)((f32)as_i64 - (f32)(x < (f32)as_i64));
+    return result;
+}
+
+// Newton-Raphson
+static inline f32 sqrtf_(f32 x) {
+    // false comparison catches nan
+    if (!(x > 0)) return 0;
+
+    union { f32 floating; u32 bits; } value = { .floating = x };
+    value.bits = 0x5f375a86 - (value.bits >> 1); // rsqrt initial guess
+
+    f32 half = 0.5f * x;
+    u64 iterations = 2;
+    for (u64 i = 0; i < iterations; i += 1) {
+        value.floating *= 1.5f - half * value.floating * value.floating;
+    }
+
+    f32 result = x * value.floating; // sqrt from rsqrt
+    return result;
+}
+
+#if !LINK_CRT
+    #if COMPILER_CLANG
         #if BASE_OS == BASE_OS_WASM // is this the right solution?
             // #define memcmp(a, b, c) __builtin_memcmp((a), (b), (unsigned long)(c))
             #define memcmp(a, b, c) memcmp_wasm((a), (b), (unsigned long)(c))
@@ -451,7 +512,6 @@ static inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
         #else
             #define memcmp __builtin_memcmp
             #define memcpy __builtin_memcpy
-            #define memset __builtin_memset
         #endif
     #endif
 #endif
@@ -542,18 +602,28 @@ typedef union {
     // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
     // NOTE(felix): corecrt_math.h defines fabsf as an inline function casting fabs to f32. Might be good to benchmark that approach versus what I'm doing here
     static force_inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
+
+    #define ceilf ceilf_
+    #define floorf floorf_
+    #define sqrtf sqrtf_
 #elif COMPILER_CLANG || COMPILER_GCC
     #define INFINITY __builtin_inff()
 
-    #define abs_i32(x)   __builtin_abs(x)
-    #define abs_i64(x)   __builtin_llabs(x)
-    #define abs_f64(x)   __builtin_fabs(x)
-    #define ceilf(x)     __builtin_ceilf(x)
-    #define fabsf(x)     __builtin_fabsf(x)
-    #define floor(x)     __builtin_floor(x)
-    #define floorf(x)    __builtin_floorf(x)
-    #define isnan(x)     __builtin_isnan(x)
-    #define sqrtf(x)     __builtin_sqrtf(x)
+    #define abs_i32(x) __builtin_abs(x)
+    #define abs_i64(x) __builtin_llabs(x)
+    #define abs_f64(x) __builtin_fabs(x)
+    #if LINK_CRT
+        #define ceilf(x)   __builtin_ceilf(x)
+        #define floorf(x)  __builtin_floorf(x)
+        #define sqrtf(x)   __builtin_sqrtf(x)
+    #else
+        #define ceilf  ceilf_
+        #define floorf floorf_
+        #define sqrtf  sqrtf_
+    #endif
+    #define fabsf(x)   __builtin_fabsf(x)
+    #define floor(x)   __builtin_floor(x)
+    #define isnan(x)   __builtin_isnan(x)
     #if BASE_OS == BASE_OS_WASM
         static f32 atanf(f32 x) {
             bool negative = x < 0;
@@ -814,13 +884,13 @@ static String string_print_(Arena *arena, const char *fmt, va_list arguments);
 static String string_print(Arena *arena, const char *fmt, ...);
 
 typedef Array(char) String_Builder;
-static   void string_builder_null_terminate(String_Builder *builder);
-static   void string_builder_print(String_Builder *builder, const char* format, ...);
-static   void string_builder_print_(String_Builder *builder, const char *fmt, va_list arguments);
+static   void string_builder_null_terminate(Arena *arena, String_Builder *builder);
+static   void string_builder_print(Arena *arena, String_Builder *builder, const char* format, ...);
+static   void string_builder_print_(Arena *arena, String_Builder *builder, const char *fmt, va_list arguments);
 static String string_builder_string(String_Builder builder);
 
-#define FILESYSTEM_FUNCTION static
-#define FILESYSTEM_NO_SYSTEM_INCLUDE
+#define FS_FUNCTION static
+#define FS_NO_SYSTEM_INCLUDE
 #include "filesystem.h"
 static String os_read_entire_file(Arena *arena, const char *path);
 static   bool os_write_entire_file(const char *path, const void *data, u64 count);
@@ -877,6 +947,12 @@ typedef enum {
     App_Key_DOWN,
     App_Key_UP,
     App_Key_RIGHT,
+
+    App_Key_F1, App_Key_F2, App_Key_F3, App_Key_F4, App_Key_F5,
+    App_Key_F6, App_Key_F7, App_Key_F8, App_Key_F9, App_Key_F10,
+    App_Key_F11, App_Key_F12, App_Key_F13, App_Key_F14, App_Key_F15,
+    App_Key_F16, App_Key_F17, App_Key_F18, App_Key_F19, App_Key_F20,
+    App_Key_F21, App_Key_F22, App_Key_F23, App_Key_F24,
 
     App_Key_MAX_VALUE,
 } App_Key;
@@ -976,7 +1052,9 @@ typedef struct {
     Arena *persistent_arena;
     Arena *frame_arena;
     Array_Draw_Command draw_commands;
+
     bool should_quit;
+    const char *window_name;
     u32 clear_color;
 } Platform;
 
@@ -1032,14 +1110,11 @@ enum {
     ui_Flag_CLICKABLE       = 1 <<  8,
     ui_Flag_DRAGGABLE       = 1 <<  9,
     ui_Flag_CLIP_TO_PARENT  = 1 << 10,
-    ui_Flag_PARENT          = 1 << 11,
 
     // computed by builder code
-    ui_Flag_HOVERED         = 1 << 12,
-    ui_Flag_CLICKED         = 1 << 13,
-    ui_Flag_DRAGGING        = 1 << 14, // persisted across frames
-
-    ui_Flag__FIRST_FRAME    = 1 << 15,
+    ui_Flag_HOVERED         = 1 << 11,
+    ui_Flag_CLICKED         = 1 << 12,
+    ui_Flag_DRAGGING        = 1 << 13, // persisted across frames
 };
 #define UI_FLAG_ANY_VISIBLE (ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_COMMAND | ui_Flag_DRAW_SHADOW)
 #define UI_FLAG_ANY_INTERACTABLE (ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE)
@@ -1063,7 +1138,7 @@ typedef enum {
 
 typedef struct {
     float font_size;
-    float inner_padding[ui_Axis_COUNT];
+    float padding[ui_Axis_COUNT];
     float child_gap;
     unsigned bg_color;
     unsigned fg_color;
@@ -1077,7 +1152,6 @@ typedef struct {
 typedef struct {
     ui_Size_Kind kind;
     float value;
-    float strictness;
 } ui_Size;
 
 typedef struct ui_Box ui_Box;
@@ -1119,7 +1193,6 @@ typedef struct {
     ui_Box boxes[UI_MAX_BOX_COUNT * 2]; // We need more than 100/70 the max count for hashmap performance, but the hash lookup relies on the total capacity being a power of 2, so we just double
 
     ui_Box *root;
-    ui_Box *current_parent;
 
     int display_string_used;
     char display_string_buffer[UI_DISPLAY_STRING_BUFFER_SIZE];
@@ -1143,22 +1216,13 @@ typedef struct {
 static void     ui_begin(ui_State *ui);
 static ui_State ui_create(Platform *platform, ui_text_measure_function *text_measure_function);
 static void     ui_end(ui_State *ui);
-static ui_Box  *ui_push(ui_State *ui, ui_Flags flags, ui_Style style, const char *format, ...);
-static ui_Box  *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char *format, va_list arguments);
-static ui_Box  *ui_slider(ui_State *ui, ui_Flags slider_axis, f32 least, f32 most, f32 *value, ui_Slider_Style style, const char *format, ...);
-
-#define ui_expand_index(line) i__##line##__
-#define ui_defer_loop_index(line) ui_expand_index(line)
-#define ui_defer_loop(begin, end) \
-    for ( \
-        _Bool ui_defer_loop_index(__LINE__) = ((begin), 0); \
-        !ui_defer_loop_index(__LINE__); \
-        ui_defer_loop_index(__LINE__) += 1, (end) \
-    )
-#define ui_parent(ui, flags, style) ui_defer_loop(ui_push((ui), (flags) | ui_Flag_PARENT, (style), 0), ui_pop_parent(ui))
+static ui_Box  *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, ...);
+static ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, va_list arguments);
+static ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
+static ui_Box  *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, f32 least, f32 most, f32 *value, ui_Slider_Style style, const char *format, ...);
 
 static void    base_ui_renderer(ui_State *ui, ui_Box *box);
-static ui_Box *base_ui_draw_command(ui_State *ui, Draw_Command command, ui_Flags flags, ui_Style style, const char *format, ...);
+static ui_Box *base_ui_draw_command(ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
 static void    base_ui_measure_text(void *user_data, const char *string, int length, ui_Style style, f32 size[2]);
 
 
@@ -1278,13 +1342,14 @@ static inline bool ascii_is_whitespace(u8 c) { return c == ' ' || c == '\n' || c
 
 #define POISON_BYTE 0xcd
 
-static void reserve_exactly_(Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
+static void reserve_exactly_(Arena *arena, Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
     if (a->capacity >= new_capacity) return;
 
     u64 byte_count = new_capacity * item_size;
     assert(byte_count >= new_capacity); // overflow
 
-    void *raw = arena_make_(a->arena, byte_count, 1, false);
+    // TODO(felix): assert the array was allocated on the arena passed in, unless I can think of any situation where it'd be useful for that not to be true
+    void *raw = arena_make_(arena, byte_count, 1, false);
     memcpy(raw, a->data, a->count * item_size);
 
     u8 byte = 0;
@@ -1462,7 +1527,7 @@ static void map_make_explicit_item_size(Arena *arena, Map_void *map, u64 capacit
     capacity *= 100;
     capacity /= MAP_MAX_LOAD_FACTOR;
 
-    *map = (Map_void){ .values.arena = arena };
+    *map = (Map_void){ .arena = arena };
     map->values.data = arena_make_(arena, capacity, item_size, true);
     map->values.count = 1;
     map->values.capacity = capacity;
@@ -1993,6 +2058,24 @@ static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size) {
         memcpy(platform_glyph->bytes, bdf_glyph->bytes, sizeof bdf_glyph->bytes);
     }
 
+    // boxed question mark mapped to codepoint 127, for unknown codepoints
+    cpu_draw_Glyph *g = &font.glyphs[127 - 32];
+    *g = font.glyphs['?' - 32];
+    for (u64 byte = 0; byte < CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8; byte += 1) {
+        g->bytes[byte] = 0xff;
+    }
+    for (u64 byte = 0; byte < CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8; byte += 1) {
+        g->bytes[(u64)(g->bound_height - 1) * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + byte] = 0xff;
+    }
+    for (u64 row = 0; row < (u64)g->bound_height; row += 1) {
+        g->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8] |= 0x80;
+    }
+    for (u64 row = 0; row < (u64)g->bound_height; row += 1) {
+        u64 last_pixel = (u64)g->bound_width - 1;
+        u8 *bits = &g->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + last_pixel / 8];
+        *bits |= 1 << (7 - (last_pixel & 7));
+    }
+
     return font;
 }
 
@@ -2266,22 +2349,16 @@ static const char *cstring_from_string(Arena *arena, String string) {
     return cstring;
 }
 
-static u64 cstring_length(const char *cstring) {
-    u64 result = 0;
-    for (const char *c = cstring; c != 0 && *c != 0; c += 1) result += 1;
-    return result;
-}
-
 static const char *cstring_print(Arena *arena, const char *format, ...) {
-    String_Builder builder = { .arena = arena };
-    reserve(&builder, cstring_length(format));
+    String_Builder builder = {0};
+    reserve(arena, &builder, cstring_length(format));
 
     va_list arguments;
     va_start(arguments, format);
-    string_builder_print_(&builder, format, arguments);
+    string_builder_print_(arena, &builder, format, arguments);
     va_end(arguments);
 
-    string_builder_null_terminate(&builder);
+    string_builder_null_terminate(arena, &builder);
     return builder.data;
 }
 
@@ -2316,21 +2393,21 @@ static String string_print(Arena *arena, const char *fmt, ...) {
 }
 
 static String string_print_(Arena *arena, const char *fmt, va_list arguments) {
-    String_Builder builder = { .arena = arena };
-    string_builder_print_(&builder, fmt, arguments);
+    String_Builder builder = {0};
+    string_builder_print_(arena, &builder, fmt, arguments);
     return string_builder_string(builder);
 }
 
-static void string_builder_print(String_Builder *builder, const char *fmt_c, ...) {
+static void string_builder_print(Arena *arena, String_Builder *builder, const char *fmt_c, ...) {
     va_list arguments;
     va_start(arguments, fmt_c);
-    string_builder_print_(builder, fmt_c, arguments);
+    string_builder_print_(arena, builder, fmt_c, arguments);
     va_end(arguments);
 }
 
-static void string_builder_print_(String_Builder *builder, const char *fmt_c, va_list arguments) {
+static void string_builder_print_(Arena *arena, String_Builder *builder, const char *fmt_c, va_list arguments) {
     u64 size_guess = cstring_length(fmt_c) * 8;
-    reserve_unused(builder, size_guess);
+    reserve_unused(arena, builder, size_guess);
 
     char *buffer = &builder->data[builder->count];
     u64 buffer_size = builder->capacity - builder->count;
@@ -2343,7 +2420,7 @@ static void string_builder_print_(String_Builder *builder, const char *fmt_c, va
 
     if ((u64)bytes_printed >= buffer_size) {
         u64 needed_unused = (u64)bytes_printed + 1; // for null terminator
-        reserve_unused(builder, needed_unused);
+        reserve_unused(arena, builder, needed_unused);
 
         buffer = &builder->data[builder->count];
         buffer_size = builder->capacity - builder->count;
@@ -2367,9 +2444,9 @@ static String string_builder_string(String_Builder builder) {
     return result;
 }
 
-static inline void string_builder_null_terminate(String_Builder *builder) {
+static inline void string_builder_null_terminate(Arena *arena, String_Builder *builder) {
     // Avoid push(0) because we don't want to increase the string length
-    reserve_unused_exactly(builder, 1);
+    reserve_unused_exactly(arena, builder, 1);
     builder->data[builder->count] = 0;
 }
 
@@ -2451,7 +2528,7 @@ static void os_heap_free(void *pointer) {
         panic("unimplemented for WASM");
         return 0;
     }
-    static _Bool fs_make_directory(const char *relative_path) {
+    static _Bool fs_make_folder(const char *relative_path) {
         (void)relative_path;
         panic("unimplemented for WASM");
         return 0;
@@ -2468,8 +2545,8 @@ static void os_heap_free(void *pointer) {
         panic("unimplemented for WASM");
     }
 #else
-    #define FILESYSTEM_IMPLEMENTATION
-    #define FILESYSTEM_ASSERT assert
+    #define FS_IMPLEMENTATION
+    #define FS_ASSERT assert
     #include "filesystem.h"
 #endif
 
@@ -2622,7 +2699,7 @@ static u32 os_process_run(Arena arena, const char **arguments, const char *direc
         if (flags & Os_Process_Flag_PRINT_EXECUTION_TIME) {
             f64 end_time = time_relative_timestamp();
             f64 seconds = time_seconds_between_relative_timestamps(start_time, end_time);
-            print(" after %lf seconds", seconds);
+            print(" after %.2lf seconds", seconds);
         }
 
         if (flags & Os_Process_Flag_PRINT_EXIT_CODE) print(": %u", exit_code);
@@ -2694,10 +2771,10 @@ static void print_(const char *format, va_list arguments) {
     Arena arena = arena_from_memory(buffer, sizeof buffer);
     Scratch temp = scratch_begin(&arena);
 
-    String_Builder output = { .arena = temp.arena };
-    reserve(&output, cstring_length(format));
-    string_builder_print_(&output, format, arguments);
-    string_builder_null_terminate(&output);
+    String_Builder output = {0};
+    reserve(temp.arena, &output, cstring_length(format));
+    string_builder_print_(temp.arena, &output, format, arguments);
+    string_builder_null_terminate(temp.arena, &output);
 
     #if (BASE_OS == BASE_OS_WINDOWS) && BUILD_DEBUG
         OutputDebugStringA(output.data);
@@ -2872,9 +2949,9 @@ static const char *build_binary_extension[BASE_OS_COUNT] = {
 };
 
 typedef Array(const char *) Array_cstring;
-static void build_push_arguments(Array_cstring *strings, const char **arguments) {
+static void build_push_arguments(Arena *arena, Array_cstring *strings, const char **arguments) {
     if (arguments == 0) return;
-    for (const char **a = arguments; *a != 0; a += 1) push(strings, *a);
+    for (const char **a = arguments; *a != 0; a += 1) push(arena, strings, *a);
 }
 
 static String string_from_clex_data(clex_Data data) {
@@ -2886,7 +2963,7 @@ static bool build_expect_include(clex_Lexer *lexer, String *file) {
     clex_lex(lexer);
     String token_data = string_from_clex_data(lexer->token.data);
     bool ok = lexer->token.kind == clex_Token_PREPROCESSOR_DIRECTIVE;
-    ok = ok && string_equals(token_data, string("include"));
+    ok = ok && string_equals(token_data, S("include"));
     if (!ok) {
         log_error("expected `#include`");
         return false;
@@ -3048,14 +3125,14 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         const char **extra_flags;
         bool no_extra_errors;
     } Build_Object;
-    Array(Build_Object) objects = { .arena = scratch.arena };
+    Array(Build_Object) objects = {0};
 
     const char *object_extension = build_object_extension[target_os];
 
     const char *build_folder = "build";
     bool build_folder_ok = fs_exists(build_folder);
     if (!build_folder_ok) {
-        build_folder_ok = fs_make_directory(build_folder);
+        build_folder_ok = fs_make_folder(build_folder);
         if (!build_folder_ok) {
             log_error("failure creating folder '%s'", build_folder);
             return 1;
@@ -3065,10 +3142,13 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     String platform = {0};
     String code = os_read_entire_file(scratch.arena, &c_file_path[3]);
 
-    String_Builder metaprogram_code = { .arena = &arena };
+    String_Builder metaprogram_code = {0};
     String metaprogram_output_file = {0};
 
-    String generate_here_directive = string("generate_here");
+    String generate_here_directive = S("generate_here");
+
+    bool meta_link_crt_override = false;
+    bool meta_link_crt_override_value = false;
 
     // TODO(felix): once we have a working preprocessor this hardcoded logic shouldn't be necessary
 
@@ -3080,7 +3160,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             static bool aware_of_this_static_if_condition = false;
             String token_data = string_from_clex_data(lexer.token.data);
 
-            if (string_equals(token_data, string("if"))) {
+            if (string_equals(token_data, S("if"))) {
                 if (aware_of_this_static_if_condition) {
                     log_error("nested #if not yet supported in `#if BASE_OS...` block parsed by metaprogram");
                     return 1;
@@ -3091,7 +3171,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 clex_Lexer definition = clex_init(lexer.token.data2.start, lexer.token.data2.end, 0);
                 while (clex_lex(&definition)) {
                     token_data = string_from_clex_data(definition.token.data);
-                    aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, string("BASE_OS"));
+                    aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, S("BASE_OS"));
 
                     if (aware_of_this_static_if_condition) {
                         if (!build_eat_token(&definition, clex_Token_EQUALITY_CHECK, "error: %s", error)) return 1;
@@ -3100,10 +3180,10 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                         token_data = string_from_clex_data(definition.token.data);
 
                         u8 os_to_check = 0;
-                        if (string_equals(token_data, string("BASE_OS_WINDOWS"))) os_to_check = BASE_OS_WINDOWS;
-                        else if (string_equals(token_data, string("BASE_OS_MACOS"))) os_to_check = BASE_OS_MACOS;
-                        else if (string_equals(token_data, string("BASE_OS_LINUX"))) os_to_check = BASE_OS_LINUX;
-                        else if (string_equals(token_data, string("BASE_OS_WASM"))) os_to_check = BASE_OS_WASM;
+                        if (string_equals(token_data, S("BASE_OS_WINDOWS"))) os_to_check = BASE_OS_WINDOWS;
+                        else if (string_equals(token_data, S("BASE_OS_MACOS"))) os_to_check = BASE_OS_MACOS;
+                        else if (string_equals(token_data, S("BASE_OS_LINUX"))) os_to_check = BASE_OS_LINUX;
+                        else if (string_equals(token_data, S("BASE_OS_WASM"))) os_to_check = BASE_OS_WASM;
                         else {
                             log_error("expected `BASE_OS_{WINDOWS or MACOS or LINUX or WASM}`, got `#if BASE_OS == %S`", token_data);
                             return 1;
@@ -3118,11 +3198,11 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
             if (!aware_of_this_static_if_condition) continue;
 
-            if (string_equals(token_data, string("else"))) {
+            if (string_equals(token_data, S("else"))) {
                 in_active_preprocessor_block = !in_active_preprocessor_block;
             }
 
-            if (string_equals(token_data, string("endif"))) {
+            if (string_equals(token_data, S("endif"))) {
                 in_active_preprocessor_block = true;
                 aware_of_this_static_if_condition = false;
             }
@@ -3135,7 +3215,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         if (lexer.token.kind != clex_Token_IDENTIFIER) continue;
         String token_data = string_from_clex_data(lexer.token.data);
 
-        if (!string_equals(token_data, string("meta"))) continue;
+        if (!string_equals(token_data, S("meta"))) continue;
 
         clex_lex(&lexer);
         if (lexer.token.kind != '(') continue;
@@ -3143,7 +3223,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `meta(...)`")) return 1;
         token_data = string_from_clex_data(lexer.token.data);
 
-        if (string_equals(token_data, string("platform"))) {
+        if (string_equals(token_data, S("platform"))) {
             if (platform.count != 0) {
                 log_error("directive `meta(platform)` can only be used once");
                 return 1;
@@ -3172,7 +3252,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
 
             if (!build_expect_include(&lexer, &metaprogram_output_file)) return 1;
-        } else if (string_equals(token_data, string("embed"))) {
+        } else if (string_equals(token_data, S("embed"))) {
             const char *usage = "`meta(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
 
             if (!build_eat_token(&lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
@@ -3186,21 +3266,21 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             for (u64 i = 0; i < 2; i += 1) {
                 clex_lex(&lexer);
                 String extern_ = string_from_clex_data(lexer.token.data);
-                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(extern_, string("extern"))) {
+                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(extern_, S("extern"))) {
                     log_error("expected this: %s", usage);
                     return 1;
                 }
 
                 clex_lex(&lexer);
                 String const_ = string_from_clex_data(lexer.token.data);
-                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(const_, string("const"))) {
+                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(const_, S("const"))) {
                     log_error("expected this: %s", usage);
                     return 1;
                 }
 
                 clex_lex(&lexer);
                 String type_ = string_from_clex_data(lexer.token.data);
-                String expected_type = i == 0 ? string("char") : string("u64");
+                String expected_type = i == 0 ? S("char") : S("u64");
                 if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(type_, expected_type)) {
                     log_error("expected this: %s", usage);
                     return 1;
@@ -3270,31 +3350,31 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 if (!ok) return 1;
 
                 Build_Object object = { .object_path = output_name };
-                push(&objects, object);
+                push(scratch.arena, &objects, object);
             } else {
                 input = os_read_entire_file(&arena, input_path);
                 if (input.count == 0) return 1;
 
-                String qualifiers = string("static const char ");
-                String assignment = string("[] = {");
-                String closing = string("\n};\n");
-                String example_byte_as_hex = string("0x00,");
+                String qualifiers = S("static const char ");
+                String assignment = S("[] = {");
+                String closing = S("\n};\n");
+                String example_byte_as_hex = S("0x00,");
                 u64 chars_per_row_exponent = 5;
                 u64 chars_per_row = (u64)1 << chars_per_row_exponent;
                 u64 rows = input.count / chars_per_row + 1;
 
-                String indent = string("\n    ");
+                String indent = S("\n    ");
                 u64 bytes_for_indentation = rows * indent.count;
                 u64 bytes_total = bytes_for_indentation + rows * (chars_per_row * example_byte_as_hex.count);
                 bytes_total += qualifiers.count + variable_name.count + assignment.count + closing.count;
 
-                String length_qualifiers = string("static const u64 ");
-                String length_assignment = string(" = ");
-                String length_closing = string(";\n");
+                String length_qualifiers = S("static const u64 ");
+                String length_assignment = S(" = ");
+                String length_closing = S(";\n");
                 u64 max_digits = sizeof(u64) * 8;
                 bytes_total += length_qualifiers.count + array_length_name.count + length_assignment.count + max_digits + length_closing.count;
 
-                reserve_unused(&metaprogram_code, bytes_total);
+                reserve_unused(scratch.arena, &metaprogram_code, bytes_total);
                 push_slice_assume_capacity(&metaprogram_code, qualifiers);
                 push_slice_assume_capacity(&metaprogram_code, variable_name);
                 push_slice_assume_capacity(&metaprogram_code, assignment);
@@ -3319,9 +3399,34 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 push_slice_assume_capacity(&metaprogram_code, length_qualifiers);
                 push_slice_assume_capacity(&metaprogram_code, array_length_name);
                 push_slice_assume_capacity(&metaprogram_code, length_assignment);
-                string_builder_print(&metaprogram_code, "%llu", input.count);
+                string_builder_print(scratch.arena, &metaprogram_code, "%llu", input.count);
                 push_slice_assume_capacity(&metaprogram_code, length_closing);
             }
+        } else if (string_equals(token_data, S("link_libc"))) {
+            static bool specified_already = false;
+            if (specified_already) {
+                log_error("you can't specify `link_libc` multiple times");
+                return 1;
+            }
+            specified_already = true;
+
+            const char *error = "error: expected `link_libc = true/false`";
+            if (!build_eat_token(&lexer, '=', error)) return 1;
+
+            if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, error)) return 1;
+            token_data = string_from_clex_data(lexer.token.data);
+
+            meta_link_crt_override = true;
+            if (string_equals(token_data, S("true"))) {
+                meta_link_crt_override_value = true;
+            } else if (string_equals(token_data, S("false"))) {
+                meta_link_crt_override_value = false;
+            } else {
+                log_error("expected `true` or `false` in `meta(link_libc = true/false)`, got `%S`", token_data);
+                return 1;
+            }
+
+            if (!build_eat_token(&lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
         } else {
             log_error("unsupported metaprogram directive '%S'", token_data);
             return 1;
@@ -3339,17 +3444,17 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     // TODO(felix): should be handled by metaprogram
-    String sokol_platform = string("base_platform_sokol");
+    String sokol_platform = S("base_platform_sokol");
     const char *sokol_code_path = cstring_print(scratch.arena, "%sbase%c%S.c", source_folder, path_separator, platform);
     bool using_sokol_platform = string_equals(platform, sokol_platform);
     if (using_sokol_platform) {
-        Array_cstring extra_flags = { .arena = scratch.arena };
+        Array_cstring extra_flags = {0};
         if (BASE_OS == BASE_OS_MACOS) {
-            push(&extra_flags, "-x");
-            push(&extra_flags, "objective-c");
+            push(scratch.arena, &extra_flags, "-x");
+            push(scratch.arena, &extra_flags, "objective-c");
         }
-        push(&extra_flags, "-DBASE_PLATFORM_IMPLEMENTATION");
-        push(&extra_flags, 0);
+        push(scratch.arena, &extra_flags, "-DBASE_PLATFORM_IMPLEMENTATION");
+        push(scratch.arena, &extra_flags, 0);
 
         Build_Object object = {
             .code_path = sokol_code_path,
@@ -3357,14 +3462,18 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             .extra_flags = extra_flags.data,
             .no_extra_errors = true,
         };
-        push(&objects, object);
+        push(scratch.arena, &objects, object);
     }
 
     Build_Object main_object = { .code_path = c_file_path };
-    push(&objects, main_object);
+    push(scratch.arena, &objects, main_object);
 
-    // TODO(felix): should be handled by metaprogram
-    bool link_crt = target_os != BASE_OS_WASM;
+    bool link_crt = false;
+    if (meta_link_crt_override) {
+        link_crt = meta_link_crt_override_value;
+    } else {
+        link_crt = target_os == BASE_OS_MACOS;
+    }
 
     // TODO(felix): should be handled by metaprogram
     const char *include_paths[] = {
@@ -3402,10 +3511,10 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         const char *shader_file = cstring_print(scratch.arena, "%sshader.c", source_folder);
         fs_remove_file(shader_file);
 
-        Array_cstring command = { .arena = &arena };
+        Array_cstring command = {0};
         if (BASE_OS == BASE_OS_WINDOWS) {
-            push(&command, "cmd.exe");
-            push(&command, "/c");
+            push(scratch.arena, &command, "cmd.exe");
+            push(scratch.arena, &command, "/c");
         }
 
         const char *target_shader_language[BASE_OS_COUNT] = {
@@ -3437,9 +3546,9 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             "-e", shdc_error_format[BASE_OS],
             0,
         };
-        build_push_arguments(&command, args);
+        build_push_arguments(scratch.arena, &command, args);
 
-        push(&command, 0);
+        push(scratch.arena, &command, 0);
         exit_code = os_process_run(arena, command.data, build_folder, process_flags);
         scratch_end(shdc_scratch);
         if (exit_code != 0) goto end;
@@ -3472,9 +3581,9 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
             Scratch compile_scratch = scratch_begin(scratch.arena);
 
-            Array_cstring compile = { .arena = compile_scratch.arena };
+            Array_cstring compile = {0};
 
-            build_push_arguments(&compile, build_compiler_initial_command[compiler]);
+            build_push_arguments(scratch.arena, &compile, build_compiler_initial_command[compiler]);
 
             // TODO(felix): should be handled by reading meta() annotations
             if (target_os == BASE_OS_WASM) {
@@ -3485,20 +3594,20 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                     0,
                 };
 
-                build_push_arguments(&compile, clang_wasm_flags);
+                build_push_arguments(scratch.arena, &compile, clang_wasm_flags);
             }
 
-            build_push_arguments(&compile, include_paths);
-            if (link_crt) push(&compile, "-DLINK_CRT=1");
+            build_push_arguments(scratch.arena, &compile, include_paths);
+            if (link_crt) push(scratch.arena, &compile, "-DLINK_CRT=1");
 
-            if (!object->no_extra_errors) build_push_arguments(&compile, build_compiler_extra_errors[compiler]);
-            build_push_arguments(&compile, build_compiler_disabled_errors[compiler]);
+            if (!object->no_extra_errors) build_push_arguments(scratch.arena, &compile, build_compiler_extra_errors[compiler]);
+            build_push_arguments(scratch.arena, &compile, build_compiler_disabled_errors[compiler]);
 
-            build_push_arguments(&compile, build_compiler_mode_flags[build_mode][compiler][target_os]);
-            if (build_mode == Build_Mode_DEBUG) push(&compile, "-DBUILD_DEBUG=1");
-            if (use_asan) push(&compile, "-fsanitize=address");
+            build_push_arguments(scratch.arena, &compile, build_compiler_mode_flags[build_mode][compiler][target_os]);
+            if (build_mode == Build_Mode_DEBUG) push(scratch.arena, &compile, "-DBUILD_DEBUG=1");
+            if (use_asan) push(scratch.arena, &compile, "-fsanitize=address");
 
-            build_push_arguments(&compile, object->extra_flags);
+            build_push_arguments(scratch.arena, &compile, object->extra_flags);
 
             bool delete_pdb_first_because_msvc_incremental_is_broken = (target_os == BASE_OS_WINDOWS && compiler == Build_Compiler_MSVC);
             if (delete_pdb_first_because_msvc_incremental_is_broken) {
@@ -3513,12 +3622,12 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 }
             }
 
-            push(&compile, object->code_path);
+            push(scratch.arena, &compile, object->code_path);
 
             const char *output = cstring_print(compile_scratch.arena, "%s%s", build_compiler_out[compiler], object->object_path);
-            push(&compile, output);
+            push(scratch.arena, &compile, output);
 
-            push(&compile, 0);
+            push(scratch.arena, &compile, 0);
             exit_code = os_process_run(*compile_scratch.arena, compile.data, build_folder, process_flags);
 
             scratch_end(compile_scratch);
@@ -3527,46 +3636,54 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     {
-        Array_cstring link = { .arena = scratch.arena };
+        Array_cstring link = {0};
 
-        build_push_arguments(&link, build_linker_initial_command[linker][target_os]);
+        build_push_arguments(scratch.arena, &link, build_linker_initial_command[linker][target_os]);
 
         if (target_os == BASE_OS_WINDOWS) {
             if (build_mode == Build_Mode_DEBUG) {
                 if (linker == Build_Linker_MSVC) {
-                    push(&link, "-debug");
-                    push(&link, "-subsystem:console");
-                    if (link_crt) push(&link, "libucrtd.lib");
+                    push(scratch.arena, &link, "-debug");
+                    push(scratch.arena, &link, "-subsystem:console");
+                    if (link_crt) push(scratch.arena, &link, "libucrtd.lib");
                 } else {
-                    push(&link, "-g");
+                    push(scratch.arena, &link, "-g");
                 }
             } else {
                 if (linker == Build_Linker_MSVC) {
-                    push(&link, "-subsystem:console");
+                    push(scratch.arena, &link, "-subsystem:console");
                     // TODO(felix): subsystem:windows and entry:main don't work currently (silent crash). I'm pretty sure this has to do with the entrypoint being set incorrectly. I'm also not sure about the WINDOWS_SUBSYSTEM_[...] #defines in base_context.h
                     // push(&link, "-subsystem:windows");
                     if (link_crt) {
                         // push(&link, "-entry:main");
-                        push(&link, "libucrt.lib");
+                        push(scratch.arena, &link, "libucrt.lib");
                     }
                 }
             }
 
-            if (!link_crt) push(&link, "-entry:entrypoint");
+            // TODO(felix): handle in metaprogram
+            if (!link_crt) switch (compiler) {
+                case Build_Compiler_MSVC: push(scratch.arena, &link, "-entry:entrypoint"); break;
+                case Build_Compiler_CLANG: {
+                    push(scratch.arena, &link, "-Wl,-entry:entrypoint");
+                    push(scratch.arena, &link, "-Wl,-subsystem:windows");
+                } break;
+                default: unreachable;
+            }
         }
 
-        if (linker == Build_Linker_CLANG && use_asan) push(&link, "-fsanitize=address");
+        if (linker == Build_Linker_CLANG && use_asan) push(scratch.arena, &link, "-fsanitize=address");
 
-        for (u64 i = 0; i < objects.count; i += 1) push(&link, objects.data[i].object_path);
+        for (u64 i = 0; i < objects.count; i += 1) push(scratch.arena, &link, objects.data[i].object_path);
 
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];
 
         const char *output_name = target_os == BASE_OS_WASM ? "module" : program_name;
         const char *output = cstring_print(scratch.arena, "%s%s.%s", syntax, output_name, extension);
-        push(&link, output);
+        push(scratch.arena, &link, output);
 
-        push(&link, 0);
+        push(scratch.arena, &link, 0);
         exit_code = os_process_run(*scratch.arena, link.data, build_folder, process_flags);
 
         if (target_os == BASE_OS_WASM && exit_code == 0) {
@@ -3586,7 +3703,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 }
 
 static void draw(Platform *platform, Draw_Command command) {
-    push(&platform->draw_commands, command);
+    push(platform->frame_arena, &platform->draw_commands, command);
 }
 
 static V2 draw_command_bounds(Draw_Command command) {
@@ -3604,14 +3721,14 @@ static V2 draw_command_bounds(Draw_Command command) {
 }
 
 static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
-    push_many(&platform->draw_commands, commands, count);
+    push_many(platform->frame_arena, &platform->draw_commands, commands, count);
 }
 
 #define UI_ASSERT assert
 #define UI_VSNPRINTF small_vsnprintf
 
 #if !defined(UI_MAX_STRING_LENGTH)
-    #define UI_MAX_STRING_LENGTH 128
+    #define UI_MAX_STRING_LENGTH 256
 #endif
 
 #if !defined(UI_ASSERT)
@@ -3626,7 +3743,6 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
 
 static void ui_begin(ui_State *ui) {
     ui->root = 0;
-    ui->current_parent = 0;
     ui->interacted_this_frame = 0;
     ui->display_string_used = 0;
 }
@@ -3667,8 +3783,7 @@ static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
             default: UI_ASSERT(0 && "unreachable"); break;
         }
 
-		box->rectangle.size[axis] += 2.f * style->border_width * !!(box->flags & ui_Flag_DRAW_BORDER);
-		box->rectangle.size[axis] += 2.f * style->inner_padding[axis];
+		box->rectangle.size[axis] += 2.f * style->padding[axis];
     }
 
     for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
@@ -3680,17 +3795,7 @@ static void ui__layout_dependent_ancestor(ui_State *ui, ui_Box *box) {
     for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
         case ui_Size_LARGEST_CHILD: /* not solved here */ break;
         case ui_Size_SUM_OF_CHILDREN: /* not solved here */ break;
-        case ui_Size_OF_PARENT: {
-            UI_ASSERT(box->parent != 0);
-
-            float ratio = box->size[axis].value;
-            UI_ASSERT(0 < ratio);
-            UI_ASSERT(ratio <= 1.f);
-
-            box->rectangle.size[axis] = ratio * box->parent->rectangle.size[axis];
-
-            // this is constraint-solved in the violation pass
-        } break;
+        case ui_Size_OF_PARENT: /* not solved here */ break;
         case ui_Size_TEXT: /* not solved here */ break;
         case ui_Size_PIXELS: /* not solved here */ break;
         default: UI_ASSERT(0 && "unreachable"); break;
@@ -3741,14 +3846,12 @@ static void ui__layout_relative_positions_and_rectangle(ui_State *ui, ui_Box *bo
             box->rectangle.position[layout_axis] += box->parent->style.child_gap;
         } else {
             box->rectangle.position[layout_axis] = box->parent->rectangle.position[layout_axis];
-			box->rectangle.position[layout_axis] += box->parent->style.inner_padding[layout_axis];
-			box->rectangle.position[layout_axis] += !!(box->parent->flags & ui_Flag_DRAW_BORDER) * box->parent->style.border_width;
+			box->rectangle.position[layout_axis] += box->parent->style.padding[layout_axis];
         }
 
         ui_Flags non_layout_axis = !layout_axis;
         box->rectangle.position[non_layout_axis] = box->parent->rectangle.position[non_layout_axis];
-        box->rectangle.position[non_layout_axis] += box->parent->style.inner_padding[non_layout_axis];
-        box->rectangle.position[non_layout_axis] += !!(box->parent->flags & ui_Flag_DRAW_BORDER) * box->parent->style.border_width;
+        box->rectangle.position[non_layout_axis] += box->parent->style.padding[non_layout_axis];
     }
 
     if (box->flags & UI_FLAG_ANY_VISIBLE) {
@@ -3771,8 +3874,7 @@ static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
         float applies_to_this_axis = (float)(layout_axis == axis);
 
         float parent_size = box->rectangle.size[axis];
-        parent_size -= 2.f * (float)!!(box->flags & ui_Flag_DRAW_BORDER) * box->style.border_width;
-        parent_size -= 2.f * box->style.inner_padding[axis];
+        parent_size -= 2.f * box->style.padding[axis];
         float available_size = parent_size;
 
         float wanted_size = 0;
@@ -3802,7 +3904,7 @@ static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
 
                 float ratio_left = child->size[axis].value;
                 if (child->size[axis].value > average_ratio_available) {
-                    float min_ratio_left = child->size[axis].value * child->size[axis].strictness;
+                    float min_ratio_left = 0;
                     ratio_left = CLAMP(min_ratio_left, average_ratio_available, child->size[axis].value);
                 }
 
@@ -3829,19 +3931,15 @@ static void ui_end(ui_State *ui) {
     ui__layout_relative_positions_and_rectangle(ui, ui->root);
 }
 
-static void ui_pop_parent(ui_State *ui) {
-    ui->current_parent = ui->current_parent->parent;
-}
-
-static ui_Box *ui_push(ui_State *ui, ui_Flags flags, ui_Style style, const char *format, ...) {
+static ui_Box *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, flags, style, format, arguments);
+    ui_Box *box = ui_pushv(ui, parent, flags, style, format, arguments);
     va_end(arguments);
     return box;
 }
 
-static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char *format_c, va_list arguments) {
+static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *style, const char *format_c, va_list arguments) {
     _Bool keyed = format_c != 0;
 
     const char *hash_string = 0;
@@ -3977,7 +4075,6 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char
 
     box->flags = flags;
     box->flags |= was_dragging * ui_Flag_DRAGGING;
-    box->flags |= ui_Flag__FIRST_FRAME * box_is_new;
 
     { // zero frame data, keep cached data
         box->display_string = 0;
@@ -3990,12 +4087,12 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char
         box->last_child = 0;
     }
 
-    box->style = style;
+    if (style != 0) box->style = *style;
 
-    box->parent = ui->current_parent;
+    box->parent = parent;
+    if (parent == 0) UI_ASSERT(ui->root == 0);
     if (ui->root == 0) {
-        UI_ASSERT(ui->current_parent == 0);
-        UI_ASSERT(box->flags & ui_Flag_PARENT);
+        UI_ASSERT(parent == 0);
 
         for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
             box->size[axis].kind = ui_Size_PIXELS;
@@ -4003,7 +4100,6 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char
         }
 
         ui->root = box;
-        ui->current_parent = box;
     }
 
     if (box != ui->root) {
@@ -4026,8 +4122,6 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char
             box->parent->last_child = box;
         }
     }
-
-    if (box->flags & ui_Flag_PARENT) ui->current_parent = box;
 
     V4 rectangle = { .x = box->rectangle.position[0], .y = box->rectangle.position[1] };
 
@@ -4064,21 +4158,21 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, ui_Style style, const char
     return box;
 }
 
-static ui_Box *ui_spacer(ui_State *ui) {
-    ui_Box *box = ui_push(ui, 0, (ui_Style){0}, 0);
+static ui_Box *ui_spacer(ui_State *ui, ui_Box *parent) {
+    ui_Box *box = ui_push(ui, parent, 0, 0, 0);
     box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
     return box;
 }
 
-static ui_Box *ui_slider(ui_State *ui, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...) {
+static ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...) {
     ui_Box *slider_box = 0;
 
     float range = most - least;
     UI_ASSERT(range > 0);
 
     ui_Style slider_style = style.bar;
-    slider_style.inner_padding[ui_X] = 0;
-    slider_style.inner_padding[ui_Y] = 0;
+    slider_style.padding[ui_X] = 0;
+    slider_style.padding[ui_Y] = 0;
     slider_style.child_gap = 0;
     slider_style.border_radius = style.radius;
 
@@ -4087,7 +4181,7 @@ static ui_Box *ui_slider(ui_State *ui, ui_Flags slider_axis, float least, float 
     String formatted = string_print_(ui->platform->frame_arena, format, arguments);
     va_end(arguments);
 
-    slider_box = ui_push(ui, slider_axis | ui_Flag_PARENT | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE, slider_style, "%S##slider box", formatted);
+    slider_box = ui_push(ui, parent, slider_axis | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE, &slider_style, "%S##slider box", formatted);
     {
         if (slider_box->flags & ui_Flag_CLICKED) slider_box->drag_start_value = *value;
 
@@ -4109,64 +4203,63 @@ static ui_Box *ui_slider(ui_State *ui, ui_Flags slider_axis, float least, float 
 
         ui_Flags slider_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND;
 
-        if (first_part_length >= 1.f) ui_parent(ui, !slider_axis, slider_style) {
-            ui_Box *first_part = ui->current_parent;
+        if (first_part_length >= 1.f) {
+            ui_Box *first_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
             first_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = first_part_length };
             first_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
 
-            ui_spacer(ui);
+            ui_spacer(ui, first_part);
 
-            ui_Box *first = ui_push(ui, slider_flags, slider_style, "%S##slider first", formatted);
+            ui_Box *first = ui_push(ui, first_part, slider_flags, &slider_style, "%S##slider first", formatted);
             first->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
             first->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
 
-            ui_spacer(ui);
+            ui_spacer(ui, first_part);
         }
 
-        ui_parent(ui, !slider_axis, slider_style) {
-            ui_Box *handle_part = ui->current_parent;
-            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_length, .strictness = 1.f };
+        {
+            ui_Box *handle_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
+            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_length };
             handle_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
 
-            ui_spacer(ui);
+            ui_spacer(ui, handle_part);
 
             ui_Style handle_style = slider_style;
             handle_style.border_radius = style.handle_radius;
             ui_Flags handle_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_SHADOW;
-            ui_Box *handle = ui_push(ui, handle_flags, handle_style, "%S##slider handle", formatted);
+            ui_Box *handle = ui_push(ui, handle_part, handle_flags, &handle_style, "%S##slider handle", formatted);
             if (slider_box->flags & ui_Flag_DRAGGING) {
                 handle->style.bg_color = style.dragging.bg_color;
                 handle->style.border_color = style.dragging.border_color;
             }
             handle->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_thickness, .strictness = 1.f };
+            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_thickness };
 
-            ui_spacer(ui);
+            ui_spacer(ui, handle_part);
         }
 
-        if (last_part_length >= 1.f) ui_parent(ui, !slider_axis, slider_style) {
-            ui_Box *last_part = ui->current_parent;
+        if (last_part_length >= 1.f) {
+            ui_Box *last_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
             last_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = last_part_length };
             last_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
 
-            ui_spacer(ui);
+            ui_spacer(ui, last_part);
 
-            ui_Box *last = ui_push(ui, slider_flags, slider_style, "%S##slider last", formatted);
+            ui_Box *last = ui_push(ui, last_part, slider_flags, &slider_style, "%S##slider last", formatted);
             last->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
             last->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
 
-            ui_spacer(ui);
+            ui_spacer(ui, last_part);
         }
     }
-    ui_pop_parent(ui);
 
     return slider_box;
 }
 
-static ui_Box *base_ui_draw_command(ui_State *ui, Draw_Command command, ui_Flags flags, ui_Style style, const char *format, ...) {
+static ui_Box *base_ui_draw_command(ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, ui_Flag_DRAW_COMMAND | flags, style, format, arguments);
+    ui_Box *box = ui_pushv(ui, parent, ui_Flag_DRAW_COMMAND | flags, style, format, arguments);
     va_end(arguments);
 
     Draw_Command *copy = arena_make(ui->platform->frame_arena, 1, Draw_Command);
@@ -4243,8 +4336,7 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
 
             V2 position = (V2){ box->rectangle.position[0], box->rectangle.position[1] };
             for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-                f32 add = box->style.inner_padding[axis];
-                add += !!(box->flags & ui_Flag_DRAW_BORDER) * box->style.border_width;
+                f32 add = box->style.padding[axis];
                 v(position)[axis] += add;
             }
 

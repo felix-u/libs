@@ -153,14 +153,22 @@ static App_Key app_key_from_win32(u64 winkey) {
         case 0xbb: key = '='; break;
         case 0xbd: key = '-'; break;
         default: {
-            bool same = ' ' <= winkey && winkey <= 'Z';
-            if (same) key = (App_Key)winkey;
-            else {
-                static bool once = false;
-                if (!once) {
-                    log_info("unimplemented translation from win32 keycode <0x%x> (logging ONCE for all keys)", winkey);
-                    once = true;
-                }
+            bool is_same = ' ' <= winkey && winkey <= 'Z';
+            if (is_same) {
+                key = (App_Key)winkey;
+                break;
+            }
+
+            bool is_function_key = 0x70 <= winkey && winkey <= 0x87;
+            if (is_function_key) {
+                key = (App_Key)(winkey - 0x70 + App_Key_F1);
+                break;
+            }
+
+            static bool once = false;
+            if (!once) {
+                log_info("unimplemented translation from win32 keycode <0x%x> (logging ONCE for all keys)", winkey);
+                once = true;
             }
         } break;
     }
@@ -279,7 +287,7 @@ static void program(void) {
 
     app_start(&platform.base);
 
-    const char *window_name = "app";
+    const char *window_name = platform.base.window_name != 0 ? platform.base.window_name : "app";
 
     window_procedure__platform = &platform;
     WNDCLASSA window_class = {
@@ -353,7 +361,7 @@ static void program(void) {
 
     while (!platform.base.should_quit) {
         Scratch scratch = scratch_begin(platform.base.frame_arena);
-        platform.base.draw_commands = (Array_Draw_Command){ .arena = scratch.arena };
+        platform.base.draw_commands = (Array_Draw_Command){0};
 
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagea
         enum { pm_remove = 0x0001 };
