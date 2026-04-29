@@ -47,9 +47,9 @@ static App_Key app_key_from_js(const char *bytes, u32 count) {
 
     if (key == 0) {
         if (0) {}
-        else if (string_equals(js_key, string("ShiftLeft"))) key = App_Key_SHIFT;
-        else if (string_equals(js_key, string("Equal"))) key = '=';
-        else if (string_equals(js_key, string("Minus")))  key = '-';
+        else if (string_equals(js_key, S("ShiftLeft"))) key = App_Key_SHIFT;
+        else if (string_equals(js_key, S("Equal"))) key = '=';
+        else if (string_equals(js_key, S("Minus")))  key = '-';
         else {
             static bool once = false;
             if (!once) {
@@ -126,10 +126,10 @@ void platform__start(void) {
 
     static Arena persistent_arena, frame_arena;
 
-    persistent_arena = arena_init(32 * 1024 * 1024);
+    persistent_arena = arena_init(16 * 1024 * 1024);
     base->persistent_arena = &persistent_arena;
 
-    frame_arena = arena_init(32 * 1024 * 1024);
+    frame_arena = arena_init(16 * 1024 * 1024);
     base->frame_arena = &frame_arena;
 
     app_start(base);
@@ -181,7 +181,7 @@ void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_
         v(frame->mouse_position)[i] = real_mouse_position[i] * (v(frame->window_size)[i] / real_window_size[i]);
     }
 
-    platform__.base.draw_commands = (Array_Draw_Command){ .arena = platform__.base.frame_arena };
+    platform__.base.draw_commands = (Array_Draw_Command){0};
     app_update_and_render(&platform__.base);
 
     u32 clear = abgr_from_rgba(platform__.base.clear_color);

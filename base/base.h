@@ -445,7 +445,7 @@ static force_inline void *memset_(void *destination_, int byte_, u64 byte_count)
     return destination;
 }
 
-#if !LINK_CRT
+#if !LINK_CRT && BASE_OS != BASE_OS_WASM
     #pragma function(memcmp)
     #pragma function(memcpy)
     #pragma function(memset)
@@ -594,6 +594,140 @@ typedef union {
 
 #define LDBL_MAX_EXP 16384
 
+static f32 sinf_(f32 x) {
+    f32 t = x * (1.f / 6.28318530f);
+    t -= floorf_(t); // [0, 1) representing [0, 2pi)
+    f32 sign = 1.f;
+
+    if (t > 0.5f) {
+        t -= 0.5f;
+        sign = -1.f;
+    }
+
+    if (t > 0.25f) {
+        // fold to [0, 0.25] = [0, pi/2]
+        t = 0.5f - t;
+    }
+
+    x = t * 6.28318530f;
+    f32 x2 = x * x;
+    f32 result_unsigned = x * (1.f + x2 * (-0.16666667f + x2 * (0.00833333f + x2 * (-0.00019841f + x2 * 2.7526e-6f))));
+
+    return sign * result_unsigned;
+}
+
+static f32 cosf_(f32 x) {
+    return sinf_(x + 1.57079632f);
+}
+
+static f32 expf_(f32 x) {
+    if (x >  88.f) return 3.40282347e+38f;
+    if (x < -88.f) return 0;
+
+    // e^x = 2^n * 2^f, where t = x*log2(e)
+    f32 t = x * 1.44269504f;
+    i32 n = (i32)t;
+    f32 f = t - (f32)n;
+
+    // 2^f on [0,1] via Taylor of e^(f*ln2)
+    f32 p = 1.f + f * (0.69314718f + f * (0.24022651f + f * (0.05550411f + f * (0.00961812f + f * 0.00133336f))));
+
+    // multiply by 2^n by stuffing n into the f32 exponent
+    i32 bits = (n + 127) << 23;
+    f32 scale;
+    memcpy(&scale, &bits, 4);
+
+    return p * scale;
+}
+
+static f32 fmodf_(f32 x, f32 y) {
+    f32 dividend = x / y;
+    assert((f32)INT64_MIN <= dividend && dividend <= (f32)INT64_MAX);
+    return x - (f32)(i64)dividend * y;
+}
+
+static f32 frexpf_(f32 x, i32 *exponent) {
+    u32 bits;
+    memcpy(&bits, &x, 4);
+
+    i32 biased_exponent = (bits >> 23) & 0xff;
+
+    *exponent = biased_exponent - 126;
+    bits = (bits & 0x807fffff) | (126 << 23);
+
+    memcpy(&x, &bits, 4);
+    return x;
+}
+
+static f32 logf_(f32 x) {
+    i32 exponent;
+    f32 mantissa = frexpf_(x, &exponent);
+    if (mantissa < 0.5f) {
+        mantissa *= 2.f;
+        exponent -= 1;
+    }
+
+    f32 ratio = (mantissa - 1.f) / (mantissa + 1.f);
+    f32 ratio2 = ratio * ratio;
+    f32 log_mantissa = ratio * (2.f + ratio2 * (0.6667f + ratio2 * 0.4f));
+
+    f32 ln2 = 0.6931472f;
+    return log_mantissa + (f32)exponent * ln2;
+}
+
+static f32 tanf_(f32 x) {
+    f32 intermediate = x * (2.f / (f32)M_PI) + (x >= 0 ? 0.5f : -0.5f);
+    assert((f32)INT64_MIN <= intermediate && intermediate <= (f32)INT64_MAX);
+    i64 n = (i64)intermediate;
+    f32 reduced = x - (f32)n * 1.5707964f;
+
+    f32 r2 = reduced * reduced;
+    f32 tan_reduced = reduced * (1.f + r2 * (0.33333f + r2 * (0.13333f + r2 * 0.05397f)));
+
+    if (n & 1) return -1.f / tan_reduced;
+    return tan_reduced;
+}
+
+static f32 tanhf_(f32 x) {
+    if (x >  5.f) return  1.f;
+    if (x < -5.f) return -1.f;
+    f32 x2 = x * x;
+    f32 a = x  * (135135.f + x2 * (17325.f + x2 * (378.f + x2)));
+    f32 b = 135135.f + x2 * (62370.f + x2 * (3150.f + x2 * 28.f));
+    return a / b;
+}
+
+#if COMPILER_CLANG
+    #define frexpf __builtin_frexpf
+    #define sinf   __builtin_sinf
+    #define tanf   __builtin_tanf
+    #if LINK_CRT
+        #define cosf  __builtin_cosf
+        #define expf  __builtin_expf
+        #define fmodf __builtin_fmodf
+        #define logf  __builtin_logf
+        #define tanhf __builtin_tanhf
+    #endif
+#endif
+
+#if !LINK_CRT
+    #if !COMPILER_CLANG
+        #define frexpf frexpf_
+        #define sinf   sinf_
+        #define tanf   tanf_
+    #endif
+    #define ceilf  ceilf_
+    #define expf   expf_
+    #define floorf floorf_
+    #define fmodf  fmodf_
+    #define cosf   cosf_
+    #define logf   logf_
+    #define sqrtf  sqrtf_
+    #define tanhf  tanhf_
+#endif
+
+// TODO(felix): clean these up
+
 #if COMPILER_MSVC
     #pragma intrinsic(abs, _abs64, fabs)
     #define abs_i32(x) abs(x)
@@ -602,10 +736,6 @@ typedef union {
     // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
     // NOTE(felix): corecrt_math.h defines fabsf as an inline function casting fabs to f32. Might be good to benchmark that approach versus what I'm doing here
     static force_inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
-
-    #define ceilf ceilf_
-    #define floorf floorf_
-    #define sqrtf sqrtf_
 #elif COMPILER_CLANG || COMPILER_GCC
     #define INFINITY __builtin_inff()
 
@@ -613,9 +743,9 @@ typedef union {
     #define abs_i64(x) __builtin_llabs(x)
     #define abs_f64(x) __builtin_fabs(x)
     #if LINK_CRT
-        #define ceilf(x)   __builtin_ceilf(x)
-        #define floorf(x)  __builtin_floorf(x)
-        #define sqrtf(x)   __builtin_sqrtf(x)
+        #define ceilf  __builtin_ceilf
+        #define floorf __builtin_floorf
+        #define sqrtf  __builtin_sqrtf
     #else
         #define ceilf  ceilf_
         #define floorf floorf_
@@ -646,126 +776,15 @@ typedef union {
             return r;
         }
 
-        static f32 expf(f32 x) {
-            if (x >  88.f) return 3.40282347e+38f;
-            if (x < -88.f) return 0;
-
-            // e^x = 2^n * 2^f, where t = x*log2(e)
-            f32 t = x * 1.44269504f;
-            i32 n = (i32)t;
-            f32 f = t - (f32)n;
-
-            // 2^f on [0,1] via Taylor of e^(f*ln2)
-            f32 p = 1.f + f * (0.69314718f + f * (0.24022651f + f * (0.05550411f + f * (0.00961812f + f * 0.00133336f))));
-
-            // multiply by 2^n by stuffing n into the f32 exponent
-            i32 bits = (n + 127) << 23;
-            f32 scale;
-            memcpy(&scale, &bits, 4);
-
-            return p * scale;
-        }
-
-        static f32 fmodf(f32 x, f32 y) {
-            f32 dividend = x / y;
-            assert((f32)INT64_MIN <= dividend && dividend <= (f32)INT64_MAX);
-            return x - (f32)(i64)dividend * y;
-        }
-
-        static f32 frexpf(f32 x, i32 *exponent) {
-            u32 bits;
-            memcpy(&bits, &x, 4);
-
-            i32 biased_exponent = (bits >> 23) & 0xff;
-
-            *exponent = biased_exponent - 126;
-            bits = (bits & 0x807fffff) | (126 << 23);
-
-            memcpy(&x, &bits, 4);
-            return x;
-        }
-
-        static f32 logf(f32 x) {
-            i32 exponent;
-            f32 mantissa = frexpf(x, &exponent);
-            if (mantissa < 0.5f) {
-                mantissa *= 2.f;
-                exponent -= 1;
-            }
-
-            f32 ratio = (mantissa - 1.f) / (mantissa + 1.f);
-            f32 ratio2 = ratio * ratio;
-            f32 log_mantissa = ratio * (2.f + ratio2 * (0.6667f + ratio2 * 0.4f));
-
-            f32 ln2 = 0.6931472f;
-            return log_mantissa + (f32)exponent * ln2;
-        }
-
         static f32 powf(f32 x, f32 e) {
             f32 result = expf(e * logf(x));
             return result;
         }
-
-        static f32 sinf(f32 x) {
-            f32 t = x * (1.f / 6.28318530f);
-            t -= floorf(t); // [0, 1) representing [0, 2pi)
-            f32 sign = 1.f;
-
-            if (t > 0.5f) {
-                t -= 0.5f;
-                sign = -1.f;
-            }
-
-            if (t > 0.25f) {
-                // fold to [0, 0.25] = [0, pi/2]
-                t = 0.5f - t;
-            }
-
-            x = t * 6.28318530f;
-            f32 x2 = x * x;
-            f32 result_unsigned = x * (1.f + x2 * (-0.16666667f + x2 * (0.00833333f + x2 * (-0.00019841f + x2 * 2.7526e-6f))));
-
-            return sign * result_unsigned;
-        }
-
-        static f32 cosf(f32 x) {
-            return sinf(x + 1.57079632f);
-        }
-
-        static f32 tanf(f32 x) {
-            f32 intermediate = x * (2.f / (f32)M_PI) + (x >= 0 ? 0.5f : -0.5f);
-            assert((f32)INT64_MIN <= intermediate && intermediate <= (f32)INT64_MAX);
-            i64 n = (i64)intermediate;
-            f32 reduced = x - (f32)n * 1.5707964f;
-
-            f32 r2 = reduced * reduced;
-            f32 tan_reduced = reduced * (1.f + r2 * (0.33333f + r2 * (0.13333f + r2 * 0.05397f)));
-
-            if (n & 1) return -1.f / tan_reduced;
-            return tan_reduced;
-        }
-
-        static f32 tanhf(f32 x) {
-            if (x >  5.f) return  1.f;
-            if (x < -5.f) return -1.f;
-            f32 x2 = x * x;
-            f32 a = x  * (135135.f + x2 * (17325.f + x2 * (378.f + x2)));
-            f32 b = 135135.f + x2 * (62370.f + x2 * (3150.f + x2 * 28.f));
-            return a / b;
-        }
     #else
         #define atanf(x)     __builtin_atanf(x)
         #define atan2f(y, x) __builtin_atan2f((y), (x))
-        #define cosf(x)      __builtin_cosf(x)
-        #define expf(x)      __builtin_expf(x)
-        #define fmodf(x, m)  __builtin_fmodf((x), (m))
-        #define frexpf(x, e) __builtin_frexpf((x), (e))
-        #define logf(x)      __builtin_logf(x)
         #define powf(x, e)   __builtin_powf((x), (e))
         #define roundf(x)    __builtin_roundf(x)
-        #define sinf(x)      __builtin_sinf(x)
-        #define tanf(x)      __builtin_tanf(x)
-        #define tanhf(x)     __builtin_tanhf(x)
     #endif
 #endif
 
@@ -915,6 +934,9 @@ static void print_(const char *format, va_list arguments);
 #define OBJECT_FUNCTION static
 #include "base/object_files.h"
 
+#define SERIAL_FUNCTION static
+#include "base/serial.h"
+
 typedef enum {
     Build_Compiler_MSVC,
     Build_Compiler_CLANG,
@@ -1043,7 +1065,7 @@ typedef struct {
             u8 bytes[32];
         } sprite;
     };
-    void *user_data;
+    u64 user_data;
 } Draw_Command;
 typedef Array(Draw_Command) Array_Draw_Command;
 
@@ -1087,7 +1109,7 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
 #endif
 
 #if !defined(UI_DISPLAY_STRING_BUFFER_SIZE)
-    #define UI_DISPLAY_STRING_BUFFER_SIZE 2048
+    #define UI_DISPLAY_STRING_BUFFER_SIZE 4096
 #endif
 
 #if !defined(UI_HASH_STRING_BUFFER_SIZE)
@@ -2564,9 +2586,23 @@ static String os_read_entire_file(Arena *arena, const char *path) {
 }
 
 static bool os_write_entire_file(const char *path, const void *data, u64 count) {
-    fs_File file = fs_open(path, fs_File_Flag_WRITE);
-    bool ok = fs_file_write(file, data, count);
-    fs_close(file);
+    bool ok = false;
+
+    #if BASE_OS == BASE_OS_WASM
+    {
+        void js_file_write(const char *name, const void *bytes, u32 count);
+        assert(count <= UINT32_MAX);
+        js_file_write(path, data, (u32)count);
+        ok = true;
+    }
+    #else
+    {
+        fs_File file = fs_open(path, fs_File_Flag_WRITE);
+        ok = fs_file_write(file, data, count);
+        fs_close(file);
+    }
+    #endif
+
     if (!ok) log_error("unable to write %llu bytes to path '%s'", count, path);
     return ok;
 }
@@ -2792,6 +2828,10 @@ static void print_(const char *format, va_list arguments) {
 #define OBJECT_ASSERT assert
 #include "base/object_files.h"
 
+#define SERIAL_IMPLEMENTATION
+#define SERIAL_ASSERT assert
+#include "base/serial.h"
+
 #define BUILD_FLAGS_MAX 32
 
 static const char *build_compiler_initial_command[Build_Compiler_COUNT][BUILD_FLAGS_MAX] = {
@@ -2928,6 +2968,7 @@ static const char *build_compiler_disabled_errors[Build_Compiler_COUNT][BUILD_FL
         "-Wno-unused-function",
         "-Wno-assume",
         "-Wno-deprecated-declarations",
+        "-Wno-overlength-strings",
     },
 };
 
@@ -3023,13 +3064,30 @@ static const char build_wasm_html_file[] = STRINGIFY(
             const offscreen_context = offscreen.getContext("2d");
 
             const imports = { env: {
+                js_file_write: (name_cstring, pointer, count) => {
+                    const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, pointer, count).slice();
+
+                    const memory = new Uint8Array(wasm.instance.exports.memory.buffer);
+                    let end = name_cstring;
+                    while (memory[end] != 0) end += 1;
+                    const name = new TextDecoder().decode(memory.subarray(name_cstring, end));
+
+                    console.assert(!name.includes("/") && !name.includes("\\"), "js_file_write: path separators forbidden in name", name);
+
+                    const blob = new Blob([bytes]);
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = name;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                },
+                js_performance_now: () => {
+                    return performance.now();
+                },
                 os_write_console_js: (pointer, count) => {
                     const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, pointer, count);
                     const string = new TextDecoder().decode(bytes);
                     console.log(string);
-                },
-                js_performance_now: () => {
-                    return performance.now();
                 },
             } };
 

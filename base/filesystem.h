@@ -38,6 +38,10 @@ typedef struct {
 
         char path[260 + 1];
         char name[260 + 1];
+    #elif defined(FS_OS_POSIX)
+        FILE *handle;
+        char path[4096];
+        char name[4096];
     #else
         int _stub;
     #endif
