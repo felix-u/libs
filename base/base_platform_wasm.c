@@ -141,7 +141,7 @@ void platform__start(void) {
 }
 
 void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_x, f32 mouse_y) {
-    Scratch scratch = scratch_begin(platform__.base.frame_arena);
+    Arena scratch = *platform__.base.frame_arena;
     App_Frame_Info *frame = &platform__.base.frame;
 
     static Time_Averaged_Sampler sampler = {0};
@@ -191,7 +191,7 @@ void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_
     frame->scroll = 0;
     memset(frame->mouse_clicked, 0, sizeof frame->mouse_clicked);
     memset(frame->key_pressed, 0, sizeof frame->key_pressed);
-    scratch_end(scratch);
+    *platform__.base.frame_arena = scratch;
 }
 
 static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {

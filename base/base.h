@@ -2712,7 +2712,10 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
         }
     }
     #else
+    {
+        (void)scratch;
         panic("unimplemented");
+    }
     #endif
 
     if (flags & (Os_Process_Flag_PRINT_EXECUTION_TIME | Os_Process_Flag_PRINT_EXIT_CODE)) {
