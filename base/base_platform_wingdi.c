@@ -275,7 +275,7 @@ static i64 window_procedure__(void *window, u32 message, u64 w, i64 l) {
 
 static void program(void) {
     static Arena persistent_arena;
-    persistent_arena = arena_init(1 * 1024 * 1024);
+    persistent_arena = arena_init(4 * 1024 * 1024);
     static Arena frame_arena;
     frame_arena = arena_init(4 * 1024 * 1024);
 
@@ -359,8 +359,7 @@ static void program(void) {
 
     platform.font = cpu_draw_font_from_bdf(platform__font_bytes, platform__font_size);
 
-    while (!platform.base.should_quit) {
-        Scratch scratch = scratch_begin(platform.base.frame_arena);
+    for (Arena frame_scratch = *platform.base.frame_arena; !platform.base.should_quit; *platform.base.frame_arena = frame_scratch) {
         platform.base.draw_commands = (Array_Draw_Command){0};
 
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagea
@@ -437,7 +436,6 @@ static void program(void) {
         memset(frame->mouse_clicked, 0, sizeof frame->mouse_clicked);
         memset(frame->key_pressed, 0, sizeof frame->key_pressed);
 
-        scratch_end(scratch);
         if (platform.base.should_quit) break;
     }
 

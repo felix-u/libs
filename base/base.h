@@ -530,15 +530,6 @@ static Arena arena_init(u64 initial_size_bytes); // TODO(felix): remove this fun
 static void *arena_make_(Arena *arena, u64 item_count, u64 item_size, bool zero);
 static void *arena_push(Arena *arena, const void *data, u64 count);
 
-typedef struct {
-    Arena *arena;
-    u64 offset;
-    u64 last_offset;
-} Scratch;
-
-static Scratch scratch_begin(Arena *arena);
-static void    scratch_end(Scratch scratch);
-
 #if BUILD_ASAN
     #define asan_poison_memory_region(address, byte_count)   __asan_poison_memory_region(address, byte_count)
     #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
@@ -922,7 +913,7 @@ typedef enum {
 
 static void *os_heap_allocate(u64 byte_count);
 static void  os_heap_free(void *pointer);
-static  u32  os_process_run(Arena arena, const char **arguments, const char *directory, Os_Process_Flags flags);
+static  u32  os_process_run(Arena scratch, const char **arguments, const char *directory, Os_Process_Flags);
 static void  os_write_console(const char *bytes, u64 count);
 
 static void print(const char *format, ...);
@@ -955,7 +946,7 @@ typedef enum {
     Build_Mode_COUNT,
 } Build_Mode;
 
-static u32 build_default_everything(Arena arena, const char *program_name, u8 target_os);
+static u32 build_default_everything(Arena scratch, const char *program_name, u8 target_os);
 
 typedef enum {
     App_Key_NIL = 0,
@@ -1104,8 +1095,13 @@ static void draw(Platform *platform, Draw_Command command);
 static V2   draw_command_bounds(Draw_Command command);
 static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
 
-#if !defined(UI_MAX_BOX_COUNT_EXPONENT)
-    #define UI_MAX_BOX_COUNT_EXPONENT 7
+#if !defined(UI_MAX_BOX_SLOTS_EXPONENT)
+    #define UI_MAX_BOX_SLOTS_EXPONENT 10
+#endif
+
+// includes null terminator
+#if !defined(UI_MAX_HASH_STRING_SIZE)
+    #define UI_MAX_HASH_STRING_SIZE 32
 #endif
 
 #if !defined(UI_DISPLAY_STRING_BUFFER_SIZE)
@@ -1192,27 +1188,32 @@ struct ui_Box {
 
     // === cached data ===
     void *user_data;
-    const char *hash_string;
+    char hash_string[UI_MAX_HASH_STRING_SIZE];
     // computed
     float drag_start_value;
     float drag_start_mouse[ui_Axis_COUNT];
     ui_Rectangle rectangle;
+
+    unsigned long long frame_id;
 };
 
-#define UI_MAX_BOX_COUNT (1 << UI_MAX_BOX_COUNT_EXPONENT)
+#define UI_MAX_BOX_SLOTS (1 << UI_MAX_BOX_SLOTS_EXPONENT)
+#define UI_MAX_KEYED_BOXES_EXPONENT (UI_MAX_BOX_SLOTS_EXPONENT - 1)
+#define UI_MAX_KEYED_BOXES (1 << UI_MAX_KEYED_BOXES_EXPONENT)
 
 typedef void (ui_text_measure_function)(void *user_data, const char *string, int length, ui_Style style, f32 size[2]);
 
 typedef struct {
-    Platform *platform;
+    App_Frame_Info *frame; // TODO(felix): remove
     void *user_data;
     ui_text_measure_function *measure_text;
     _Bool input_blocked;
 
     _Bool interacted_this_frame;
 
-    int used_box_count;
-    ui_Box boxes[UI_MAX_BOX_COUNT * 2]; // We need more than 100/70 the max count for hashmap performance, but the hash lookup relies on the total capacity being a power of 2, so we just double
+    int keyed_box_count; // for asserting we don't go over the 70% usage threshold. hashmap uses first half of boxes
+    int per_frame_unkeyed_boxes_index; // grows down from last box to midpoint
+    ui_Box boxes[UI_MAX_BOX_SLOTS];
 
     ui_Box *root;
 
@@ -1220,6 +1221,8 @@ typedef struct {
     char display_string_buffer[UI_DISPLAY_STRING_BUFFER_SIZE];
     int hash_string_used;
     char hash_string_buffer[UI_HASH_STRING_BUFFER_SIZE];
+
+    unsigned long long frame_id;
 } ui_State;
 
 typedef struct {
@@ -1236,7 +1239,7 @@ typedef struct {
 } ui_Slider_Style;
 
 static void     ui_begin(ui_State *ui);
-static ui_State ui_create(Platform *platform, ui_text_measure_function *text_measure_function);
+static void     ui_create(ui_State *ui, App_Frame_Info *frame, ui_text_measure_function *text_measure_function);
 static void     ui_end(ui_State *ui);
 static ui_Box  *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, ...);
 static ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, va_list arguments);
@@ -1244,7 +1247,7 @@ static ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
 static ui_Box  *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, f32 least, f32 most, f32 *value, ui_Slider_Style style, const char *format, ...);
 
 static void    base_ui_renderer(ui_State *ui, ui_Box *box);
-static ui_Box *base_ui_draw_command(ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
+static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
 static void    base_ui_measure_text(void *user_data, const char *string, int length, ui_Style style, f32 size[2]);
 
 
@@ -1449,6 +1452,7 @@ static Arena arena_init(u64 initial_size_bytes) {
 
     if (arena.mem == 0) panic("arena_init failure (requested %llu bytes)", initial_size_bytes);
     arena.capacity = initial_size_bytes;
+    // TODO(felix): poison with debug byte when asan off
     asan_poison_memory_region(arena.mem, arena.capacity);
     return arena;
 }
@@ -1461,8 +1465,10 @@ static void *arena_make_(Arena *arena, u64 item_count, u64 item_size, bool zero)
 
     u64 alignment = 2 * sizeof(void *);
     u64 modulo = arena->offset & (alignment - 1);
+    u64 pad = alignment - modulo;
+    if (byte_count > arena->capacity - arena->offset - pad) panic("allocation failure");
+
     if (modulo != 0) {
-        u64 pad = alignment - modulo;
         if (BUILD_DEBUG) {
             asan_unpoison_memory_region((u8 *)arena->mem + arena->offset, pad);
             memset((u8 *)arena->mem + arena->offset, POISON_BYTE, pad);
@@ -1471,15 +1477,13 @@ static void *arena_make_(Arena *arena, u64 item_count, u64 item_size, bool zero)
         arena->offset += pad;
     }
 
-    if (arena->capacity == 0) *arena = arena_init(32 * 1024 * 1024);
-
-    if (arena->offset + byte_count > arena->capacity) panic("allocation failure");
-
     void *mem = (u8 *)arena->mem + arena->offset;
     arena->last_offset = arena->offset;
     arena->offset += byte_count;
 
     asan_unpoison_memory_region(mem, byte_count);
+    asan_poison_memory_region((u8 *)arena->mem + arena->offset, arena->capacity - arena->offset);
+
     if (zero) memset(mem, 0, byte_count);
     else if (BUILD_DEBUG) memset(mem, POISON_BYTE, byte_count);
 
@@ -1504,23 +1508,6 @@ static void *arena_push(Arena *arena, const void *data, u64 count) {
     u8 *bytes_on_arena = arena_make(arena, count, u8);
     memcpy(bytes_on_arena, data, count);
     return bytes_on_arena;
-}
-
-static Scratch scratch_begin(Arena *arena) {
-    return (Scratch){
-        .arena = arena,
-        .offset = arena->offset,
-        .last_offset = arena->last_offset,
-    };
-}
-
-static void scratch_end(Scratch scratch) {
-    void *scratched_pointer = (char *)scratch.arena->mem + scratch.offset;
-    u64 scratched_count = scratch.arena->offset - scratch.offset;
-    if (BUILD_DEBUG && !BUILD_ASAN) memset(scratched_pointer, POISON_BYTE, scratched_count);
-    asan_poison_memory_region(scratched_pointer, scratched_count);
-    scratch.arena->offset = scratch.offset;
-    scratch.arena->last_offset = scratch.last_offset;
 }
 
 static u64 hash_djb2(const void *bytes, u64 byte_count) {
@@ -2626,8 +2613,7 @@ static void log_internal_with_location_v(const char *file, u64 line, const char 
     #endif
 }
 
-static u32 os_process_run(Arena arena, const char **arguments, const char *directory, Os_Process_Flags flags) {
-    Scratch scratch = scratch_begin(&arena);
+static u32 os_process_run(Arena scratch, const char **arguments, const char *directory, Os_Process_Flags flags) {
     u32 exit_code = 1;
 
     if (flags & Os_Process_Flag_PRINT_COMMAND_BEFORE_RUNNING) {
@@ -2651,7 +2637,7 @@ static u32 os_process_run(Arena arena, const char **arguments, const char *direc
         chars += spaces;
         chars += 1; // null terminator
 
-        char *command_line = arena_make(scratch.arena, chars, char);
+        char *command_line = arena_make(&scratch, chars, char);
         u64 command_length = 0;
 
         for (const char **a = arguments; *a != 0; a += 1) {
@@ -2743,7 +2729,6 @@ static u32 os_process_run(Arena arena, const char **arguments, const char *direc
         print("\n");
     }
 
-    scratch_end(scratch);
     return exit_code;
 }
 
@@ -2805,19 +2790,17 @@ static void print(const char *format, ...) {
 static void print_(const char *format, va_list arguments) {
     static u8 buffer[4096];
     Arena arena = arena_from_memory(buffer, sizeof buffer);
-    Scratch temp = scratch_begin(&arena);
 
     String_Builder output = {0};
-    reserve(temp.arena, &output, cstring_length(format));
-    string_builder_print_(temp.arena, &output, format, arguments);
-    string_builder_null_terminate(temp.arena, &output);
+    reserve(&arena, &output, cstring_length(format));
+    string_builder_print_(&arena, &output, format, arguments);
+    string_builder_null_terminate(&arena, &output);
 
     #if (BASE_OS == BASE_OS_WINDOWS) && BUILD_DEBUG
         OutputDebugStringA(output.data);
     #endif
 
     os_write_console(output.data, output.count);
-    scratch_end(temp);
 }
 
 #define CLEX_IMPLEMENTATION
@@ -3158,18 +3141,17 @@ static const char build_wasm_html_file[] = STRINGIFY(
     </script>
 );
 
-static u32 build_default_everything(Arena arena, const char *program_name, u8 target_os) {
+static u32 build_default_everything(Arena scratch, const char *program_name, u8 target_os) {
     u32 exit_code = 1;
-    Scratch scratch = scratch_begin(&arena);
 
     u64 argument_count = 0;
-    const char **arguments = os_get_arguments(&arena, &argument_count);
+    const char **arguments = os_get_arguments(&scratch, &argument_count);
 
     char path_separator = (BASE_OS & BASE_OS_ANY_POSIX) ? '/' : '\\';
 
-    const char *source_folder = cstring_print(scratch.arena, "..%csrc%c", path_separator, path_separator);
-    const char *dependency_folder = cstring_print(&arena, "..%cdeps%c", path_separator, path_separator);
-    const char *c_file_path = cstring_print(scratch.arena, "%smain.c", source_folder);
+    const char *source_folder = cstring_print(&scratch, "..%csrc%c", path_separator, path_separator);
+    const char *dependency_folder = cstring_print(&scratch, "..%cdeps%c", path_separator, path_separator);
+    const char *c_file_path = cstring_print(&scratch, "%smain.c", source_folder);
 
     static const Build_Compiler build_default_compiler[BASE_OS_COUNT] = {
         [BASE_OS_WINDOWS] = Build_Compiler_MSVC,
@@ -3198,7 +3180,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     String platform = {0};
-    String code = os_read_entire_file(scratch.arena, &c_file_path[3]);
+    String code = os_read_entire_file(&scratch, &c_file_path[3]);
 
     String_Builder metaprogram_code = {0};
     String metaprogram_output_file = {0};
@@ -3359,7 +3341,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
             String array_length_name = names[1];
 
             String input = {0};
-            const char *input_path = cstring_from_string(&arena, input_file);
+            const char *input_path = cstring_from_string(&scratch, input_file);
 
             bool embed_via_object = target_os == BASE_OS_WINDOWS || target_os == BASE_OS_MACOS;
             if (embed_via_object) {
@@ -3391,7 +3373,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 u8 *to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, 0, &byte_count, flags);
                 assert(to_write == 0 && byte_count > 0);
 
-                u8 *bytes = arena_make(&arena, byte_count, u8);
+                u8 *bytes = arena_make(&scratch, byte_count, u8);
                 to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, bytes, &byte_count, flags);
                 if (to_write == 0) {
                     log_error("failure generating object file to embed '%S'", input_file);
@@ -3402,15 +3384,15 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 assert(read_count == input.count);
                 fs_close(input_file_handle);
 
-                const char *output_name = cstring_print(&arena, "meta.generated.%s", object_extension);
-                const char *output_in_build_folder = cstring_print(&arena, "%s/%s", build_folder, output_name);
+                const char *output_name = cstring_print(&scratch, "meta.generated.%s", object_extension);
+                const char *output_in_build_folder = cstring_print(&scratch, "%s/%s", build_folder, output_name);
                 bool ok = os_write_entire_file(output_in_build_folder, bytes, byte_count);
                 if (!ok) return 1;
 
                 Build_Object object = { .object_path = output_name };
-                push(scratch.arena, &objects, object);
+                push(&scratch, &objects, object);
             } else {
-                input = os_read_entire_file(&arena, input_path);
+                input = os_read_entire_file(&scratch, input_path);
                 if (input.count == 0) return 1;
 
                 String qualifiers = S("static const char ");
@@ -3432,7 +3414,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 u64 max_digits = sizeof(u64) * 8;
                 bytes_total += length_qualifiers.count + array_length_name.count + length_assignment.count + max_digits + length_closing.count;
 
-                reserve_unused(scratch.arena, &metaprogram_code, bytes_total);
+                reserve_unused(&scratch, &metaprogram_code, bytes_total);
                 push_slice_assume_capacity(&metaprogram_code, qualifiers);
                 push_slice_assume_capacity(&metaprogram_code, variable_name);
                 push_slice_assume_capacity(&metaprogram_code, assignment);
@@ -3457,7 +3439,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 push_slice_assume_capacity(&metaprogram_code, length_qualifiers);
                 push_slice_assume_capacity(&metaprogram_code, array_length_name);
                 push_slice_assume_capacity(&metaprogram_code, length_assignment);
-                string_builder_print(scratch.arena, &metaprogram_code, "%llu", input.count);
+                string_builder_print(&scratch, &metaprogram_code, "%llu", input.count);
                 push_slice_assume_capacity(&metaprogram_code, length_closing);
             }
         } else if (string_equals(token_data, S("link_libc"))) {
@@ -3497,34 +3479,34 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     {
-        const char *file = cstring_from_string(scratch.arena, metaprogram_output_file);
+        const char *file = cstring_from_string(&scratch, metaprogram_output_file);
         if (!os_write_entire_file(file, metaprogram_code.data, metaprogram_code.count)) return 1;
     }
 
     // TODO(felix): should be handled by metaprogram
     String sokol_platform = S("base_platform_sokol");
-    const char *sokol_code_path = cstring_print(scratch.arena, "%sbase%c%S.c", source_folder, path_separator, platform);
+    const char *sokol_code_path = cstring_print(&scratch, "%sbase%c%S.c", source_folder, path_separator, platform);
     bool using_sokol_platform = string_equals(platform, sokol_platform);
     if (using_sokol_platform) {
         Array_cstring extra_flags = {0};
         if (BASE_OS == BASE_OS_MACOS) {
-            push(scratch.arena, &extra_flags, "-x");
-            push(scratch.arena, &extra_flags, "objective-c");
+            push(&scratch, &extra_flags, "-x");
+            push(&scratch, &extra_flags, "objective-c");
         }
-        push(scratch.arena, &extra_flags, "-DBASE_PLATFORM_IMPLEMENTATION");
-        push(scratch.arena, &extra_flags, 0);
+        push(&scratch, &extra_flags, "-DBASE_PLATFORM_IMPLEMENTATION");
+        push(&scratch, &extra_flags, 0);
 
         Build_Object object = {
             .code_path = sokol_code_path,
-            .object_path = cstring_print(scratch.arena, "%S.%s", platform, object_extension),
+            .object_path = cstring_print(&scratch, "%S.%s", platform, object_extension),
             .extra_flags = extra_flags.data,
             .no_extra_errors = true,
         };
-        push(scratch.arena, &objects, object);
+        push(&scratch, &objects, object);
     }
 
     Build_Object main_object = { .code_path = c_file_path };
-    push(scratch.arena, &objects, main_object);
+    push(&scratch, &objects, main_object);
 
     bool link_crt = false;
     if (meta_link_crt_override) {
@@ -3535,9 +3517,9 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
     // TODO(felix): should be handled by metaprogram
     const char *include_paths[] = {
-        cstring_print(scratch.arena, "-I%s", dependency_folder),
-        cstring_print(scratch.arena, "-I%s", source_folder),
-        cstring_print(scratch.arena, "-I..%c", path_separator),
+        cstring_print(&scratch, "-I%s", dependency_folder),
+        cstring_print(&scratch, "-I%s", source_folder),
+        cstring_print(&scratch, "-I..%c", path_separator),
         0,
     };
 
@@ -3564,15 +3546,13 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
 
     // TODO(felix): should be handled by metaprogram
     if (using_sokol_platform) {
-        Scratch shdc_scratch = scratch_begin(scratch.arena);
-
-        const char *shader_file = cstring_print(scratch.arena, "%sshader.c", source_folder);
+        const char *shader_file = cstring_print(&scratch, "%sshader.c", source_folder);
         fs_remove_file(shader_file);
 
         Array_cstring command = {0};
         if (BASE_OS == BASE_OS_WINDOWS) {
-            push(scratch.arena, &command, "cmd.exe");
-            push(scratch.arena, &command, "/c");
+            push(&scratch, &command, "cmd.exe");
+            push(&scratch, &command, "/c");
         }
 
         const char *target_shader_language[BASE_OS_COUNT] = {
@@ -3585,8 +3565,8 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         };
 
         const char *shdc_per_os[BASE_OS_COUNT] = {
-            [BASE_OS_WINDOWS] = cstring_print(&arena, "%sshdc%csokol-shdc.exe", dependency_folder, path_separator),
-            [BASE_OS_MACOS] = cstring_print(&arena, "%sshdc%csokol-shdc-macos.bin", dependency_folder, path_separator),
+            [BASE_OS_WINDOWS] = cstring_print(&scratch, "%sshdc%csokol-shdc.exe", dependency_folder, path_separator),
+            [BASE_OS_MACOS] = cstring_print(&scratch, "%sshdc%csokol-shdc-macos.bin", dependency_folder, path_separator),
         };
 
         const char *shdc = shdc_per_os[BASE_OS];
@@ -3599,16 +3579,15 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         const char *args[] = {
             shdc,
             "-l", target_shader_language[target_os],
-            "-i", cstring_print(scratch.arena, "%sshader.glsl", source_folder),
-            "-o", cstring_print(scratch.arena, "%sshader.c", source_folder),
+            "-i", cstring_print(&scratch, "%sshader.glsl", source_folder),
+            "-o", cstring_print(&scratch, "%sshader.c", source_folder),
             "-e", shdc_error_format[BASE_OS],
             0,
         };
-        build_push_arguments(scratch.arena, &command, args);
+        build_push_arguments(&scratch, &command, args);
 
-        push(scratch.arena, &command, 0);
-        exit_code = os_process_run(arena, command.data, build_folder, process_flags);
-        scratch_end(shdc_scratch);
+        push(&scratch, &command, 0);
+        exit_code = os_process_run(scratch, command.data, build_folder, process_flags);
         if (exit_code != 0) goto end;
     }
 
@@ -3621,7 +3600,7 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
         if (should_compile) {
             bool is_sokol = cstring_equals(object->code_path, sokol_code_path);
             if (is_sokol) {
-                const char *path = cstring_print(scratch.arena, "%s%c%s", build_folder, path_separator, object->object_path);
+                const char *path = cstring_print(&scratch, "%s%c%s", build_folder, path_separator, object->object_path);
                 should_compile = !fs_exists(path);
                 if (!should_compile) print("info: reusing %s; delete it to force recompilation\n", object->object_path);
             }
@@ -3634,14 +3613,12 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 String basename_with_path = string_cut_last(code_path, '.').head;
                 String basename_no_path = string_cut_last(basename_with_path, path_separator).tail;
 
-                object->object_path = cstring_print(scratch.arena, "%S.%s", basename_no_path, object_extension);
+                object->object_path = cstring_print(&scratch, "%S.%s", basename_no_path, object_extension);
             }
-
-            Scratch compile_scratch = scratch_begin(scratch.arena);
 
             Array_cstring compile = {0};
 
-            build_push_arguments(scratch.arena, &compile, build_compiler_initial_command[compiler]);
+            build_push_arguments(&scratch, &compile, build_compiler_initial_command[compiler]);
 
             // TODO(felix): should be handled by reading meta() annotations
             if (target_os == BASE_OS_WASM) {
@@ -3652,20 +3629,20 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                     0,
                 };
 
-                build_push_arguments(scratch.arena, &compile, clang_wasm_flags);
+                build_push_arguments(&scratch, &compile, clang_wasm_flags);
             }
 
-            build_push_arguments(scratch.arena, &compile, include_paths);
-            if (link_crt) push(scratch.arena, &compile, "-DLINK_CRT=1");
+            build_push_arguments(&scratch, &compile, include_paths);
+            if (link_crt) push(&scratch, &compile, "-DLINK_CRT=1");
 
-            if (!object->no_extra_errors) build_push_arguments(scratch.arena, &compile, build_compiler_extra_errors[compiler]);
-            build_push_arguments(scratch.arena, &compile, build_compiler_disabled_errors[compiler]);
+            if (!object->no_extra_errors) build_push_arguments(&scratch, &compile, build_compiler_extra_errors[compiler]);
+            build_push_arguments(&scratch, &compile, build_compiler_disabled_errors[compiler]);
 
-            build_push_arguments(scratch.arena, &compile, build_compiler_mode_flags[build_mode][compiler][target_os]);
-            if (build_mode == Build_Mode_DEBUG) push(scratch.arena, &compile, "-DBUILD_DEBUG=1");
-            if (use_asan) push(scratch.arena, &compile, "-fsanitize=address");
+            build_push_arguments(&scratch, &compile, build_compiler_mode_flags[build_mode][compiler][target_os]);
+            if (build_mode == Build_Mode_DEBUG) push(&scratch, &compile, "-DBUILD_DEBUG=1");
+            if (use_asan) push(&scratch, &compile, "-fsanitize=address");
 
-            build_push_arguments(scratch.arena, &compile, object->extra_flags);
+            build_push_arguments(&scratch, &compile, object->extra_flags);
 
             bool delete_pdb_first_because_msvc_incremental_is_broken = (target_os == BASE_OS_WINDOWS && compiler == Build_Compiler_MSVC);
             if (delete_pdb_first_because_msvc_incremental_is_broken) {
@@ -3673,22 +3650,21 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
                 String object_basename = string_cut_last(object_path, '.').head;
                 object_basename = string_cut_last(object_basename, path_separator).tail;
 
-                const char *pdb_file = cstring_print(compile_scratch.arena, "%S.pdb", object_basename);
+                const char *pdb_file = cstring_print(&scratch, "%S.pdb", object_basename);
                 if (fs_exists(pdb_file)) {
                     bool ok = fs_remove_file(pdb_file);
                     if (!ok) log_internal("warning: failure removing old PDB '%s'", pdb_file);
                 }
             }
 
-            push(scratch.arena, &compile, object->code_path);
+            push(&scratch, &compile, object->code_path);
 
-            const char *output = cstring_print(compile_scratch.arena, "%s%s", build_compiler_out[compiler], object->object_path);
-            push(scratch.arena, &compile, output);
+            const char *output = cstring_print(&scratch, "%s%s", build_compiler_out[compiler], object->object_path);
+            push(&scratch, &compile, output);
 
-            push(scratch.arena, &compile, 0);
-            exit_code = os_process_run(*compile_scratch.arena, compile.data, build_folder, process_flags);
+            push(&scratch, &compile, 0);
+            exit_code = os_process_run(scratch, compile.data, build_folder, process_flags);
 
-            scratch_end(compile_scratch);
             if (exit_code != 0) return exit_code;
         }
     }
@@ -3696,56 +3672,56 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     {
         Array_cstring link = {0};
 
-        build_push_arguments(scratch.arena, &link, build_linker_initial_command[linker][target_os]);
+        build_push_arguments(&scratch, &link, build_linker_initial_command[linker][target_os]);
 
         if (target_os == BASE_OS_WINDOWS) {
             if (build_mode == Build_Mode_DEBUG) {
                 if (linker == Build_Linker_MSVC) {
-                    push(scratch.arena, &link, "-debug");
-                    push(scratch.arena, &link, "-subsystem:console");
-                    if (link_crt) push(scratch.arena, &link, "libucrtd.lib");
+                    push(&scratch, &link, "-debug");
+                    push(&scratch, &link, "-subsystem:console");
+                    if (link_crt) push(&scratch, &link, "libucrtd.lib");
                 } else {
-                    push(scratch.arena, &link, "-g");
+                    push(&scratch, &link, "-g");
                 }
             } else {
                 if (linker == Build_Linker_MSVC) {
-                    push(scratch.arena, &link, "-subsystem:console");
+                    push(&scratch, &link, "-subsystem:console");
                     // TODO(felix): subsystem:windows and entry:main don't work currently (silent crash). I'm pretty sure this has to do with the entrypoint being set incorrectly. I'm also not sure about the WINDOWS_SUBSYSTEM_[...] #defines in base_context.h
                     // push(&link, "-subsystem:windows");
                     if (link_crt) {
                         // push(&link, "-entry:main");
-                        push(scratch.arena, &link, "libucrt.lib");
+                        push(&scratch, &link, "libucrt.lib");
                     }
                 }
             }
 
             // TODO(felix): handle in metaprogram
             if (!link_crt) switch (compiler) {
-                case Build_Compiler_MSVC: push(scratch.arena, &link, "-entry:entrypoint"); break;
+                case Build_Compiler_MSVC: push(&scratch, &link, "-entry:entrypoint"); break;
                 case Build_Compiler_CLANG: {
-                    push(scratch.arena, &link, "-Wl,-entry:entrypoint");
-                    push(scratch.arena, &link, "-Wl,-subsystem:windows");
+                    push(&scratch, &link, "-Wl,-entry:entrypoint");
+                    push(&scratch, &link, "-Wl,-subsystem:windows");
                 } break;
                 default: unreachable;
             }
         }
 
-        if (linker == Build_Linker_CLANG && use_asan) push(scratch.arena, &link, "-fsanitize=address");
+        if (linker == Build_Linker_CLANG && use_asan) push(&scratch, &link, "-fsanitize=address");
 
-        for (u64 i = 0; i < objects.count; i += 1) push(scratch.arena, &link, objects.data[i].object_path);
+        for (u64 i = 0; i < objects.count; i += 1) push(&scratch, &link, objects.data[i].object_path);
 
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];
 
         const char *output_name = target_os == BASE_OS_WASM ? "module" : program_name;
-        const char *output = cstring_print(scratch.arena, "%s%s.%s", syntax, output_name, extension);
-        push(scratch.arena, &link, output);
+        const char *output = cstring_print(&scratch, "%s%s.%s", syntax, output_name, extension);
+        push(&scratch, &link, output);
 
-        push(scratch.arena, &link, 0);
-        exit_code = os_process_run(*scratch.arena, link.data, build_folder, process_flags);
+        push(&scratch, &link, 0);
+        exit_code = os_process_run(scratch, link.data, build_folder, process_flags);
 
         if (target_os == BASE_OS_WASM && exit_code == 0) {
-            const char *html_output_path = cstring_print(scratch.arena, "%s%c%s.html", build_folder, path_separator, program_name);
+            const char *html_output_path = cstring_print(&scratch, "%s%c%s.html", build_folder, path_separator, program_name);
 
             fs_remove_file(html_output_path);
             exit_code = !os_write_entire_file(html_output_path, build_wasm_html_file, sizeof build_wasm_html_file - 1);
@@ -3756,7 +3732,6 @@ static u32 build_default_everything(Arena arena, const char *program_name, u8 ta
     }
 
     end:
-    scratch_end(scratch);
     return exit_code;
 }
 
@@ -3784,6 +3759,7 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
 
 #define UI_ASSERT assert
 #define UI_VSNPRINTF small_vsnprintf
+#define ui_size_t size_t
 
 #if !defined(UI_MAX_STRING_LENGTH)
     #define UI_MAX_STRING_LENGTH 256
@@ -3799,18 +3775,40 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
     #define UI_VSNPRINTF vsnprintf
 #endif
 
+#if !defined(ui_size_t)
+    #include <stddef.h>
+    #define ui_size_t size_t
+#endif
+
 static void ui_begin(ui_State *ui) {
+    ui->per_frame_unkeyed_boxes_index = UI_MAX_BOX_SLOTS;
+    for (int i = 0; i < UI_MAX_KEYED_BOXES; i += 1) {
+        ui_Box *box = &ui->boxes[i];
+        _Bool stale = box->hash_string[0] != 0 && box->frame_id != ui->frame_id;
+        if (stale) {
+            *box = (ui_Box){0};
+            ui->keyed_box_count -= 1;
+        }
+    }
+    ui->frame_id += 1;
+
     ui->root = 0;
     ui->interacted_this_frame = 0;
     ui->display_string_used = 0;
 }
 
-static ui_State ui_create(Platform *platform, ui_text_measure_function *text_measure_function) {
-    ui_State ui = {
-        .platform = platform,
-        .measure_text = text_measure_function,
-    };
-    return ui;
+static inline void *ui__memset(void *destination_, int byte_, ui_size_t count) {
+    UI_ASSERT(byte_ < 256);
+    char byte = (char)byte_;
+    char *destination = destination_;
+    for (ui_size_t i = 0; i < count; i += 1) destination[i] = byte;
+    return destination;
+}
+
+static void ui_create(ui_State *ui, App_Frame_Info *frame, ui_text_measure_function *text_measure_function) {
+    ui__memset(ui, 0, sizeof *ui);
+    ui->frame = frame;
+    ui->measure_text = text_measure_function;
 }
 
 static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
@@ -4008,7 +4006,7 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
     if (keyed) {
         const char *format = 0;
         {
-            // NOTE(felix): not thread-safe, consider moving to ui_State
+            // TODO(felix): not thread-safe, move to ui_State
             static char format_buffer[UI_MAX_STRING_LENGTH];
 
             int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format_c, arguments);
@@ -4048,7 +4046,7 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
 
         int hash_string_length = 0;
         {
-            // NOTE(felix): not thread-safe, consider moving to ui_State
+            // TODO(felix): not thread-safe, move to ui_State
             static char hash_buffer[UI_MAX_STRING_LENGTH];
 
             int hash_cursor = hash_left_start;
@@ -4089,21 +4087,21 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
                 hash += (hash << 5) + (unsigned)(hash_string[i]);
             }
 
-            unsigned exponent = UI_MAX_BOX_COUNT_EXPONENT + 1;
+            unsigned exponent = UI_MAX_KEYED_BOXES_EXPONENT;
             unsigned mask = ((unsigned)1 << exponent) - 1;
+            unsigned step = (hash >> (32 - exponent)) | 1;
             for (unsigned index = hash;;) {
-                { // mask-step-index
-                    unsigned step = (hash >> (32 - exponent)) | 1;
-                    index = (index + step) & mask;
-                }
+                index = (index + step) & mask;
                 index += !index; // never 0
 
                 ui_Box *this_box = &ui->boxes[index];
 
-                if (this_box->hash_string == 0) {
-                    ui->used_box_count += 1;
+                _Bool this_box_is_unused = this_box->hash_string[0] == 0;
+                if (this_box_is_unused) {
+                    ui->keyed_box_count += 1;
                     int hashmap_max_load = 70;
-                    _Bool hashmap_saturated = ui->used_box_count * hashmap_max_load / 100 > UI_MAX_BOX_COUNT * 2;
+                    int max_used_boxes = UI_MAX_KEYED_BOXES * hashmap_max_load / 100;
+                    _Bool hashmap_saturated = ui->keyed_box_count > max_used_boxes;
                     UI_ASSERT(!hashmap_saturated);
 
                     box_is_new = 1;
@@ -4112,24 +4110,33 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
                 }
 
                 if (cstring_equals(this_box->hash_string, hash_string)) {
+                    _Bool already_used_this_frame = this_box->frame_id == ui->frame_id;
+                    UI_ASSERT(!already_used_this_frame);
                     box = this_box;
-                    // TODO(felix): debug check for same hash for different boxes in same frame can go here
                     break;
                 }
             }
 
             if (box_is_new) {
-                box->hash_string = arena_push(ui->platform->persistent_arena, hash_string, cstring_length(hash_string) + 1);
+                int i = 0;
+                while (i < (int)(sizeof box->hash_string - 1) && hash_string[i] != 0) {
+                    box->hash_string[i] = hash_string[i];
+                    i += 1;
+                }
+                UI_ASSERT(i < (int)(sizeof box->hash_string));
+                box->hash_string[i] = 0;
             }
         }
     }
 
     if (!keyed) {
-        box = arena_make(ui->platform->frame_arena, 1, ui_Box);
+        _Bool have_free_unkeyed_slot = ui->per_frame_unkeyed_boxes_index > UI_MAX_KEYED_BOXES;
+        UI_ASSERT(have_free_unkeyed_slot);
+        box = &ui->boxes[--ui->per_frame_unkeyed_boxes_index];
         box_is_new = 1;
     }
 
-    _Bool was_dragging = !!(box->flags & ui_Flag_DRAGGING);
+    _Bool was_dragging = !box_is_new && !!(box->flags & ui_Flag_DRAGGING);
 
     box->flags = flags;
     box->flags |= was_dragging * ui_Flag_DRAGGING;
@@ -4154,7 +4161,7 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
 
         for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
             box->size[axis].kind = ui_Size_PIXELS;
-            box->size[axis].value = v(ui->platform->frame.window_size)[axis];
+            box->size[axis].value = v(ui->frame->window_size)[axis];
         }
 
         ui->root = box;
@@ -4189,20 +4196,23 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
     v4_bottom(rectangle) = bottom_right.y;
     v4_right(rectangle) = bottom_right.x;
 
+    _Bool if_interactable_has_hash_string = !(box->flags & UI_FLAG_ANY_INTERACTABLE) || box->hash_string[0] != 0;
+    UI_ASSERT(if_interactable_has_hash_string);
+
     if (!ui->input_blocked && (box->flags & UI_FLAG_ANY_INTERACTABLE)) {
-        _Bool mouse_over = intersect_point_in_rectangle(ui->platform->frame.mouse_position, rectangle);
+        _Bool mouse_over = intersect_point_in_rectangle(ui->frame->mouse_position, rectangle);
         box->flags |= ui_Flag_HOVERED * (mouse_over && (box->flags & ui_Flag_HOVERABLE));
-        box->flags |= ui_Flag_CLICKED * (mouse_over && (box->flags & ui_Flag_CLICKABLE) && ui->platform->frame.mouse_clicked[App_Mouse_LEFT]);
+        box->flags |= ui_Flag_CLICKED * (mouse_over && (box->flags & ui_Flag_CLICKABLE) && ui->frame->mouse_clicked[App_Mouse_LEFT]);
 
         if (box->flags & ui_Flag_DRAGGABLE) {
-            _Bool start_drag = !was_dragging && mouse_over && ui->platform->frame.mouse_down[App_Mouse_LEFT] && !ui->platform->frame.mouse_clicked[App_Mouse_LEFT];
+            _Bool start_drag = !was_dragging && mouse_over && ui->frame->mouse_down[App_Mouse_LEFT] && !ui->frame->mouse_clicked[App_Mouse_LEFT];
             if (start_drag) {
                 box->flags |= ui_Flag_DRAGGING;
-                box->drag_start_mouse[ui_X] = ui->platform->frame.mouse_position.x;
-                box->drag_start_mouse[ui_Y] = ui->platform->frame.mouse_position.y;
+                box->drag_start_mouse[ui_X] = ui->frame->mouse_position.x;
+                box->drag_start_mouse[ui_Y] = ui->frame->mouse_position.y;
             }
 
-            _Bool end_drag = was_dragging && !ui->platform->frame.mouse_down[App_Mouse_LEFT];
+            _Bool end_drag = was_dragging && !ui->frame->mouse_down[App_Mouse_LEFT];
             if (end_drag) {
                 box->flags &= ~ui_Flag_DRAGGING;
                 box->drag_start_mouse[ui_X] = 0;
@@ -4213,6 +4223,7 @@ static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_S
         ui->interacted_this_frame |= !!(box->flags & UI_FLAG_ANY_INTERACTION);
     }
 
+    box->frame_id = ui->frame_id;
     return box;
 }
 
@@ -4234,9 +4245,21 @@ static ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, flo
     slider_style.child_gap = 0;
     slider_style.border_radius = style.radius;
 
+    // TODO(felix): remove usage of String type
+    String formatted = {0};
+
     va_list arguments;
     va_start(arguments, format);
-    String formatted = string_print_(ui->platform->frame_arena, format, arguments);
+    {
+        // TODO(felix): not thread-safe, move to ui_State
+        static char format_buffer[UI_MAX_STRING_LENGTH];
+
+        int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format, arguments);
+        UI_ASSERT(written < (int)(sizeof format_buffer));
+
+        formatted.data = format_buffer;
+        formatted.count = (u64)written;
+    }
     va_end(arguments);
 
     slider_box = ui_push(ui, parent, slider_axis | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE, &slider_style, "%S##slider box", formatted);
@@ -4244,8 +4267,8 @@ static ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, flo
         if (slider_box->flags & ui_Flag_CLICKED) slider_box->drag_start_value = *value;
 
         if (slider_box->flags & ui_Flag_DRAGGING) {
-            if (ui->platform->frame.key_pressed['B']) breakpoint;
-            float mouse = v(ui->platform->frame.mouse_position)[slider_axis];
+            if (ui->frame->key_pressed['B']) breakpoint;
+            float mouse = v(ui->frame->mouse_position)[slider_axis];
 
             float delta = mouse - slider_box->drag_start_mouse[slider_axis];
             float difference = delta * range / style.length;
@@ -4314,13 +4337,13 @@ static ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, flo
     return slider_box;
 }
 
-static ui_Box *base_ui_draw_command(ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
+static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
     ui_Box *box = ui_pushv(ui, parent, ui_Flag_DRAW_COMMAND | flags, style, format, arguments);
     va_end(arguments);
 
-    Draw_Command *copy = arena_make(ui->platform->frame_arena, 1, Draw_Command);
+    Draw_Command *copy = arena_make(frame_arena, 1, Draw_Command);
     *copy = command;
     box->user_data = copy;
 
@@ -4333,6 +4356,8 @@ static ui_Box *base_ui_draw_command(ui_State *ui, ui_Box *parent, Draw_Command c
 }
 
 static void base_ui_renderer(ui_State *ui, ui_Box *box) {
+    Platform *platform = ui->user_data;
+
     if (box->flags & UI_FLAG_ANY_VISIBLE) {
         V4 clip = {0};
         if (box->flags & ui_Flag_CLIP_TO_PARENT) {
@@ -4367,7 +4392,7 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
             command.color[Draw_Color_SOLID] = shadow_color;
 
             command.clip = clip;
-            draw(ui->platform, command);
+            draw(platform, command);
         }
 
         bool draw_rectangle = !!(box->flags & (ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND));
@@ -4385,7 +4410,7 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
             command.rectangle.border_color = border_color;
 
             command.clip = clip;
-            draw(ui->platform, command);
+            draw(platform, command);
         }
 
         bool draw_text = !!(box->flags & ui_Flag_DRAW_TEXT);
@@ -4409,7 +4434,7 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
             command.color[Draw_Color_SOLID] = foreground_color;
 
             command.clip = clip;
-            draw(ui->platform, command);
+            draw(platform, command);
         }
 
         bool draw_command = !!(box->flags & ui_Flag_DRAW_COMMAND);
@@ -4424,7 +4449,7 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
 
             command->color[Draw_Color_SOLID] = foreground_color;
 
-            draw(ui->platform, *command);
+            draw(platform, *command);
         }
     }
 
