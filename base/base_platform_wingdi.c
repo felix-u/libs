@@ -357,8 +357,6 @@ static void program(void) {
         ReleaseDC(platform.window, window_dc);
     }
 
-    platform.font = cpu_draw_font_from_bdf(platform__font_bytes, platform__font_size);
-
     for (Arena frame_scratch = *platform.base.frame_arena; !platform.base.should_quit; *platform.base.frame_arena = frame_scratch) {
         platform.base.draw_commands = (Array_Draw_Command){0};
 
@@ -432,10 +430,7 @@ static void program(void) {
         }
         ReleaseDC(platform.window, window_dc);
 
-        frame->scroll = 0;
-        memset(frame->mouse_clicked, 0, sizeof frame->mouse_clicked);
-        memset(frame->key_pressed, 0, sizeof frame->key_pressed);
-
+        app_frame_info_reset_end_of_frame(frame);
         if (platform.base.should_quit) break;
     }
 

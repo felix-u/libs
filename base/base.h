@@ -2,7 +2,7 @@
 #define BASE_H
 
 
-#include "base_context.h"
+#include "base/base_context.h"
 
 #define meta(...)
 
@@ -329,34 +329,30 @@ _Static_assert(sizeof(f64) == 8, "");
 #endif // BUILD_DEBUG
 
 #define STR_FUNCTION static
-#include "str.h"
+#include "base/str.h"
 #define S STRING_LITERAL
 #define Sc STRING_LITERAL_CONSTANT
 
 #define SMALL_SNPRINTF_FUNCTION static
 #define SMALL_SNPRINTF_NO_STD_INCLUDE
-#include "small_snprintf.h"
+#include "base/small_snprintf.h"
 
 #define TIME_FUNCTION static
 #define TIME_NO_SYSTEM_INCLUDE
-#include "time.h"
+#include "base/time.h"
 
 #define PRNG_FUNCTION static
-#include "prng.h"
+#include "base/prng.h"
 
 typedef struct Arena Arena;
 #define Array(T) struct { T *data; u64 count, capacity; }
-
 typedef Array(void) Array_void;
 
-#define MapU64(type) struct { \
-    Arena *arena; \
-    Array(type) values; \
-    u64 *keys; \
-    u64 *value_index_from_key_hash; \
-}
-
-typedef MapU64(void) Map_void;
+#define DS_FUNCTION static
+#define ds_u32 u32
+#define ds_u64 u64
+#define ds_size_t size_t
+#include "base/data_structures.h"
 
 #define log_error(...) log_internal("error: " __VA_ARGS__)
 #define log_info(...) log_internal("info: " __VA_ARGS__)
@@ -541,11 +537,6 @@ static void *arena_push(Arena *arena, const void *data, u64 count);
 #endif // BUILD_ASAN
 
 static const char **os_get_arguments(Arena *, u64 *out_count);
-
-typedef struct { u64 index; void *pointer; bool is_new; } Map_Result;
-
-#define map_get(map, key, put) map_get_((Map_void *)(map), (key), (put), sizeof *(map)->values.data)
-static Map_Result map_get_(Map_void *map, u64 key, void *put, u64 item_size);
 
 static u64 hash_djb2(const void *bytes, u64 byte_count);
 static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index);
@@ -872,24 +863,25 @@ static       inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 w
 static force_inline M4 m4_transpose(M4 m);
 
 #define CPU_DRAW_FUNCTION static
-#include "cpu_draw.h"
+#include "base/cpu_draw.h"
 static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size);
 static V2 cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size);
 
+// TODO(felix): Move to cpu-rendered platform (or maybe it should always be manually included, and removed from base).
 #define BDF_FUNCTION static
 #define BDF_GLYPH_MAX_HEIGHT CPU_DRAW_GLYPH_MAX_HEIGHT
 #define BDF_GLYPH_MAX_WIDTH_OVER_8 CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8
-#include "bdf.h"
+#include "base/bdf.h"
 
 static f64 f64_from_string(String s);
-static u64 int_from_string_base(String s, u64 base);
+static i64 int_from_string_base(String s, u64 base);
 
 static u64         cstring_copy(char *buffer, const char *cstring);
 static const char *cstring_from_string(Arena *arena, String string);
 static u64         cstring_length(const char *cstring);
 static const char *cstring_print(Arena *arena, const char *format, ...);
 
-static String string_from_int_base(Arena *arena, u64 _num, u8 base);
+static String string_from_int_base(Arena *arena, i64 _num, u8 base);
 static String string_print_(Arena *arena, const char *fmt, va_list arguments);
 static String string_print(Arena *arena, const char *fmt, ...);
 
@@ -901,7 +893,7 @@ static String string_builder_string(String_Builder builder);
 
 #define FS_FUNCTION static
 #define FS_NO_SYSTEM_INCLUDE
-#include "filesystem.h"
+#include "base/filesystem.h"
 static String os_read_entire_file(Arena *arena, const char *path);
 static   bool os_write_entire_file(const char *path, const void *data, u64 count);
 
@@ -921,6 +913,16 @@ static void print_(const char *format, va_list arguments);
 
 #define CLEX_FUNCTION static
 #include "base/clex.h"
+#define BASE_CLEX_DEFINE_EXPONENT 10
+#define BASE_CLEX_DEFINE_CAPACITY (1 << BASE_CLEX_DEFINE_EXPONENT)
+typedef struct {
+    const char *names[BASE_CLEX_DEFINE_CAPACITY];
+    const char *definitions[BASE_CLEX_DEFINE_CAPACITY];
+    u32 used;
+} Base_Clex_Define;
+static const char *base_clex_define(void *user_data, const char *symbol, const char *definition);
+static bool base_clex_symbols_match(const char *a, const char *b);
+static String base_string_from_clex_data(clex_Data data);
 
 #define OBJECT_FUNCTION static
 #include "base/object_files.h"
@@ -948,6 +950,7 @@ typedef enum {
 
 static u32 build_default_everything(Arena scratch, const char *program_name, u8 target_os);
 
+// NOTE(felix): synced with ui_Key
 typedef enum {
     App_Key_NIL = 0,
 
@@ -970,8 +973,8 @@ typedef enum {
     App_Key_MAX_VALUE,
 } App_Key;
 
+// NOTE(felix): synced with ui_Mouse_Button
 typedef enum {
-    App_Mouse_NIL = 0,
     App_Mouse_LEFT,
     App_Mouse_MIDDLE,
     App_Mouse_RIGHT,
@@ -989,6 +992,8 @@ typedef struct {
     bool key_down[App_Key_MAX_VALUE];
     bool key_pressed[App_Key_MAX_VALUE];
 } App_Frame_Info;
+
+static void app_frame_info_reset_end_of_frame(App_Frame_Info *);
 
 typedef enum {
     Draw_Kind_NIL = 0,
@@ -1095,160 +1100,13 @@ static void draw(Platform *platform, Draw_Command command);
 static V2   draw_command_bounds(Draw_Command command);
 static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
 
-#if !defined(UI_MAX_BOX_SLOTS_EXPONENT)
-    #define UI_MAX_BOX_SLOTS_EXPONENT 10
-#endif
+#define UI_FUNCTION static
+#include "base/ui.h"
 
-// includes null terminator
-#if !defined(UI_MAX_HASH_STRING_SIZE)
-    #define UI_MAX_HASH_STRING_SIZE 32
-#endif
-
-#if !defined(UI_DISPLAY_STRING_BUFFER_SIZE)
-    #define UI_DISPLAY_STRING_BUFFER_SIZE 4096
-#endif
-
-#if !defined(UI_HASH_STRING_BUFFER_SIZE)
-    #define UI_HASH_STRING_BUFFER_SIZE 2048
-#endif
-
-typedef unsigned short ui_Flags;
-enum {
-    ui_X = 0,
-    ui_Y = 1,
-    ui_Axis_COUNT = 2,
-
-    ui_Flag_CHILD_AXIS      = 1 <<  0,
-    ui_Flag_DRAW_BACKGROUND = 1 <<  1,
-    ui_Flag_DRAW_BORDER     = 1 <<  2,
-    ui_Flag_DRAW_TEXT       = 1 <<  3,
-    ui_Flag_DRAW_COMMAND    = 1 <<  4,
-    ui_Flag_DRAW_SHADOW     = 1 <<  5,
-    ui_Flag_HOVERABLE       = 1 <<  7,
-    ui_Flag_CLICKABLE       = 1 <<  8,
-    ui_Flag_DRAGGABLE       = 1 <<  9,
-    ui_Flag_CLIP_TO_PARENT  = 1 << 10,
-
-    // computed by builder code
-    ui_Flag_HOVERED         = 1 << 11,
-    ui_Flag_CLICKED         = 1 << 12,
-    ui_Flag_DRAGGING        = 1 << 13, // persisted across frames
-};
-#define UI_FLAG_ANY_VISIBLE (ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_COMMAND | ui_Flag_DRAW_SHADOW)
-#define UI_FLAG_ANY_INTERACTABLE (ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE)
-#define UI_FLAG_ANY_INTERACTION (ui_Flag_HOVERED | ui_Flag_CLICKED | ui_Flag_DRAGGING)
-
-typedef struct {
-    float position[ui_Axis_COUNT];
-    float size[ui_Axis_COUNT];
-} ui_Rectangle;
-
-typedef enum {
-    ui_Size_NIL = 0,
-    ui_Size_PIXELS,
-    ui_Size_TEXT,
-    ui_Size_SUM_OF_CHILDREN,
-    ui_Size_LARGEST_CHILD,
-    ui_Size_OF_PARENT,
-
-    ui_Size_Kind_COUNT,
-} ui_Size_Kind;
-
-typedef struct {
-    float font_size;
-    float padding[ui_Axis_COUNT];
-    float child_gap;
-    unsigned bg_color;
-    unsigned fg_color;
-    unsigned border_color;
-    unsigned shadow_color;
-    float border_width;
-    float border_radius;
-    float shadow_offset[ui_Axis_COUNT];
-} ui_Style;
-
-typedef struct {
-    ui_Size_Kind kind;
-    float value;
-} ui_Size;
-
-typedef struct ui_Box ui_Box;
-struct ui_Box {
-    // === frame data ===
-    ui_Flags flags; // some bits persisted across frames
-    const char *display_string;
-    ui_Size size[ui_Axis_COUNT];
-    ui_Style style;
-    // links
-    ui_Box *parent;
-    ui_Box *previous_sibling;
-    ui_Box *next_sibling;
-    ui_Box *first_child;
-    ui_Box *last_child;
-
-    // === cached data ===
-    void *user_data;
-    char hash_string[UI_MAX_HASH_STRING_SIZE];
-    // computed
-    float drag_start_value;
-    float drag_start_mouse[ui_Axis_COUNT];
-    ui_Rectangle rectangle;
-
-    unsigned long long frame_id;
-};
-
-#define UI_MAX_BOX_SLOTS (1 << UI_MAX_BOX_SLOTS_EXPONENT)
-#define UI_MAX_KEYED_BOXES_EXPONENT (UI_MAX_BOX_SLOTS_EXPONENT - 1)
-#define UI_MAX_KEYED_BOXES (1 << UI_MAX_KEYED_BOXES_EXPONENT)
-
-typedef void (ui_text_measure_function)(void *user_data, const char *string, int length, ui_Style style, f32 size[2]);
-
-typedef struct {
-    App_Frame_Info *frame; // TODO(felix): remove
-    void *user_data;
-    ui_text_measure_function *measure_text;
-    _Bool input_blocked;
-
-    _Bool interacted_this_frame;
-
-    int keyed_box_count; // for asserting we don't go over the 70% usage threshold. hashmap uses first half of boxes
-    int per_frame_unkeyed_boxes_index; // grows down from last box to midpoint
-    ui_Box boxes[UI_MAX_BOX_SLOTS];
-
-    ui_Box *root;
-
-    int display_string_used;
-    char display_string_buffer[UI_DISPLAY_STRING_BUFFER_SIZE];
-    int hash_string_used;
-    char hash_string_buffer[UI_HASH_STRING_BUFFER_SIZE];
-
-    unsigned long long frame_id;
-} ui_State;
-
-typedef struct {
-    ui_Style bar;
-    ui_Style dragging;
-
-    float length;
-    float thickness;
-    float radius;
-
-    float handle_length;
-    float handle_thickness;
-    float handle_radius;
-} ui_Slider_Style;
-
-static void     ui_begin(ui_State *ui);
-static void     ui_create(ui_State *ui, App_Frame_Info *frame, ui_text_measure_function *text_measure_function);
-static void     ui_end(ui_State *ui);
-static ui_Box  *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, ...);
-static ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, va_list arguments);
-static ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
-static ui_Box  *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, f32 least, f32 most, f32 *value, ui_Slider_Style style, const char *format, ...);
-
-static void    base_ui_renderer(ui_State *ui, ui_Box *box);
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
-static void    base_ui_measure_text(void *user_data, const char *string, int length, ui_Style style, f32 size[2]);
+static void    base_ui_input(ui_State *ui, App_Frame_Info *frame);
+static void    base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]);
+static void    base_ui_render(ui_State *ui, ui_Box *box);
 
 
 #endif // !defined(BASE_H)
@@ -1366,6 +1224,9 @@ static inline bool ascii_is_hexadecimal(u8 c) { return ('0' <= c && c <= '9') ||
 static inline bool ascii_is_whitespace(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
 
 #define POISON_BYTE 0xcd
+
+#define DS_IMPLEMENTATION
+#include "base/data_structures.h"
 
 static void reserve_exactly_(Arena *arena, Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
     if (a->capacity >= new_capacity) return;
@@ -1523,67 +1384,6 @@ static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index) {
     u64 step = (hash >> (64 - exponent)) | 1;
     u64 new = (index + step) & mask;
     return new;
-}
-
-#define MAP_MAX_LOAD_FACTOR 70
-
-#define map_make(arena, map, capacity) do { \
-    _Static_assert(sizeof(*(map)) == sizeof(Map_void), "Parameter must be a Map"); \
-    map_make_explicit_item_size((arena), (Map_void *)(map), (capacity), sizeof(*(map)->values.data)); \
-} while (0)
-
-static void map_make_explicit_item_size(Arena *arena, Map_void *map, u64 capacity, u64 item_size) {
-    capacity *= 100;
-    capacity /= MAP_MAX_LOAD_FACTOR;
-
-    *map = (Map_void){ .arena = arena };
-    map->values.data = arena_make_(arena, capacity, item_size, true);
-    map->values.count = 1;
-    map->values.capacity = capacity;
-
-    map->keys = arena_make_(arena, capacity, sizeof *map->keys, true);
-    map->value_index_from_key_hash = arena_make_(arena, capacity, sizeof *map->value_index_from_key_hash, true);
-}
-
-static Map_Result map_get_(Map_void *map, u64 key, void *put, u64 item_size) {
-    Map_Result result = {0};
-
-    assert(is_power_of_2(map->values.capacity));
-    u64 exponent = count_trailing_zeroes(map->values.capacity);
-    u64 hash = hash_djb2(&key, sizeof key);
-    u64 *value_index = 0;
-    for (u64 index = hash;;) {
-        index = hash_lookup_msi(hash, exponent, index);
-        index += !index; // never 0
-
-        value_index = &map->value_index_from_key_hash[index];
-
-        if (*value_index == 0) break;
-
-        u64 key_at_index = map->keys[*value_index];
-        if (key == key_at_index) break;
-    }
-
-    if (put != 0) {
-        result.is_new = *value_index == 0;
-        if (result.is_new) {
-            ensure(map->values.count + 1 < map->values.capacity * MAP_MAX_LOAD_FACTOR / 100);
-
-            *value_index = map->values.count;
-            map->values.count += 1;
-        }
-
-        map->keys[*value_index] = key;
-
-        void *pointer = (u8 *)map->values.data + *value_index * item_size;
-        memcpy(pointer, put, item_size);
-    }
-
-    result.index = *value_index;
-    if (result.index != 0) {
-        result.pointer = (u8 *)map->values.data + result.index * item_size;
-    }
-    return result;
 }
 
 static bool intersect_point_in_rectangle(V2 point, V4 rectangle) {
@@ -2043,7 +1843,7 @@ static force_inline M4 m4_transpose(M4 m) {
 #define CPU_DRAW_COSF cosf
 #define CPU_DRAW_ROUNDF roundf
 #define CPU_DRAW_SQRTF sqrtf
-#include "cpu_draw.h"
+#include "base/cpu_draw.h"
 
 static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size) {
     cpu_draw_Font font = {0};
@@ -2252,7 +2052,7 @@ static void cpu_draw_commands(cpu_draw_Surface surface, const cpu_draw_Font *fon
 
 #define BDF_ASSERT assert
 #define BDF_IMPLEMENTATION
-#include "bdf.h"
+#include "base/bdf.h"
 
 static f64 f64_from_string(String s) {
     f64 result = 0;
@@ -2285,7 +2085,7 @@ static f64 f64_from_string(String s) {
     return result;
 }
 
-static u64 int_from_string_base(String s, u64 base) {
+static i64 int_from_string_base(String s, u64 base) {
     static const u8 decimal_from_hex_digit_table[128] = {
         ['0'] = 0x0, ['1'] = 0x1, ['2'] = 0x2, ['3'] = 0x3,
         ['4'] = 0x4, ['5'] = 0x5, ['6'] = 0x6, ['7'] = 0x7,
@@ -2295,9 +2095,16 @@ static u64 int_from_string_base(String s, u64 base) {
         ['e'] = 0xe, ['f'] = 0xf,
     };
 
-    u64 result = 0, magnitude = s.count;
+    i64 sign = 1;
+    if (s.data[0] == '-') {
+        sign = -1;
+        s.data += 1;
+        s.count -= 1;
+    }
+
+    i64 result = 0, magnitude = (i64)s.count;
     for (u64 i = 0; i < s.count; i += 1, magnitude -= 1) {
-        result *= base;
+        result *= (i64)base;
         u64 digit = decimal_from_hex_digit_table[(u8)s.data[i]];
         if (digit >= base) {
             log_error("digit '%c' is invalid in base %llu", s.data[i], base);
@@ -2305,12 +2112,14 @@ static u64 int_from_string_base(String s, u64 base) {
         }
         result += digit;
     }
+
+    result *= sign;
     return result;
 }
 
 #define STR_IMPLEMENTATION
 #define STR_ASSERT assert
-#include "str.h"
+#include "base/str.h"
 
 #define SMALL_SNPRINTF_IMPLEMENTATION
 #define SMALL_SNPRINTF_ASSERT assert
@@ -2332,18 +2141,18 @@ static int small_snprintf_unknown_format_handler(char *buffer, size_t buffer_siz
 
     return written;
 }
-#include "small_snprintf.h"
+#include "base/small_snprintf.h"
 
 #if BASE_OS == BASE_OS_WASM
     extern double js_performance_now(void);
     #define TIME_JS_PERFORMANCE_NOW js_performance_now
 #endif
 #define TIME_IMPLEMENTATION
-#include "time.h"
+#include "base/time.h"
 
 #define PRNG_IMPLEMENTATION
 #define PRNG_ASSERT assert
-#include "prng.h"
+#include "base/prng.h"
 
 static u64 cstring_copy(char *buffer, const char *cstring) {
     u64 length = cstring_length(cstring);
@@ -2372,10 +2181,10 @@ static const char *cstring_print(Arena *arena, const char *format, ...) {
 }
 
 // Only bases <= 10
-static String string_from_int_base(Arena *arena, u64 _num, u8 base) {
-    u64 num = _num;
+static String string_from_int_base(Arena *arena, i64 _num, u8 base) {
+    i64 num = _num;
 
-    u64 count = 0;
+    u64 count = num < 0 ? 1 : 0;
     do {
         num /= base;
         count += 1;
@@ -2383,8 +2192,14 @@ static String string_from_int_base(Arena *arena, u64 _num, u8 base) {
 
     char *string = arena_make(arena, count, char);
 
+    i64 first_digit_index = 0;
+    if (num < 0) {
+        string[0] = '-';
+        first_digit_index = 1;
+    }
+
     num = _num;
-    for (i64 i = (i64)count - 1; i >= 0; i -= 1) {
+    for (i64 i = (i64)count - 1; i >= first_digit_index; i -= 1) {
         string[i] = (char)((num % base) + '0');
         num /= base;
     }
@@ -2556,15 +2371,16 @@ static void os_heap_free(void *pointer) {
 #else
     #define FS_IMPLEMENTATION
     #define FS_ASSERT assert
-    #include "filesystem.h"
+    #include "base/filesystem.h"
 #endif
 
 static String os_read_entire_file(Arena *arena, const char *path) {
     String result = {0};
-    fs_File file = fs_file_open_and_get_size(path, 0, &result.count);
+    fs_File file = fs_file_open_and_get_size(path, fs_File_Flag_READ, &result.count);
 
-    char *data = arena_make(arena, result.count, char);
+    char *data = arena_make(arena, result.count + 1, char);
     result.count = fs_read_entire_file(file, data, result.count);
+    data[result.count] = 0;
     if (result.count == 0) log_error("unable to read '%s'", path);
 
     fs_close(file);
@@ -2590,6 +2406,7 @@ static bool os_write_entire_file(const char *path, const void *data, u64 count) 
     }
     #endif
 
+    assert(ok);
     if (!ok) log_error("unable to write %llu bytes to path '%s'", count, path);
     return ok;
 }
@@ -2810,6 +2627,54 @@ static void print_(const char *format, va_list arguments) {
 #define CLEX_ASSERT assert
 #include "base/clex.h"
 
+static const char *base_clex_define(void *user_data, const char *symbol, const char *definition) {
+    assert(user_data != 0);
+    assert(symbol != 0);
+    const char *result = 0;
+
+    Base_Clex_Define *state = user_data;
+    bool should_get = definition == 0;
+
+    const char *symbol_end = clex_identifier_end(symbol);
+    u64 hash = ds_hash_fnv1a(symbol, (size_t)(symbol_end - symbol));
+    u32 index = (u32)hash;
+    const char *name = 0;
+    if (should_get) {
+        do {
+            index = ds_hash_step_index(hash, BASE_CLEX_DEFINE_EXPONENT, index);
+            name = state->names[index];
+        } while(name != 0 && !base_clex_symbols_match(name, symbol));
+
+        if (name != 0) result = state->definitions[index];
+    } else {
+        assert(state->used * 100 < BASE_CLEX_DEFINE_CAPACITY * 70);
+        state->used += 1;
+
+        do {
+            index = ds_hash_step_index(hash, BASE_CLEX_DEFINE_EXPONENT, index);
+            assert(index < BASE_CLEX_DEFINE_CAPACITY);
+            name = state->names[index];
+        } while (name != 0 && !base_clex_symbols_match(name, symbol));
+
+        state->names[index] = symbol;
+        state->definitions[index] = definition;
+    }
+
+    return result;
+}
+
+static bool base_clex_symbols_match(const char *a, const char *b) {
+    const char *a_end = clex_identifier_end(a);
+    const char *b_end = clex_identifier_end(b);
+    String as = string_from_pointers(a, a_end);
+    String bs = string_from_pointers(b, b_end);
+    return string_equals(as, bs);
+}
+
+static String base_string_from_clex_data(clex_Data data) {
+    return string_from_pointers(data.start, data.end);
+}
+
 #define OBJECT_IMPLEMENTATION
 #define OBJECT_ASSERT assert
 #include "base/object_files.h"
@@ -2981,28 +2846,24 @@ static void build_push_arguments(Arena *arena, Array_cstring *strings, const cha
     for (const char **a = arguments; *a != 0; a += 1) push(arena, strings, *a);
 }
 
-static String string_from_clex_data(clex_Data data) {
-    String result = { .data = data.start, .count = (u64)(data.end - data.start) };
-    return result;
-}
-
-static bool build_expect_include(clex_Lexer *lexer, String *file) {
+static bool build_expect_include(Arena *arena, clex_Lexer *lexer, String *file) {
     clex_lex(lexer);
-    String token_data = string_from_clex_data(lexer->token.data);
-    bool ok = lexer->token.kind == clex_Token_PREPROCESSOR_DIRECTIVE;
+    String token_data = base_string_from_clex_data(lexer->token.data);
+    bool ok = lexer->token.kind == clex_Token_INCLUDE;
     ok = ok && string_equals(token_data, S("include"));
     if (!ok) {
         log_error("expected `#include`");
         return false;
     }
 
-    clex_Lexer include = clex_init(lexer->token.data2.start, lexer->token.data2.end, 0);
+    const char *copy = cstring_from_string(arena, base_string_from_clex_data(lexer->token.data2));
+    clex_Lexer include = clex_init(copy, 0, base_clex_define, 0);
     clex_lex(&include);
     if (include.token.kind != clex_Token_STRING) {
         log_error("expected string after `#include`");
         return false;
     }
-    *file = string_from_clex_data(include.token.data);
+    *file = base_string_from_clex_data(include.token.data);
     return true;
 }
 
@@ -3182,7 +3043,6 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         }
     }
 
-    String platform = {0};
     String code = os_read_entire_file(&scratch, &c_file_path[3]);
 
     String_Builder metaprogram_code = {0};
@@ -3193,15 +3053,77 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     bool meta_link_crt_override = false;
     bool meta_link_crt_override_value = false;
 
-    // TODO(felix): once we have a working preprocessor this hardcoded logic shouldn't be necessary
+    bool TODO_REMOVE_THIS = false;
 
-    clex_Lexer lexer = clex_init(code.data, &code.data[code.count], 0);
+    Base_Clex_Define *define_state = arena_make(&scratch, 1, Base_Clex_Define);
+    clex_Lexer lexer = clex_init(code.data, 0, base_clex_define, define_state);
+    f64 time_at_parse_start = time_relative_timestamp();
     while (clex_lex(&lexer)) {
+        String preprocess_data2 = base_string_from_clex_data(lexer.token.data2);
+        switch (lexer.token.kind) {
+            case clex_Token_INCLUDE: {
+                if (TODO_REMOVE_THIS) print("#include %S\n", preprocess_data2);
+
+                String path = preprocess_data2;
+                if (path.data[0] == '<') { /* skip system includes for now */ }
+                else if (path.data[0] == '"') {
+                    if (path.data[path.count - 1] != '"') {
+                        log_error("`#include` path has unterminated `\"`");
+                        return 1;
+                    }
+                    if (path.count <= 2) {
+                        log_error("cannot `#include` empty path `\"\"`");
+                        return 1;
+                    }
+                    path = string_range(path, 1, path.count - 1);
+
+                    const char *read_path = cstring_print(&scratch, "%s%S", &source_folder[3], path);
+                    String file = os_read_entire_file(&scratch, read_path);
+                    bool ok = clex_push_file(&lexer, path.data, &path.data[path.count], file.data);
+                    assert(ok);
+                } else {
+                    log_error("expected `<` or `\"` following `#include`; got `%c`", path.data[0]);
+                    return 1;
+                }
+            } break;
+            case clex_Token_IF: {
+                if (TODO_REMOVE_THIS) print("#if %S\n", preprocess_data2);
+                // panic("TODO(felix): #if");
+            } break;
+            case clex_Token_ELIF: {
+                if (TODO_REMOVE_THIS) print("#elif %S\n", preprocess_data2);
+                // panic("TODO(felix): #elif");
+            } break;
+            case clex_Token_ENDIF: {
+                if (TODO_REMOVE_THIS) print("#endif\n");
+                // panic("TODO(felix): #endif");
+            } break;
+            case clex_Token_ERROR_DIRECTIVE: {
+                if (TODO_REMOVE_THIS) print("#error %S\n", preprocess_data2);
+                // panic("TODO(felix): #error");
+            } break;
+            default: break;
+        }
+
+        if (TODO_REMOVE_THIS) { // TODO(felix): remove
+            String token_data = base_string_from_clex_data(lexer.token.data);
+            print("%S ", token_data);
+            char d = token_data.data[0];
+            if (d == ';' || d == '{') print("\n");
+        }
+
+        // TODO(felix): Replace with real preprocessing logic.
+
         static bool in_active_preprocessor_block = true;
 
-        if (lexer.token.kind == clex_Token_PREPROCESSOR_DIRECTIVE) {
+        bool if_hack = lexer.token.kind == clex_Token_IF;
+        if_hack = if_hack || lexer.token.kind == clex_Token_ELSE;
+        if_hack = if_hack || lexer.token.kind == clex_Token_ENDIF;
+        if_hack = false;
+
+        if (if_hack) {
             static bool aware_of_this_static_if_condition = false;
-            String token_data = string_from_clex_data(lexer.token.data);
+            String token_data = base_string_from_clex_data(lexer.token.data);
 
             if (string_equals(token_data, S("if"))) {
                 if (aware_of_this_static_if_condition) {
@@ -3211,16 +3133,18 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
                 const char *error = "expected `#if BASE_OS == BASE_OS_...`";
 
-                clex_Lexer definition = clex_init(lexer.token.data2.start, lexer.token.data2.end, 0);
+                Arena definition_scratch = scratch;
+                const char *copy = cstring_from_string(&definition_scratch, base_string_from_clex_data(lexer.token.data2));
+                clex_Lexer definition = clex_init(copy, 0, base_clex_define, 0);
                 while (clex_lex(&definition)) {
-                    token_data = string_from_clex_data(definition.token.data);
+                    token_data = base_string_from_clex_data(definition.token.data);
                     aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, S("BASE_OS"));
 
                     if (aware_of_this_static_if_condition) {
                         if (!build_eat_token(&definition, clex_Token_EQUALITY_CHECK, "error: %s", error)) return 1;
 
                         if (!build_eat_token(&definition, clex_Token_IDENTIFIER, "error: %s", error)) return 1;
-                        token_data = string_from_clex_data(definition.token.data);
+                        token_data = base_string_from_clex_data(definition.token.data);
 
                         u8 os_to_check = 0;
                         if (string_equals(token_data, S("BASE_OS_WINDOWS"))) os_to_check = BASE_OS_WINDOWS;
@@ -3256,7 +3180,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         if (!in_active_preprocessor_block) continue;
 
         if (lexer.token.kind != clex_Token_IDENTIFIER) continue;
-        String token_data = string_from_clex_data(lexer.token.data);
+        String token_data = base_string_from_clex_data(lexer.token.data);
 
         if (!string_equals(token_data, S("meta"))) continue;
 
@@ -3264,29 +3188,12 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         if (lexer.token.kind != '(') continue;
 
         if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `meta(...)`")) return 1;
-        token_data = string_from_clex_data(lexer.token.data);
+        token_data = base_string_from_clex_data(lexer.token.data);
 
-        if (string_equals(token_data, S("platform"))) {
-            if (platform.count != 0) {
-                log_error("directive `meta(platform)` can only be used once");
-                return 1;
-            }
+        // TODO(felix): remove
+        if (TODO_REMOVE_THIS) print("=========================================================GOT META |%S|\n", token_data);
 
-            if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
-
-            String file = {0};
-            if (!build_expect_include(&lexer, &file)) return 1;
-
-            u64 slash = 0;
-            while (slash < file.count && file.data[slash] != '/') slash += 1;
-            if (slash != file.count) file = string_range(file, slash + 1, file.count);
-
-            u64 dot = 0;
-            while (dot < file.count && file.data[dot] != '.') dot += 1;
-            if (dot != file.count) file = string_range(file, 0, dot);
-
-            platform = file;
-        } else if (string_equals(token_data, generate_here_directive)) {
+        if (string_equals(token_data, generate_here_directive)) {
             if (metaprogram_output_file.count != 0) {
                 log_error("directive `meta(%S)` can only be used once", generate_here_directive);
                 return 1;
@@ -3294,12 +3201,12 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
             if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
 
-            if (!build_expect_include(&lexer, &metaprogram_output_file)) return 1;
+            if (!build_expect_include(&scratch, &lexer, &metaprogram_output_file)) return 1;
         } else if (string_equals(token_data, S("embed"))) {
             const char *usage = "`meta(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
 
             if (!build_eat_token(&lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
-            String input_file = string_from_clex_data(lexer.token.data);
+            String input_file = base_string_from_clex_data(lexer.token.data);
 
             if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
 
@@ -3308,21 +3215,21 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             String names[2] = {0};
             for (u64 i = 0; i < 2; i += 1) {
                 clex_lex(&lexer);
-                String extern_ = string_from_clex_data(lexer.token.data);
+                String extern_ = base_string_from_clex_data(lexer.token.data);
                 if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(extern_, S("extern"))) {
                     log_error("expected this: %s", usage);
                     return 1;
                 }
 
                 clex_lex(&lexer);
-                String const_ = string_from_clex_data(lexer.token.data);
+                String const_ = base_string_from_clex_data(lexer.token.data);
                 if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(const_, S("const"))) {
                     log_error("expected this: %s", usage);
                     return 1;
                 }
 
                 clex_lex(&lexer);
-                String type_ = string_from_clex_data(lexer.token.data);
+                String type_ = base_string_from_clex_data(lexer.token.data);
                 String expected_type = i == 0 ? S("char") : S("u64");
                 if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(type_, expected_type)) {
                     log_error("expected this: %s", usage);
@@ -3330,7 +3237,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                 }
 
                 if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, "error: expected this: %s", usage)) return 1;
-                names[i] = string_from_clex_data(lexer.token.data);
+                names[i] = base_string_from_clex_data(lexer.token.data);
 
                 if (i == 0) {
                     if (!build_eat_token(&lexer, '[', "error: expected this: %s", usage)) return 1;
@@ -3355,7 +3262,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                 }
                 embedded_once_already = true;
 
-                fs_File input_file_handle = fs_file_open_and_get_size(input_path, 0, &input.count);
+                fs_File input_file_handle = fs_file_open_and_get_size(input_path, fs_File_Flag_READ, &input.count);
                 if (input.count == 0) {
                     log_error("unable to open file '%s'", input_path);
                     return 1;
@@ -3457,7 +3364,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             if (!build_eat_token(&lexer, '=', error)) return 1;
 
             if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, error)) return 1;
-            token_data = string_from_clex_data(lexer.token.data);
+            token_data = base_string_from_clex_data(lexer.token.data);
 
             meta_link_crt_override = true;
             if (string_equals(token_data, S("true"))) {
@@ -3470,42 +3377,30 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             }
 
             if (!build_eat_token(&lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
+        } else if (string_equals(token_data, S("link"))) {
+            // TODO(felix)
         } else {
             log_error("unsupported metaprogram directive '%S'", token_data);
             return 1;
         }
     }
-
-    if (metaprogram_output_file.count == 0) {
-        log_error("missing `meta(%S)` followed by #include to designate codegen destination", generate_here_directive);
+    if (lexer.token.kind == clex_Token_ERROR) {
+        log_error("parser error");
         return 1;
     }
 
-    {
+    f64 time_at_parse_end = time_relative_timestamp();
+    f64 parse_seconds = time_seconds_between_relative_timestamps(time_at_parse_start, time_at_parse_end);
+    print("Parsing took %.2lf seconds.\n", parse_seconds);
+
+    if (metaprogram_code.count > 0) {
+        if (metaprogram_output_file.count == 0) {
+            log_error("missing `meta(%S)` followed by #include to designate codegen destination", generate_here_directive);
+            return 1;
+        }
+
         const char *file = cstring_from_string(&scratch, metaprogram_output_file);
         if (!os_write_entire_file(file, metaprogram_code.data, metaprogram_code.count)) return 1;
-    }
-
-    // TODO(felix): should be handled by metaprogram
-    String sokol_platform = S("base_platform_sokol");
-    const char *sokol_code_path = cstring_print(&scratch, "%sbase%c%S.c", source_folder, path_separator, platform);
-    bool using_sokol_platform = string_equals(platform, sokol_platform);
-    if (using_sokol_platform) {
-        Array_cstring extra_flags = {0};
-        if (BASE_OS == BASE_OS_MACOS) {
-            push(&scratch, &extra_flags, "-x");
-            push(&scratch, &extra_flags, "objective-c");
-        }
-        push(&scratch, &extra_flags, "-DBASE_PLATFORM_IMPLEMENTATION");
-        push(&scratch, &extra_flags, 0);
-
-        Build_Object object = {
-            .code_path = sokol_code_path,
-            .object_path = cstring_print(&scratch, "%S.%s", platform, object_extension),
-            .extra_flags = extra_flags.data,
-            .no_extra_errors = true,
-        };
-        push(&scratch, &objects, object);
     }
 
     Build_Object main_object = { .code_path = c_file_path };
@@ -3547,67 +3442,10 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         Os_Process_Flag_PRINT_EXIT_CODE |
         Os_Process_Flag_PRINT_EXECUTION_TIME;
 
-    // TODO(felix): should be handled by metaprogram
-    if (using_sokol_platform) {
-        const char *shader_file = cstring_print(&scratch, "%sshader.c", source_folder);
-        fs_remove_file(shader_file);
-
-        Array_cstring command = {0};
-        if (BASE_OS == BASE_OS_WINDOWS) {
-            push(&scratch, &command, "cmd.exe");
-            push(&scratch, &command, "/c");
-        }
-
-        const char *target_shader_language[BASE_OS_COUNT] = {
-            [BASE_OS_WINDOWS] = "hlsl5",
-            [BASE_OS_MACOS] = "metal_macos",
-        };
-        const char *shdc_error_format[BASE_OS_COUNT] = {
-            [BASE_OS_WINDOWS] = "msvc",
-            [BASE_OS_MACOS] = "gcc",
-        };
-
-        const char *shdc_per_os[BASE_OS_COUNT] = {
-            [BASE_OS_WINDOWS] = cstring_print(&scratch, "%sshdc%csokol-shdc.exe", dependency_folder, path_separator),
-            [BASE_OS_MACOS] = cstring_print(&scratch, "%sshdc%csokol-shdc-macos.bin", dependency_folder, path_separator),
-        };
-
-        const char *shdc = shdc_per_os[BASE_OS];
-        if (BASE_OS == BASE_OS_MACOS) {
-            static char buffer[4096];
-            fs_absolute_path(&shdc[1], buffer, sizeof buffer);
-            shdc = buffer;
-        }
-
-        const char *args[] = {
-            shdc,
-            "-l", target_shader_language[target_os],
-            "-i", cstring_print(&scratch, "%sshader.glsl", source_folder),
-            "-o", cstring_print(&scratch, "%sshader.c", source_folder),
-            "-e", shdc_error_format[BASE_OS],
-            0,
-        };
-        build_push_arguments(&scratch, &command, args);
-
-        push(&scratch, &command, 0);
-        exit_code = os_process_run(scratch, command.data, build_folder, process_flags);
-        if (exit_code != 0) goto end;
-    }
-
     for (u64 i = 0; i < objects.count; i += 1) {
         Build_Object *object = &objects.data[i];
 
         bool should_compile = object->code_path != 0;
-
-        // TODO(felix): handle via metaprogram. can use same caching mechanism as build.c once we have it
-        if (should_compile) {
-            bool is_sokol = cstring_equals(object->code_path, sokol_code_path);
-            if (is_sokol) {
-                const char *path = cstring_print(&scratch, "%s%c%s", build_folder, path_separator, object->object_path);
-                should_compile = !fs_exists(path);
-                if (!should_compile) print("info: reusing %s; delete it to force recompilation\n", object->object_path);
-            }
-        }
 
         if (should_compile) {
             bool no_custom_object_path = object->object_path == 0;
@@ -3734,8 +3572,13 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         }
     }
 
-    end:
     return exit_code;
+}
+
+static void app_frame_info_reset_end_of_frame(App_Frame_Info *frame) {
+    frame->scroll = 0;
+    memset(frame->mouse_clicked, 0, sizeof frame->mouse_clicked);
+    memset(frame->key_pressed, 0, sizeof frame->key_pressed);
 }
 
 static void draw(Platform *platform, Draw_Command command) {
@@ -3763,588 +3606,17 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
 #define UI_ASSERT assert
 #define UI_VSNPRINTF small_vsnprintf
 #define ui_size_t size_t
-
-#if !defined(UI_MAX_STRING_LENGTH)
-    #define UI_MAX_STRING_LENGTH 256
-#endif
-
-#if !defined(UI_ASSERT)
-    #include <assert.h>
-    #define UI_ASSERT assert
-#endif
-
-#if !defined(UI_VSNPRINTF)
-    #include <stdio.h>
-    #define UI_VSNPRINTF vsnprintf
-#endif
-
-#if !defined(ui_size_t)
-    #include <stddef.h>
-    #define ui_size_t size_t
-#endif
-
-static void ui_begin(ui_State *ui) {
-    ui->per_frame_unkeyed_boxes_index = UI_MAX_BOX_SLOTS;
-    for (int i = 0; i < UI_MAX_KEYED_BOXES; i += 1) {
-        ui_Box *box = &ui->boxes[i];
-        _Bool stale = box->hash_string[0] != 0 && box->frame_id != ui->frame_id;
-        if (stale) {
-            *box = (ui_Box){0};
-            ui->keyed_box_count -= 1;
-        }
-    }
-    ui->frame_id += 1;
-
-    ui->root = 0;
-    ui->interacted_this_frame = 0;
-    ui->display_string_used = 0;
-}
-
-static inline void *ui__memset(void *destination_, int byte_, ui_size_t count) {
-    UI_ASSERT(byte_ < 256);
-    char byte = (char)byte_;
-    char *destination = destination_;
-    for (ui_size_t i = 0; i < count; i += 1) destination[i] = byte;
-    return destination;
-}
-
-static void ui_create(ui_State *ui, App_Frame_Info *frame, ui_text_measure_function *text_measure_function) {
-    ui__memset(ui, 0, sizeof *ui);
-    ui->frame = frame;
-    ui->measure_text = text_measure_function;
-}
-
-static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
-    ui_Style *style = &box->style;
-
-    box->rectangle = (ui_Rectangle){0};
-
-    float text_size[2] = {0};
-    _Bool measure = box->size[ui_X].kind == ui_Size_TEXT || box->size[ui_Y].kind == ui_Size_TEXT;
-    if (measure) {
-        UI_ASSERT(box->display_string != 0 && box->display_string[0] != 0);
-        ui->measure_text(ui->user_data, box->display_string, (int)cstring_length(box->display_string), box->style, text_size);
-        UI_ASSERT(text_size[0] > 0);
-        UI_ASSERT(text_size[1] > 0);
-    }
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        switch (box->size[axis].kind) {
-            case ui_Size_PIXELS: {
-                box->rectangle.size[axis] = box->size[axis].value;
-            } break;
-            case ui_Size_OF_PARENT: /* not solved here */ break;
-            case ui_Size_LARGEST_CHILD: /* not solved here */ break;
-            case ui_Size_TEXT: {
-                box->rectangle.size[axis] = text_size[axis];
-            } break;
-            case ui_Size_SUM_OF_CHILDREN: /* not solved here */ break;
-            default: UI_ASSERT(0 && "unreachable"); break;
-        }
-
-		box->rectangle.size[axis] += 2.f * style->padding[axis];
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_standalone(ui, child);
-    }
-}
-
-static void ui__layout_dependent_ancestor(ui_State *ui, ui_Box *box) {
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_LARGEST_CHILD: /* not solved here */ break;
-        case ui_Size_SUM_OF_CHILDREN: /* not solved here */ break;
-        case ui_Size_OF_PARENT: /* not solved here */ break;
-        case ui_Size_TEXT: /* not solved here */ break;
-        case ui_Size_PIXELS: /* not solved here */ break;
-        default: UI_ASSERT(0 && "unreachable"); break;
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_dependent_ancestor(ui, child);
-    }
-}
-
-static void ui__layout_dependent_descendant(ui_State *ui, ui_Box *box) {
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_dependent_descendant(ui, child);
-    }
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_TEXT: break;
-        case ui_Size_SUM_OF_CHILDREN: {
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                box->rectangle.size[axis] += child->rectangle.size[axis];
-				box->rectangle.size[axis] += box->style.child_gap;
-            }
-
-            _Bool has_at_least_one_child = box->first_child != 0;
-            box->rectangle.size[axis] -= has_at_least_one_child * box->style.child_gap;
-        } break;
-        case ui_Size_LARGEST_CHILD: {
-            float largest = 0;
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                float size = child->rectangle.size[axis];
-                largest = size > largest ? size : largest;
-            }
-            box->rectangle.size[axis] += largest;
-        } break;
-        case ui_Size_OF_PARENT: /* not solved here */ break;
-        case ui_Size_PIXELS: /* not solved here */ break;
-        default: UI_ASSERT(0 && "unreachable"); break;
-    }
-}
-
-static void ui__layout_relative_positions_and_rectangle(ui_State *ui, ui_Box *box) {
-    if (box->parent != 0) {
-        ui_Flags layout_axis = box->parent->flags & ui_Flag_CHILD_AXIS;
-
-        if (box->previous_sibling != 0) {
-            box->rectangle.position[layout_axis] = box->previous_sibling->rectangle.position[layout_axis];
-            box->rectangle.position[layout_axis] += box->previous_sibling->rectangle.size[layout_axis];
-            box->rectangle.position[layout_axis] += box->parent->style.child_gap;
-        } else {
-            box->rectangle.position[layout_axis] = box->parent->rectangle.position[layout_axis];
-			box->rectangle.position[layout_axis] += box->parent->style.padding[layout_axis];
-        }
-
-        ui_Flags non_layout_axis = !layout_axis;
-        box->rectangle.position[non_layout_axis] = box->parent->rectangle.position[non_layout_axis];
-        box->rectangle.position[non_layout_axis] += box->parent->style.padding[non_layout_axis];
-    }
-
-    if (box->flags & UI_FLAG_ANY_VISIBLE) {
-        ui_Rectangle display = box->rectangle;
-        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-            UI_ASSERT(display.position[axis] >= 0);
-            UI_ASSERT(display.size[axis] >= 0);
-        }
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_relative_positions_and_rectangle(ui, child);
-    }
-}
-
-static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
-    ui_Flags layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        float applies_to_this_axis = (float)(layout_axis == axis);
-
-        float parent_size = box->rectangle.size[axis];
-        parent_size -= 2.f * box->style.padding[axis];
-        float available_size = parent_size;
-
-        float wanted_size = 0;
-        float child_count = 0;
-
-        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-            child_count += applies_to_this_axis;
-
-            switch (child->size[axis].kind) {
-                case ui_Size_OF_PARENT: {
-                    child->rectangle.size[axis] = parent_size * child->size[axis].value;
-                    wanted_size += applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                case ui_Size_SUM_OF_CHILDREN: case ui_Size_LARGEST_CHILD: case ui_Size_TEXT: case ui_Size_PIXELS: {
-                    available_size -= applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                default: UI_ASSERT(0 && "unreachable"); break;
-            }
-        }
-
-        float total_child_gap = box->style.child_gap * (child_count - 1.f);
-        available_size -= total_child_gap;
-
-        if (wanted_size > available_size) {
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) if (child->size[axis].kind == ui_Size_OF_PARENT) {
-                float average_ratio_available = available_size / wanted_size;
-
-                float ratio_left = child->size[axis].value;
-                if (child->size[axis].value > average_ratio_available) {
-                    float min_ratio_left = 0;
-                    ratio_left = CLAMP(min_ratio_left, average_ratio_available, child->size[axis].value);
-                }
-
-                float wanted = child->rectangle.size[axis];
-                float got = parent_size * ratio_left;
-
-                wanted_size -= wanted;
-                available_size -= got;
-                child->rectangle.size[axis] = got;
-            }
-        }
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_solve_violations(ui, child);
-    }
-}
-
-static void ui_end(ui_State *ui) {
-    ui__layout_standalone(ui, ui->root);
-    ui__layout_dependent_ancestor(ui, ui->root);
-    ui__layout_dependent_descendant(ui, ui->root);
-    ui__layout_solve_violations(ui, ui->root);
-    ui__layout_relative_positions_and_rectangle(ui, ui->root);
-}
-
-static ui_Box *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *style, const char *format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, parent, flags, style, format, arguments);
-    va_end(arguments);
-    return box;
-}
-
-static ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *style, const char *format_c, va_list arguments) {
-    _Bool keyed = format_c != 0;
-
-    const char *hash_string = 0;
-    const char *display_string = 0;
-
-    ui_Box *box = 0;
-    _Bool box_is_new = !keyed;
-    if (keyed) {
-        const char *format = 0;
-        {
-            // TODO(felix): not thread-safe, move to ui_State
-            static char format_buffer[UI_MAX_STRING_LENGTH];
-
-            int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format_c, arguments);
-            UI_ASSERT(written < (int)(sizeof format_buffer));
-            format = format_buffer;
-        }
-
-        _Bool has_2_hash_marker = 0;
-        _Bool has_3_hash_marker = 0;
-
-        int marker_start = 0;
-        for (int i = 0; format[i] != 0; i += 1) {
-            if (format[i] != '#') continue;
-
-            if (format[i + 1] == 0) break;
-            if (format[i + 1] != '#') continue;
-
-            has_3_hash_marker = format[i + 2] == '#';
-            has_2_hash_marker = !has_3_hash_marker;
-
-            marker_start = i;
-            break;
-        }
-
-        int display_and_hash_left_end = marker_start;
-        int hash_right_start = marker_start;
-
-        // before `##` displayed and hashed; after only hashed
-        hash_right_start += 2 * has_2_hash_marker;
-
-        // before `###` only displayed; after only hashed
-        int hash_left_start = display_and_hash_left_end * has_3_hash_marker;
-        hash_right_start += 3 * has_3_hash_marker;
-
-        _Bool has_marker = has_2_hash_marker || has_3_hash_marker;
-        int display_part_end = has_marker * display_and_hash_left_end + !has_marker * (int)cstring_length(format);
-
-        int hash_string_length = 0;
-        {
-            // TODO(felix): not thread-safe, move to ui_State
-            static char hash_buffer[UI_MAX_STRING_LENGTH];
-
-            int hash_cursor = hash_left_start;
-
-            int *written = &hash_string_length;
-            while (hash_cursor < display_and_hash_left_end && *written < (int)(sizeof hash_buffer)) {
-                hash_buffer[(*written)++] = format[hash_cursor++];
-            }
-
-            hash_cursor = hash_right_start;
-            while (format[hash_cursor] != 0) {
-                hash_buffer[(*written)++] = format[hash_cursor++];
-            }
-
-            UI_ASSERT(*written < (int)(sizeof hash_buffer));
-            hash_buffer[*written] = 0;
-            hash_string = hash_buffer;
-        }
-
-        {
-            UI_ASSERT(ui->display_string_used + display_part_end < (int)(sizeof ui->display_string_buffer));
-
-            int *written = &ui->display_string_used;
-            display_string = &ui->display_string_buffer[*written];
-
-            for (int i = 0; i < display_part_end; i += 1) {
-                ui->display_string_buffer[(*written)++] = format[i];
-            }
-            ui->display_string_buffer[(*written)++] = 0;
-        }
-
-        if (hash_string_length == 0) keyed = 0;
-
-        if (keyed) {
-            // djb2
-            unsigned hash = 5381;
-            for (int i = 0; i < hash_string_length; i += 1) {
-                hash += (hash << 5) + (unsigned)(hash_string[i]);
-            }
-
-            unsigned exponent = UI_MAX_KEYED_BOXES_EXPONENT;
-            unsigned mask = ((unsigned)1 << exponent) - 1;
-            unsigned step = (hash >> (32 - exponent)) | 1;
-            for (unsigned index = hash;;) {
-                index = (index + step) & mask;
-                index += !index; // never 0
-
-                ui_Box *this_box = &ui->boxes[index];
-
-                _Bool this_box_is_unused = this_box->hash_string[0] == 0;
-                if (this_box_is_unused) {
-                    ui->keyed_box_count += 1;
-                    int hashmap_max_load = 70;
-                    int max_used_boxes = UI_MAX_KEYED_BOXES * hashmap_max_load / 100;
-                    _Bool hashmap_saturated = ui->keyed_box_count > max_used_boxes;
-                    UI_ASSERT(!hashmap_saturated);
-
-                    box_is_new = 1;
-                    box = this_box;
-                    break;
-                }
-
-                if (cstring_equals(this_box->hash_string, hash_string)) {
-                    _Bool already_used_this_frame = this_box->frame_id == ui->frame_id;
-                    UI_ASSERT(!already_used_this_frame);
-                    box = this_box;
-                    break;
-                }
-            }
-
-            if (box_is_new) {
-                int i = 0;
-                while (i < (int)(sizeof box->hash_string - 1) && hash_string[i] != 0) {
-                    box->hash_string[i] = hash_string[i];
-                    i += 1;
-                }
-                UI_ASSERT(i < (int)(sizeof box->hash_string));
-                box->hash_string[i] = 0;
-            }
-        }
-    }
-
-    if (!keyed) {
-        _Bool have_free_unkeyed_slot = ui->per_frame_unkeyed_boxes_index > UI_MAX_KEYED_BOXES;
-        UI_ASSERT(have_free_unkeyed_slot);
-        box = &ui->boxes[--ui->per_frame_unkeyed_boxes_index];
-        box_is_new = 1;
-    }
-
-    _Bool was_dragging = !box_is_new && !!(box->flags & ui_Flag_DRAGGING);
-
-    box->flags = flags;
-    box->flags |= was_dragging * ui_Flag_DRAGGING;
-
-    { // zero frame data, keep cached data
-        box->display_string = 0;
-        box->size[ui_X] = (ui_Size){0};
-        box->size[ui_Y] = (ui_Size){0};
-        box->parent = 0;
-        box->previous_sibling = 0;
-        box->next_sibling = 0;
-        box->first_child = 0;
-        box->last_child = 0;
-    }
-
-    if (style != 0) box->style = *style;
-
-    box->parent = parent;
-    if (parent == 0) UI_ASSERT(ui->root == 0);
-    if (ui->root == 0) {
-        UI_ASSERT(parent == 0);
-
-        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-            box->size[axis].kind = ui_Size_PIXELS;
-            box->size[axis].value = v(ui->frame->window_size)[axis];
-        }
-
-        ui->root = box;
-    }
-
-    if (box != ui->root) {
-        ui_Flags child_layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-        box->size[child_layout_axis].kind = ui_Size_SUM_OF_CHILDREN;
-        box->size[!child_layout_axis].kind = ui_Size_LARGEST_CHILD;
-    }
-
-    box->display_string = display_string;
-
-    if (box->parent != 0) {
-        if (box->parent->first_child == 0) {
-            UI_ASSERT(box->parent->last_child == 0);
-            box->parent->first_child = box;
-            box->parent->last_child = box;
-        } else {
-            UI_ASSERT(box->parent->last_child != 0);
-            box->parent->last_child->next_sibling = box;
-            box->previous_sibling = box->parent->last_child;
-            box->parent->last_child = box;
-        }
-    }
-
-    V4 rectangle = { .x = box->rectangle.position[0], .y = box->rectangle.position[1] };
-
-    V2 top_left = { box->rectangle.position[0], box->rectangle.position[1] };
-    V2 size = { box->rectangle.size[0], box->rectangle.size[1] };
-    V2 bottom_right = v2_add(top_left, size);
-    v4_bottom(rectangle) = bottom_right.y;
-    v4_right(rectangle) = bottom_right.x;
-
-    _Bool if_interactable_has_hash_string = !(box->flags & UI_FLAG_ANY_INTERACTABLE) || box->hash_string[0] != 0;
-    UI_ASSERT(if_interactable_has_hash_string);
-
-    if (!ui->input_blocked && (box->flags & UI_FLAG_ANY_INTERACTABLE)) {
-        _Bool mouse_over = intersect_point_in_rectangle(ui->frame->mouse_position, rectangle);
-        box->flags |= ui_Flag_HOVERED * (mouse_over && (box->flags & ui_Flag_HOVERABLE));
-        box->flags |= ui_Flag_CLICKED * (mouse_over && (box->flags & ui_Flag_CLICKABLE) && ui->frame->mouse_clicked[App_Mouse_LEFT]);
-
-        if (box->flags & ui_Flag_DRAGGABLE) {
-            _Bool start_drag = !was_dragging && mouse_over && ui->frame->mouse_down[App_Mouse_LEFT] && !ui->frame->mouse_clicked[App_Mouse_LEFT];
-            if (start_drag) {
-                box->flags |= ui_Flag_DRAGGING;
-                box->drag_start_mouse[ui_X] = ui->frame->mouse_position.x;
-                box->drag_start_mouse[ui_Y] = ui->frame->mouse_position.y;
-            }
-
-            _Bool end_drag = was_dragging && !ui->frame->mouse_down[App_Mouse_LEFT];
-            if (end_drag) {
-                box->flags &= ~ui_Flag_DRAGGING;
-                box->drag_start_mouse[ui_X] = 0;
-                box->drag_start_mouse[ui_Y] = 0;
-            }
-        }
-
-        ui->interacted_this_frame |= !!(box->flags & UI_FLAG_ANY_INTERACTION);
-    }
-
-    box->frame_id = ui->frame_id;
-    return box;
-}
-
-static ui_Box *ui_spacer(ui_State *ui, ui_Box *parent) {
-    ui_Box *box = ui_push(ui, parent, 0, 0, 0);
-    box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-    return box;
-}
-
-static ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...) {
-    ui_Box *slider_box = 0;
-
-    float range = most - least;
-    UI_ASSERT(range > 0);
-
-    ui_Style slider_style = style.bar;
-    slider_style.padding[ui_X] = 0;
-    slider_style.padding[ui_Y] = 0;
-    slider_style.child_gap = 0;
-    slider_style.border_radius = style.radius;
-
-    // TODO(felix): remove usage of String type
-    String formatted = {0};
-
-    va_list arguments;
-    va_start(arguments, format);
-    {
-        // TODO(felix): not thread-safe, move to ui_State
-        static char format_buffer[UI_MAX_STRING_LENGTH];
-
-        int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format, arguments);
-        UI_ASSERT(written < (int)(sizeof format_buffer));
-
-        formatted.data = format_buffer;
-        formatted.count = (u64)written;
-    }
-    va_end(arguments);
-
-    slider_box = ui_push(ui, parent, slider_axis | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE, &slider_style, "%S##slider box", formatted);
-    {
-        if (slider_box->flags & ui_Flag_CLICKED) slider_box->drag_start_value = *value;
-
-        if (slider_box->flags & ui_Flag_DRAGGING) {
-            if (ui->frame->key_pressed['B']) breakpoint;
-            float mouse = v(ui->frame->mouse_position)[slider_axis];
-
-            float delta = mouse - slider_box->drag_start_mouse[slider_axis];
-            float difference = delta * range / style.length;
-            *value = CLAMP(slider_box->drag_start_value + difference, least, most);
-        }
-
-        float travel = style.length - style.handle_length;
-        float first_part_length = (*value - least) * travel / range;
-        float last_part_length  = travel - first_part_length;
-
-        slider_box->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.length };
-        slider_box->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-
-        ui_Flags slider_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND;
-
-        if (first_part_length >= 1.f) {
-            ui_Box *first_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
-            first_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = first_part_length };
-            first_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, first_part);
-
-            ui_Box *first = ui_push(ui, first_part, slider_flags, &slider_style, "%S##slider first", formatted);
-            first->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            first->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
-
-            ui_spacer(ui, first_part);
-        }
-
-        {
-            ui_Box *handle_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
-            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_length };
-            handle_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, handle_part);
-
-            ui_Style handle_style = slider_style;
-            handle_style.border_radius = style.handle_radius;
-            ui_Flags handle_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_SHADOW;
-            ui_Box *handle = ui_push(ui, handle_part, handle_flags, &handle_style, "%S##slider handle", formatted);
-            if (slider_box->flags & ui_Flag_DRAGGING) {
-                handle->style.bg_color = style.dragging.bg_color;
-                handle->style.border_color = style.dragging.border_color;
-            }
-            handle->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_thickness };
-
-            ui_spacer(ui, handle_part);
-        }
-
-        if (last_part_length >= 1.f) {
-            ui_Box *last_part = ui_push(ui, slider_box, !slider_axis, &slider_style, 0);
-            last_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = last_part_length };
-            last_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, last_part);
-
-            ui_Box *last = ui_push(ui, last_part, slider_flags, &slider_style, "%S##slider last", formatted);
-            last->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            last->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
-
-            ui_spacer(ui, last_part);
-        }
-    }
-
-    return slider_box;
-}
+#define UI_IMPLEMENTATION
+#include "base/ui.h"
 
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, parent, ui_Flag_DRAW_COMMAND | flags, style, format, arguments);
+    ui_Box *box = ui_pushv(ui, parent, ui_Flag_DRAW_COMMAND | flags, format, arguments);
     va_end(arguments);
+
+    assert(style != 0);
+    box->style = *style;
 
     Draw_Command *copy = arena_make(frame_arena, 1, Draw_Command);
     *copy = command;
@@ -4358,7 +3630,24 @@ static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *pa
     return box;
 }
 
-static void base_ui_renderer(ui_State *ui, ui_Box *box) {
+static void base_ui_input(ui_State *ui, App_Frame_Info *frame) {
+    ui->window_size[ui_X] = frame->window_size.x;
+    ui->window_size[ui_Y] = frame->window_size.y;
+
+    ui->mouse_position[ui_X] = frame->mouse_position.x;
+    ui->mouse_position[ui_Y] = frame->mouse_position.y;
+
+    _Static_assert(sizeof ui->mouse_clicked == sizeof frame->mouse_clicked, "base & ui types must be identical");
+    memcpy(ui->mouse_clicked, frame->mouse_clicked, sizeof ui->mouse_clicked);
+
+    _Static_assert(sizeof ui->mouse_down == sizeof frame->mouse_down, "base & ui types must be identical");
+    memcpy(ui->mouse_down, frame->mouse_down, sizeof ui->mouse_down);
+
+    _Static_assert(sizeof ui->key_pressed == sizeof frame->key_pressed, "base & ui types must be identical");
+    memcpy(ui->key_pressed, frame->key_pressed, sizeof ui->key_pressed);
+}
+
+static void base_ui_render(ui_State *ui, ui_Box *box) {
     Platform *platform = ui->user_data;
 
     if (box->flags & UI_FLAG_ANY_VISIBLE) {
@@ -4457,13 +3746,12 @@ static void base_ui_renderer(ui_State *ui, ui_Box *box) {
     }
 
     for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        base_ui_renderer(ui, child);
+        base_ui_render(ui, child);
     }
 }
 
-static void base_ui_measure_text(void *user_data, const char *string, int length, ui_Style style, f32 size[2]) {
-    assert(length > 0);
-    String s = { .data = string, .count = (u64)length };
+static void base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]) {
+    String s = { .data = string, .count = cstring_length(string) };
     V2 measure = platform_measure_text(user_data, s, style.font_size);
     size[0] = measure.x;
     size[1] = measure.y;

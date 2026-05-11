@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-03-07
+// https://github.com/felix-u 2026-05-11
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -9,7 +9,20 @@ typedef struct { const char *start, *end; } clex_Data;
 
 typedef enum {
     clex_Token_ERROR = 0,
-    clex_Token_PREPROCESSOR_DIRECTIVE,
+
+    // Preprocessor
+    clex_Token_DEFINE,
+    clex_Token_ELIF,
+    clex_Token_ELSE,
+    clex_Token_ENDIF,
+    clex_Token_ERROR_DIRECTIVE,
+    clex_Token_IF,
+    clex_Token_IFDEF,
+    clex_Token_IFNDEF,
+    clex_Token_INCLUDE,
+    clex_Token_PRAGMA,
+    clex_Token_UNDEF,
+
     clex_Token_COMMENT,
     clex_Token_IDENTIFIER,
     clex_Token_INTEGER,
@@ -18,6 +31,7 @@ typedef enum {
 
     clex_Token__ASCII_BEGIN = ' ' - 1,
     clex_Token_NOT                  = '!',
+    clex_Token_HASHTAG              = '#',
     clex_Token_MODULO               = '%',
     clex_Token_AMPERSAND            = '&',
     clex_Token_OPEN_PAREN           = '(',
@@ -95,18 +109,35 @@ typedef enum {
     clex_PARSE_COMMENTS = 1 << 0,
 } clex_Flags;
 
+#if !defined(CLEX_EXPANSION_STACK_DEPTH)
+    #define CLEX_EXPANSION_STACK_DEPTH 8
+#endif
+
 typedef struct {
-    const char *start, *c, *end;
+    const char *path, *path_end;
+    const char *start;
+    const char *c;
+} clex_Cursor;
+
+typedef const char *clex_define_function(void *user_data, const char *symbol, const char *definition);
+
+typedef struct {
+    clex_Cursor stack[CLEX_EXPANSION_STACK_DEPTH];
+    int depth;
     clex_Flags flags;
     clex_Token token;
+    clex_define_function *define;
+    void *define_data;
 } clex_Lexer;
 
 #if !defined(CLEX_FUNCTION)
     #define CLEX_FUNCTION
 #endif
 
-CLEX_FUNCTION clex_Lexer clex_init(const char *start, const char *end, clex_Flags flags);
-CLEX_FUNCTION      _Bool clex_lex(clex_Lexer *l);
+CLEX_FUNCTION const char *clex_identifier_end(const char *start);
+CLEX_FUNCTION clex_Lexer  clex_init(const char *start, clex_Flags flags, clex_define_function *, void *define_data);
+CLEX_FUNCTION _Bool       clex_lex(clex_Lexer *l);
+CLEX_FUNCTION _Bool       clex_push_file(clex_Lexer *l, const char *path, const char *path_end, const char *start);
 
 
 #endif // CLEX_H
@@ -120,25 +151,6 @@ CLEX_FUNCTION      _Bool clex_lex(clex_Lexer *l);
     #define CLEX_ASSERT assert
 #endif
 
-static const char *clex__cstring_end(const char *s) {
-    const char *end = s;
-    while (*end != 0) end += 1;
-    return end;
-}
-
-CLEX_FUNCTION clex_Lexer clex_init(const char *start, const char *end, clex_Flags flags) {
-    clex_Lexer p = { .start = start, .c = start, .end = end, .flags = flags };
-    return p;
-}
-
-static _Bool clex__is_digit(char c) { return '0' <= c && c <= '9'; }
-
-static _Bool clex__is_newline(clex_Lexer *l, const char *c) {
-    if (*c == '\n') return 1;
-    if (*c == '\r' && c + 1 < l->end && c[1] == '\n') return 1;
-    return 0;
-}
-
 static _Bool clex__is_nondigit(char c) {
     _Bool is = c == '_';
     is = is || ('A' <= c && c <= 'Z');
@@ -146,7 +158,34 @@ static _Bool clex__is_nondigit(char c) {
     return is;
 }
 
-static void clex__skip_identifier(clex_Lexer *l) {
+static _Bool clex__is_digit(char c) { return '0' <= c && c <= '9'; }
+
+CLEX_FUNCTION const char *clex_identifier_end(const char *start) {
+    const char *end = &start[1];
+    while (clex__is_nondigit(*end) || clex__is_digit(*end) || *end == '$') end += 1;
+    return end;
+}
+
+CLEX_FUNCTION clex_Lexer clex_init(const char *start, clex_Flags flags, clex_define_function *define, void *define_data) {
+    CLEX_ASSERT(define != 0);
+    clex_Lexer lexer = {
+        .stack[0] = { .start = start, .c = start },
+        .flags = flags,
+        .define = define,
+        .define_data = define_data,
+    };
+    return lexer;
+}
+
+static _Bool clex__is_newline(clex_Cursor *cursor, const char *c) {
+    // TODO(felix): remove
+    (void)cursor;
+    if (*c == '\n') return 1;
+    if (*c == '\r' && c[1] == '\n') return 1;
+    return 0;
+}
+
+static void clex__skip_identifier(clex_Cursor *c) {
     // identifier:
     //      identifier-start
     //      identifier identifier-continue
@@ -160,30 +199,26 @@ static void clex__skip_identifier(clex_Lexer *l) {
     // XID_Start, XID_continue:
     //      implementation-defined, something to do with unicode? ignore for now
 
-    if (l->c >= l->end || !clex__is_nondigit(*l->c)) return;
-    l->c += 1;
-    for (; l->c < l->end; l->c += 1) {
-        if (!clex__is_nondigit(*l->c) && !clex__is_digit(*l->c)) break;
+    if (!clex__is_nondigit(*c->c) && *c->c != '$') return;
+    c->c += 1;
+    while (clex__is_nondigit(*c->c) || clex__is_digit(*c->c) || *c->c == '$') c->c += 1;
+}
+
+static void clex__skip_to_newline(clex_Cursor *c) {
+    while (!clex__is_newline(c, c->c)) c->c += 1;
+}
+
+static void clex__skip_whitespace_except_newline(clex_Cursor *c) {
+    for (;; c->c += 1) {
+        char ch = *c->c;
+        if (ch != '\t' && ch != '\r' && ch != ' ') break;
     }
 }
 
-static void clex__skip_to_newline(clex_Lexer *l) {
-    for (; l->c < l->end; l->c += 1) {
-        if (clex__is_newline(l, l->c)) break;
-    }
-}
-
-static void clex__skip_whitespace_except_newline(clex_Lexer *l) {
-    for (; l->c < l->end; l->c += 1) {
-        char c = *l->c;
-        if (c != '\t' && c != '\r' && c != ' ') break;
-    }
-}
-
-static void clex__skip_whitespace(clex_Lexer *l) {
-    for (; l->c < l->end; l->c += 1) {
-        char c = *l->c;
-        if (c != '\n' && c != '\t' && c != '\r' && c != ' ') break;
+static void clex__skip_whitespace(clex_Cursor *c) {
+    for (;; c->c += 1) {
+        char ch = *c->c;
+        if (ch != '\n' && ch != '\t' && ch != '\r' && ch != ' ' && !(ch == '\\' && c->c[1] != '\\')) break;
     }
 }
 
@@ -210,70 +245,150 @@ static void clex__push_token(clex__Token_Stack *tokens, clex_Token push) {
     tokens->stack[tokens->count++] = push;
 }
 
+static _Bool clex__skip_escape_sequence(clex_Cursor *c) {
+    _Bool ok = 0;
+    CLEX_ASSERT(*c->c == '\\');
+
+    switch (*(++c->c)) {
+        case '"': case '\'': case '?': case '\\': case 'a': case 'b': case 'f': case 'n': case 'r': case 't': case 'v': {
+            ok = 1;
+            c->c += 1;
+        } break;
+        case '0': {
+            ok = 1;
+            c->c += 1;
+
+            if ('0' <= *c->c && *c->c <= '7') {
+                c->c += 1;
+                if ('0' <= *c->c && *c->c <= '7') c->c += 1;
+            }
+        } break;
+        case 'x': CLEX_ASSERT(0 && "TODO(felix): hex digit escape sequence");
+        default: break;
+    }
+
+    return ok;
+}
+
 CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
-    // clex_Token last_token = l->token;
     l->token = (clex_Token){0};
 
+    // TODO(felix): Not threadsafe. Can we replace this anyway?
     static clex__Token_Stack tokens = {0};
     if (clex__pop_token(&tokens, &l->token)) return 1;
 
     next_token:
 
-    clex__skip_whitespace(l);
+    clex_Cursor *c = &l->stack[l->depth];
+    clex__skip_whitespace(c);
 
-    CLEX_ASSERT(l->c <= l->end);
-    if (l->c == l->end) {
-        l->token = (clex_Token){
-            .kind = clex_Token_END_OK,
-            .data = { .start = l->c, .end = l->c },
-        };
-        return 0;
+    if (*c->c == 0) {
+        if (l->depth > 0) {
+            l->depth -= 1;
+            goto next_token;
+        } else {
+            l->token = (clex_Token){
+                .kind = clex_Token_END_OK,
+                .data = { .start = c->c, .end = c->c },
+            };
+            return 0;
+        }
     }
 
-    switch (*l->c) {
+    switch (*c->c) {
         case '#': {
-            l->c += 1;
-            clex__skip_whitespace(l);
+            // If we find non-whitespace between this and the last newline, this is a punctuator, not a preprocessor directive.
+            for (const char *back = &c->c[-1]; back >= c->start; back -= 1) {
+                if (*back == '\n') break;
+                if (*back == ' ' || *back == '\t') continue;
 
-            const char *directive = l->c;
-            clex__skip_identifier(l);
-            const char *directive_end = l->c;
+                l->token = (clex_Token){
+                    .kind = (clex_Token_Kind)(*c->c),
+                    .data = { .start = c->c, .end = ++c->c },
+                };
+                return 1;
+            }
+
+            c->c += 1;
+            clex__skip_whitespace(c);
+
+            const char *directive = c->c;
+            clex__skip_identifier(c);
+            const char *directive_end = c->c;
             if (directive_end == directive) goto error;
 
-            const char *definition = directive_end;
-            clex__skip_to_newline(l);
-            const char *definition_end = l->c;
+            clex__skip_whitespace(c);
+            const char *definition = c->c;
+            clex_Cursor cursor_at_definition = *c;
+            clex__skip_to_newline(c);
+            const char *definition_end = c->c;
 
             l->token = (clex_Token){
-                .kind = clex_Token_PREPROCESSOR_DIRECTIVE,
                 .data = { .start = directive, .end = directive_end },
                 .data2 = { .start = definition, .end = definition_end },
             };
+
+            if (clex__string_equals(directive, directive_end, "define")) {
+                l->token.kind = clex_Token_DEFINE;
+
+                clex_Cursor *d = &cursor_at_definition;
+                l->token.data.start = d->c;
+
+                clex__skip_identifier(d);
+                if (d->c == l->token.data.start) goto error;
+                l->token.data.end = d->c;
+
+                l->token.data2.start = d->c;
+                clex__skip_to_newline(d);
+                l->token.data2.end = d->c;
+
+                l->define(l->define_data, l->token.data.start, l->token.data2.start);
+            } else if (clex__string_equals(directive, directive_end, "elif")) {
+                l->token.kind = clex_Token_ELIF;
+            } else if (clex__string_equals(directive, directive_end, "else")) {
+                l->token.kind = clex_Token_ELSE;
+            } else if (clex__string_equals(directive, directive_end, "endif")) {
+                l->token.kind = clex_Token_ENDIF;
+            } else if (clex__string_equals(directive, directive_end, "error")) {
+                l->token.kind = clex_Token_ERROR_DIRECTIVE;
+            } else if (clex__string_equals(directive, directive_end, "if")) {
+                l->token.kind = clex_Token_IF;
+
+            } else if (clex__string_equals(directive, directive_end, "ifdef")) {
+                l->token.kind = clex_Token_IFDEF;
+            } else if (clex__string_equals(directive, directive_end, "ifndef")) {
+                l->token.kind = clex_Token_IFNDEF;
+            } else if (clex__string_equals(directive, directive_end, "include")) {
+                l->token.kind = clex_Token_INCLUDE;
+            } else if (clex__string_equals(directive, directive_end, "pragma")) {
+                l->token.kind = clex_Token_PRAGMA;
+            } else if (clex__string_equals(directive, directive_end, "undef")) {
+                l->token.kind = clex_Token_UNDEF;
+            } else CLEX_ASSERT(0 && "TODO(felix)");
+
             return 1;
         } break;
         case '(': case ')': case ',': case '.': case ':': case ';': case'[': case ']': case '{': case '}': case '?': {
             l->token = (clex_Token){
-                .kind = (clex_Token_Kind)(*l->c),
-                .data = { .start = l->c, .end = ++l->c },
+                .kind = (clex_Token_Kind)(*c->c),
+                .data = { .start = c->c, .end = ++c->c },
             };
             return 1;
         } break;
         case '0': {
-            const char *integer = l->c;
+            const char *integer = c->c;
+            char next = c->c[1];
 
-            char nil = 0;
-            const char *next = l->c + 1 < l->end ? &l->c[1] : &nil;
+            if (next == '.') {
+                const char *floating = c->c;
 
-            if (*next == '.') {
-                const char *floating = l->c;
+                c->c += 2;
+                while ('0' <= *c->c && *c->c <= '9') c->c += 1;
+                if (*c->c == 0) goto error;
 
-                l->c += 2;
-                while (l->c < l->end && ('0' <= *l->c && *l->c <= '9')) l->c += 1;
-                if (l->c == l->end || l->c == &next[1]) goto error;
-
-                const char *floating_end = l->c;
-                _Bool float_suffix = *l->c == 'f';
-                l->c += float_suffix;
+                const char *floating_end = c->c;
+                _Bool float_suffix = *c->c == 'f';
+                c->c += float_suffix;
 
                 l->token = (clex_Token){
                     .kind = clex_Token_FLOAT,
@@ -283,21 +398,20 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 return 1;
             }
 
-            if (*next == 'b' || *next == 'B') {
+            if (next == 'b' || next == 'B') {
                 CLEX_ASSERT(0 && "TODO(felix)");
             }
 
-            if (*next == 'x' || *next == 'X') {
-                const char *hex = l->c;
+            if (next == 'x' || next == 'X') {
+                const char *hex = c->c;
 
-                l->c += 2;
-                while (l->c < l->end) {
-                    char c = *l->c & 0x20;
-                    if (!(('0' <= *l->c && *l->c <= '9') || ('a' <= c && c <= 'f'))) break;
-                    l->c += 1;
+                c->c += 2;
+                for (;; c->c += 1) {
+                    char lowercase = *c->c | 0x20;
+                    if (!(('0' <= *c->c && *c->c <= '9') || ('a' <= lowercase && lowercase <= 'f'))) break;
                 }
 
-                const char *hex_end = l->c;
+                const char *hex_end = c->c;
                 // TODO(felix): suffixes
 
                 l->token = (clex_Token){
@@ -308,31 +422,44 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 return 1;
             }
 
-            if ('1' <= *next && *next <= '7') {
-                CLEX_ASSERT(0 && "TODO(felix): octal");
+            if ('1' <= next && next <= '7') {
+                const char *octal = c->c;
+
+                c->c += 1;
+                while ('0' <= *c->c && *c->c <= '7') c->c += 1;
+                if (*c->c == '8' || *c->c == '9') goto error;
+
+                const char *octal_end = c->c;
+                // TODO(felix): suffixes
+
+                l->token = (clex_Token){
+                    .kind = clex_Token_INTEGER,
+                    .data = { .start = octal, .end = octal_end },
+                };
+                return 1;
             }
 
-            if (*next == '8' || *next == '9') goto error;
+            if (next == '8' || next == '9') goto error;
 
             l->token = (clex_Token){
                 .kind = clex_Token_INTEGER,
-                .data = { .start = integer, .end = ++l->c },
+                .data = { .start = integer, .end = ++c->c },
             };
             return 1;
         } break;
         case '!': case '%': case '&': case '*': case '+': case '-': case '/': case '<': case '>': case '^': case '|': // can be immediately followed by `=`
         case '=': case '~':
         {
-            _Bool single_line_comment = *l->c == '/' && (&l->c[1] < l->end && l->c[1] == '/');
+            _Bool single_line_comment = *c->c == '/' && c->c[1] == '/';
             if (single_line_comment) {
-                l->c += 2;
-                const char *comment = l->c;
+                c->c += 2;
+                const char *comment = c->c;
                 const char *comment_end = comment;
 
-                while (comment_end < l->end && !clex__is_newline(l, comment_end)) comment_end += 1;
-                if (comment_end == l->end) goto error;
+                while (*c->c != 0 && !clex__is_newline(c, comment_end)) comment_end += 1;
+                if (*comment_end == 0) goto error;
 
-                l->c = comment_end + 1;
+                c->c = comment_end + 1;
 
                 if (!(l->flags & clex_PARSE_COMMENTS)) goto next_token;
 
@@ -343,10 +470,10 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 return 1;
             }
 
-            const char *operator = l->c;
+            const char *operator = c->c;
 
-            _Bool doubled = l->c + 1 < l->end && l->c[1] == *l->c;
-            l->c += doubled;
+            _Bool doubled = c->c[1] == *c->c;
+            c->c += doubled;
 
             if (doubled) switch (*operator) {
                 case '+': case '-': case '<': case '>': case '=': case '&': case '|': break;
@@ -366,8 +493,8 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 default: goto error;
             }
 
-            _Bool assignment = l->c + 1 < l->end && l->c[1] == '=';
-            l->c += assignment;
+            _Bool assignment = c->c[1] == '=';
+            c->c += assignment;
 
             // only some operators have `!=` form
             if (assignment) switch (*operator) {
@@ -375,7 +502,7 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
                 default: goto error;
             }
 
-            const char *operator_end = ++l->c;
+            const char *operator_end = ++c->c;
 
             // only `<<=` and `>>=` have this form
             if (doubled && assignment && *operator != '<' && *operator != '>') goto error;
@@ -391,17 +518,19 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
         case '\'': {
             // TODO(felix): handle encoding prefix somewhere, probably in the identifier parsing logic
 
-            if (l->c + 2 >= l->end) goto error;
+            if (c->c[1] == 0 || c->c[2] == 0) goto error;
 
-            l->c += 1;
-            const char *character = l->c;
+            c->c += 1;
+            const char *character = c->c;
 
-            if (*l->c == '\\') {
-                CLEX_ASSERT(0 && "TODO(felix): escape sequences");
+            const char *character_end = c->c + 1;
+            if (*c->c == '\\') {
+                if (!clex__skip_escape_sequence(c)) goto error;
+                character_end = c->c;
             }
 
-            const char *character_end = l->c + 1;
-            l->c += 2; // after closing quote
+            if (*character_end != '\'') goto error;
+            c->c += 2; // after closing quote
 
             l->token = (clex_Token){
                 .kind = clex_Token_INTEGER,
@@ -412,27 +541,24 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
         } break;
         case '"': {
             // TODO(felix): handle encoding prefix somewhere, probably in the identifier parsing logic
-            if (++l->c >= l->end) goto error;
+            c->c += 1;
+            if (*c->c == 0) goto error;
 
-            const char *string = l->c;
+            const char *string = c->c;
 
-            for (l->c += 1; l->c < l->end; l->c += 1) {
-                if (*l->c == '"') break;
-                if (*l->c == '\\') {
-                    if (l->c >= l->end) goto error;
-
-                    switch (*(++l->c)) {
-                        case '"': case '?': case '\\': case 'a': case 'b': case 'f': case 'n': case 'r': case 't': case 'v': break;
-                        case '0': CLEX_ASSERT(0 && "TODO(felix): octal digit escape sequence");
-                        case 'x': CLEX_ASSERT(0 && "TODO(felix): hex digit escape sequence");
-                        default: goto error;
-                    }
+            while (*c->c != 0) {
+                if (*c->c == '\\') {
+                    if (!clex__skip_escape_sequence(c)) goto error;
+                    continue;
                 }
-                if (clex__is_newline(l, l->c)) goto error;
-            }
-            if (l->c >= l->end) goto error;
+                if (*c->c == '"') break;
+                if (clex__is_newline(c, c->c)) goto error;
 
-            const char *string_end = l->c++;
+                c->c += 1;
+            }
+            CLEX_ASSERT(*c->c != 0);
+
+            const char *string_end = c->c++;
             l->token = (clex_Token){
                 .kind = clex_Token_STRING,
                 .data = { .start = string, .end = string_end },
@@ -487,9 +613,9 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
     // assignment-operator: one of
     //      = *= /= %= += -= <<= >>= &= ^= |=
 
-    const char *identifier = l->c;
-    clex__skip_identifier(l);
-    const char *identifier_end = l->c;
+    const char *identifier = c->c;
+    clex__skip_identifier(c);
+    const char *identifier_end = c->c;
     _Bool is_identifier = identifier_end > identifier;
     if (is_identifier) {
         l->token = (clex_Token){
@@ -523,39 +649,39 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
     //      character-constant:
     //          encoding-prefix[opt] ' c-char-sequence '
 
-    if ('1' <= *l->c && *l->c <= '9') {
-        const char *number = l->c;
-        while (l->c < l->end && '0' <= *l->c && *l->c <= '9') l->c += 1;
+    if ('1' <= *c->c && *c->c <= '9') {
+        const char *number = c->c;
+        while ('0' <= *c->c && *c->c <= '9') c->c += 1;
 
-        _Bool floating = l->c < l->end && *l->c == '.';
-        l->c += floating;
-        if (floating) while (l->c < l->end && '0' <= *l->c && *l->c <= '9') l->c += 1;
-        const char *number_end = l->c;
+        _Bool floating = *c->c == '.';
+        c->c += floating;
+        if (floating) while ('0' <= *c->c && *c->c <= '9') c->c += 1;
+        const char *number_end = c->c;
 
         _Bool unsigned_suffix = 0, long_suffix = 0, long_long_suffix = 0, bit_suffix = 0, floating_suffix = 0;
         for (;;) {
-            const char *old_c = l->c;
+            const char *old_c = c->c;
 
-            floating_suffix = l->c < l->end && *l->c == 'f';
-            l->c += floating_suffix;
+            floating_suffix = *c->c == 'f';
+            c->c += floating_suffix;
 
-            unsigned_suffix = l->c < l->end && (*l->c | 0x20) == 'u';
-            l->c += unsigned_suffix;
+            unsigned_suffix = (*c->c | 0x20) == 'u';
+            c->c += unsigned_suffix;
 
-            long_suffix = l->c < l->end && (*l->c | 0x20) == 'l';
-            long_long_suffix = long_suffix && l->c + 1 < l->end && l->c[1] == *l->c;
+            long_suffix = (*c->c | 0x20) == 'l';
+            long_long_suffix = long_suffix && c->c[1] == *c->c;
             long_suffix = long_suffix && !long_long_suffix;
-            l->c += long_suffix;
-            l->c += 2 * long_long_suffix;
+            c->c += long_suffix;
+            c->c += 2 * long_long_suffix;
 
             bit_suffix = 0;
-            if ((*l->c | 0x20) == 'w' && l->c + 1 < l->end) {
-                char next = 'B' | (*l->c & 0x20);
-                bit_suffix = l->c[1] == next;
+            if ((*c->c | 0x20) == 'w' && c->c[1] != 0) {
+                char next = 'B' | (*c->c & 0x20);
+                bit_suffix = c->c[1] == next;
             }
-            l->c += 2 * bit_suffix;
+            c->c += 2 * bit_suffix;
 
-            _Bool no_more_suffixes = l->c == old_c;
+            _Bool no_more_suffixes = c->c == old_c;
             if (no_more_suffixes) break;
         }
 
@@ -579,6 +705,23 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
     error:
     l->token = (clex_Token){0};
     return 0;
+}
+
+CLEX_FUNCTION _Bool clex_push_file(clex_Lexer *l, const char *path, const char *path_end, const char *start) {
+    _Bool had_enough_space = 0;
+
+    if (l->depth + 1 < CLEX_EXPANSION_STACK_DEPTH) {
+        clex_Cursor cursor = {
+            .path = path,
+            .path_end = path_end,
+            .start = start,
+            .c = start,
+        };
+        l->stack[++l->depth] = cursor;
+        had_enough_space = 1;
+    }
+
+    return had_enough_space;
 }
 
 

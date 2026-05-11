@@ -188,9 +188,7 @@ void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_
     cpu_draw_rectangle(*surface, 0, 0, surface->clip_right, surface->clip_bottom, clear);
     cpu_draw_commands(*surface, &platform__.font, platform__.base.draw_commands.data, platform__.base.draw_commands.count);
 
-    frame->scroll = 0;
-    memset(frame->mouse_clicked, 0, sizeof frame->mouse_clicked);
-    memset(frame->key_pressed, 0, sizeof frame->key_pressed);
+    app_frame_info_reset_end_of_frame(frame);
     *platform__.base.frame_arena = scratch;
 }
 

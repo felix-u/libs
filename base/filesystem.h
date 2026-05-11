@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-04-15
+// https://github.com/felix-u 2026-05-05
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(FS_H)
@@ -125,7 +125,7 @@ FS_FUNCTION _Bool fs_close(fs_File file) {
 FS_FUNCTION void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size) {
     #if defined(FS_OS_WINDOWS)
     {
-        fs_File temp = fs_open(path, 0);
+        fs_File temp = fs_open(path, fs_File_Flag_READ);
         if (temp.handle != 0) {
             FS_ASSERT(buffer_size <= 0xffffffff);
             unsigned long size = (unsigned long)buffer_size;
@@ -187,7 +187,7 @@ FS_FUNCTION unsigned long long fs_file_size(const char *path) {
 
     #if defined(FS_OS_WINDOWS)
     {
-        fs_File temp = fs_file_open_and_get_size(path, 0, &result);
+        fs_File temp = fs_file_open_and_get_size(path, fs_File_Flag_READ, &result);
         fs_close(temp);
     }
     #elif defined(FS_OS_POSIX)
@@ -357,9 +357,8 @@ FS_FUNCTION _Bool fs_make_folder(const char *relative_path) {
 }
 
 FS_FUNCTION fs_File fs_open(const char *path, fs_File_Flags flags) {
+    FS_ASSERT(flags != 0);
     fs_File result = {0};
-
-    flags += !flags * fs_File_Flag_READ;
 
     _Bool read = !!(flags & fs_File_Flag_READ);
     _Bool write = !!(flags & fs_File_Flag_WRITE);

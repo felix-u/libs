@@ -326,9 +326,7 @@ static void sokol_frame(void *user_data) {
     sg_end_pass();
     sg_commit();
 
-    platform->base.frame.scroll = 0;
-    memset(platform->base.frame.mouse_clicked, 0, sizeof platform->base.frame.mouse_clicked);
-    memset(platform->base.frame.key_pressed, 0, sizeof platform->base.frame.key_pressed);
+    app_frame_info_reset_end_of_frame(&platform->base.frame);
     scratch_end(scratch);
 
     if (platform->base.should_quit) sapp_quit();
