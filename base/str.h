@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-04-20
+// https://github.com/felix-u 2026-05-12
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(STR_H)
@@ -119,6 +119,7 @@ static String string_from_cstring(const char *s) {
 }
 
 STR_FUNCTION String string_from_pointers(const char *start, const char *end) {
+    STR_ASSERT(end >= start);
     String s = { .data = start, .count = (unsigned long long)(end - start) };
     return s;
 }

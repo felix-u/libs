@@ -191,8 +191,7 @@ _Static_assert(sizeof(f64) == 8, "");
     #define os_abort() ExitProcess(1)
     #define os_exit(code) ExitProcess(code)
 
-    // NOTE(felix): meta(link) does nothing yet, but by using it already I won't have to rewrite comments when it's implemented
-    meta(link "Kernel32.lib")
+    meta(link "Kernel32")
     WIN32_CALL(int)           CloseHandle(void *);
     struct _SECURITY_ATTRIBUTES;
     WIN32_CALL(int)           CreateDirectoryA(const char *path, struct _SECURITY_ATTRIBUTES *);
@@ -272,7 +271,7 @@ _Static_assert(sizeof(f64) == 8, "");
     WIN32_CALL(unsigned long) WaitForSingleObject(void *handle, unsigned long milliseconds);
     WIN32_CALL(int)           WriteFile(void *file, const void *buffer, unsigned long number_of_bytes_to_write, unsigned long *number_of_bytes_written, struct _OVERLAPPED *);
 
-    meta(link "Shell32.lib")
+    meta(link "Shell32")
     WIN32_CALL(unsigned short **) CommandLineToArgvW(const unsigned short *command_line, int *number_of_arguments);
     WIN32_CALL(void *) ShellExecuteA(void *handle, const char *operation, const char *file, const char *parameters, const char *directory, int show_command_count);
 #elif BASE_OS == BASE_OS_WASM
@@ -319,7 +318,7 @@ _Static_assert(sizeof(f64) == 8, "");
 #endif
 
 #if BUILD_DEBUG
-    #define assert(expr) do { if(!(expr)) panic("failed assertion `"#expr"`"); } while (0)
+    #define assert(expr) do { if((expr) == 0) panic("failed assertion `"#expr"`"); } while (0)
     #define ensure(expression) assert(expression)
     #define unreachable panic("reached unreachable code")
 #else
@@ -474,6 +473,24 @@ static force_inline f32 floorf_(f32 x) {
 }
 
 // Newton-Raphson
+static inline f64 sqrt_(f64 x) {
+    // false comparison catches nan
+    if (!(x > 0)) return 0;
+
+    union { f64 floating; u64 bits; } value = { .floating = x };
+    value.bits = 0x5fe6eb50c7b537a9 - (value.bits >> 1); // rsqrt initial guess
+
+    f64 half = 0.5 * x;
+    u64 iterations = 2;
+    for (u64 i = 0; i < iterations; i += 1) {
+        value.floating *= 1.5 - half * value.floating * value.floating;
+    }
+
+    f64 result = x * value.floating; // sqrt from rsqrt
+    return result;
+}
+
+// Newton-Raphson
 static inline f32 sqrtf_(f32 x) {
     // false comparison catches nan
     if (!(x > 0)) return 0;
@@ -489,6 +506,22 @@ static inline f32 sqrtf_(f32 x) {
 
     f32 result = x * value.floating; // sqrt from rsqrt
     return result;
+}
+
+static f64 acos_(f64 x) {
+    // Caller must clamp.
+    assert(-1.0 <= x);
+    assert(x <= 1.0);
+
+    f64 negate = x < 0 ? 1.0 : 0;
+    x = x < 0 ? -x : x;
+    f64 r = -0.0187293;
+    r = r * x + 0.0742610;
+    r = r * x - 0.2121144;
+    r = r * x + 1.5707288;
+    r *= sqrt_(1.0 - x);
+
+    return negate * 3.14159265358979 + (1.0 - 2.0 * negate) * r;
 }
 
 #if !LINK_CRT
@@ -598,6 +631,44 @@ static f32 sinf_(f32 x) {
     return sign * result_unsigned;
 }
 
+static force_inline f64 ceil_(f64 x) {
+    assert((f64)INT64_MIN <= x && x <= (f64)INT64_MAX);
+    i64 as_i64 = (i64)x;
+    f64 result = (f64)((f64)as_i64 + (f64)(x > (f64)as_i64));
+    return result;
+}
+
+static force_inline f64 floor_(f64 x) {
+    assert((f64)INT64_MIN <= x && x <= (f64)INT64_MAX);
+    i64 as_i64 = (i64)x;
+    f64 result = (f64)((f64)as_i64 - (f64)(x < (f64)as_i64));
+    return result;
+}
+
+static force_inline f64 round(f64 x) {
+    if (x >= 0) return floor_(x + 0.5);
+    else return ceil_(x - 0.5);
+}
+
+static f64 cos_(f64 x) {
+    static const f64 TAU = 6.2831853071795862;
+    x -= TAU * round(x * (1.0 / TAU));
+
+    if (x < 0) x = -x;
+
+    f64 sign = 1.0;
+    if (x > M_PI_2) { x = M_PI - x; sign = -1.0; }
+
+    f64 x2 = x * x;
+    f64 r = -1.0 / 3628800.0;
+    r = r * x2 + 1.0 / 40320.0;
+    r = r * x2 - 1.0 / 720.0;
+    r = r * x2 + 1.0 / 24.0;
+    r = r * x2 - 0.5;
+    r = r * x2 + 1.0;
+    return sign * r;
+}
+
 static f32 cosf_(f32 x) {
     return sinf_(x + 1.57079632f);
 }
@@ -620,6 +691,12 @@ static f32 expf_(f32 x) {
     memcpy(&scale, &bits, 4);
 
     return p * scale;
+}
+
+static f64 fmod_(f64 x, f64 y) {
+    f64 dividend = x / y;
+    assert((f64)INT64_MIN <= dividend && dividend <= (f64)INT64_MAX);
+    return x - (f64)(i64)dividend * y;
 }
 
 static f32 fmodf_(f32 x, f32 y) {
@@ -684,8 +761,11 @@ static f32 tanhf_(f32 x) {
     #define sinf   __builtin_sinf
     #define tanf   __builtin_tanf
     #if LINK_CRT
+        #define acos  __builtin_acos
+        #define cos   __builtin_cos
         #define cosf  __builtin_cosf
         #define expf  __builtin_expf
+        #define fmod  __builtin_fmod
         #define fmodf __builtin_fmodf
         #define logf  __builtin_logf
         #define tanhf __builtin_tanhf
@@ -698,12 +778,17 @@ static f32 tanhf_(f32 x) {
         #define sinf   sinf_
         #define tanf   tanf_
     #endif
+    #define acos   acos_
+    #define ceil   ceil_
     #define ceilf  ceilf_
     #define expf   expf_
     #define floorf floorf_
+    #define fmod   fmod_
     #define fmodf  fmodf_
+    #define cos    cos_
     #define cosf   cosf_
     #define logf   logf_
+    #define sqrt   sqrt_
     #define sqrtf  sqrtf_
     #define tanhf  tanhf_
 #endif
@@ -712,30 +797,31 @@ static f32 tanhf_(f32 x) {
 
 #if COMPILER_MSVC
     #pragma intrinsic(abs, _abs64, fabs)
-    #define abs_i32(x) abs(x)
-    #define abs_i64(x) _abs64(x)
-    #define abs_f64(x) fabs(x)
+    #define llabs _abs64
     // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
     // NOTE(felix): corecrt_math.h defines fabsf as an inline function casting fabs to f32. Might be good to benchmark that approach versus what I'm doing here
     static force_inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
 #elif COMPILER_CLANG || COMPILER_GCC
     #define INFINITY __builtin_inff()
-
-    #define abs_i32(x) __builtin_abs(x)
-    #define abs_i64(x) __builtin_llabs(x)
-    #define abs_f64(x) __builtin_fabs(x)
     #if LINK_CRT
+        #define ceil   __builtin_ceil
         #define ceilf  __builtin_ceilf
         #define floorf __builtin_floorf
+        #define sqrt   __builtin_sqrt
         #define sqrtf  __builtin_sqrtf
     #else
+        #define ceil   ceil_
         #define ceilf  ceilf_
         #define floorf floorf_
+        #define sqrt   sqrt_
         #define sqrtf  sqrtf_
     #endif
-    #define fabsf(x)   __builtin_fabsf(x)
-    #define floor(x)   __builtin_floor(x)
-    #define isnan(x)   __builtin_isnan(x)
+    #define abs(x)   __builtin_abs(x)
+    #define fabs(x)  __builtin_fabs(x)
+    #define fabsf(x) __builtin_fabsf(x)
+    #define floor(x) __builtin_floor(x)
+    #define isnan(x) __builtin_isnan(x)
+    #define llabs(x) __builtin_llabs(x)
     #if BASE_OS == BASE_OS_WASM
         static f32 atanf(f32 x) {
             bool negative = x < 0;
@@ -765,6 +851,7 @@ static f32 tanhf_(f32 x) {
     #else
         #define atanf(x)     __builtin_atanf(x)
         #define atan2f(y, x) __builtin_atan2f((y), (x))
+        #define pow(x, e)    __builtin_pow((x), (e))
         #define powf(x, e)   __builtin_powf((x), (e))
         #define roundf(x)    __builtin_roundf(x)
     #endif
@@ -894,7 +981,7 @@ static String string_builder_string(String_Builder builder);
 #define FS_FUNCTION static
 #define FS_NO_SYSTEM_INCLUDE
 #include "base/filesystem.h"
-static String os_read_entire_file(Arena *arena, const char *path);
+static String os_read_entire_file(Arena *arena, const char *path, bool *ok);
 static   bool os_write_entire_file(const char *path, const void *data, u64 count);
 
 typedef enum {
@@ -1119,12 +1206,6 @@ static force_inline bool assert_expression(bool value) {
     assert(value);
     return true;
 }
-
-// TODO(felix): replace with metaprogram lib specifier
-#if BASE_OS == BASE_OS_WINDOWS
-    #pragma comment(lib, "kernel32.lib")
-    #pragma comment(lib, "shell32.lib") // needed by os_get_arguments
-#endif
 
 #if BUILD_DEBUG && COMPILER_MSVC
     #pragma section(".raddbg", read, write)
@@ -2374,14 +2455,15 @@ static void os_heap_free(void *pointer) {
     #include "base/filesystem.h"
 #endif
 
-static String os_read_entire_file(Arena *arena, const char *path) {
+static String os_read_entire_file(Arena *arena, const char *path, bool *ok) {
+    *ok = false;
     String result = {0};
     fs_File file = fs_file_open_and_get_size(path, fs_File_Flag_READ, &result.count);
 
     char *data = arena_make(arena, result.count + 1, char);
     result.count = fs_read_entire_file(file, data, result.count);
     data[result.count] = 0;
-    if (result.count == 0) log_error("unable to read '%s'", path);
+    *ok = result.count > 0;
 
     fs_close(file);
     result.data = data;
@@ -2424,9 +2506,21 @@ static void log_internal_with_location_v(const char *file, u64 line, const char 
     print("\n");
 
     #if BUILD_DEBUG
-        print("%s:%llu:%s(): logged here\n", file, line, func);
+    {
+        #if BASE_OS == BASE_OS_WINDOWS
+        {
+            print("%s(%llu,1): note: in %s()", file, line, func);
+        }
+        #else
+        {
+            print("%s:%llu: in %s()", file, line, func);
+        }
+        #endif
+    }
     #else
+    {
         (void)(file); (void)(line); (void)(func);
+    }
     #endif
 }
 
@@ -2857,7 +2951,7 @@ static bool build_expect_include(Arena *arena, clex_Lexer *lexer, String *file) 
     }
 
     const char *copy = cstring_from_string(arena, base_string_from_clex_data(lexer->token.data2));
-    clex_Lexer include = clex_init(copy, 0, base_clex_define, 0);
+    clex_Lexer include = clex_init(0, 0, copy, 0, base_clex_define, 0);
     clex_lex(&include);
     if (include.token.kind != clex_Token_STRING) {
         log_error("expected string after `#include`");
@@ -3031,6 +3125,8 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     } Build_Object;
     Array(Build_Object) objects = {0};
 
+    Array(const char *) link_libraries = {0};
+
     const char *object_extension = build_object_extension[target_os];
 
     const char *build_folder = "build";
@@ -3043,7 +3139,9 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         }
     }
 
-    String code = os_read_entire_file(&scratch, &c_file_path[3]);
+    bool ok = false;
+    String code = os_read_entire_file(&scratch, &c_file_path[3], &ok);
+    assert(ok);
 
     String_Builder metaprogram_code = {0};
     String metaprogram_output_file = {0};
@@ -3056,7 +3154,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     bool TODO_REMOVE_THIS = false;
 
     Base_Clex_Define *define_state = arena_make(&scratch, 1, Base_Clex_Define);
-    clex_Lexer lexer = clex_init(code.data, 0, base_clex_define, define_state);
+    clex_Lexer lexer = clex_init(&c_file_path[3], &c_file_path[cstring_length(c_file_path)], code.data, 0, base_clex_define, define_state);
     f64 time_at_parse_start = time_relative_timestamp();
     while (clex_lex(&lexer)) {
         String preprocess_data2 = base_string_from_clex_data(lexer.token.data2);
@@ -3065,7 +3163,11 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                 if (TODO_REMOVE_THIS) print("#include %S\n", preprocess_data2);
 
                 String path = preprocess_data2;
+
                 if (path.data[0] == '<') { /* skip system includes for now */ }
+                else if (string_has(path, S("stb_truetype.h")).ok) {
+                    // TODO(felix): Remove once preprocessor isn't wrongly trying to take #includes inside inactive #if blocks, which stb_truetype.h has
+                }
                 else if (path.data[0] == '"') {
                     if (path.data[path.count - 1] != '"') {
                         log_error("`#include` path has unterminated `\"`");
@@ -3078,8 +3180,13 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                     path = string_range(path, 1, path.count - 1);
 
                     const char *read_path = cstring_print(&scratch, "%s%S", &source_folder[3], path);
-                    String file = os_read_entire_file(&scratch, read_path);
-                    bool ok = clex_push_file(&lexer, path.data, &path.data[path.count], file.data);
+                    String file = os_read_entire_file(&scratch, read_path, &ok);
+                    if (!ok) {
+                        log_error("failed reading '%s'", read_path);
+                        return 1;
+                    }
+
+                    ok = clex_push_file(&lexer, path.data, &path.data[path.count], file.data);
                     assert(ok);
                 } else {
                     log_error("expected `<` or `\"` following `#include`; got `%c`", path.data[0]);
@@ -3135,7 +3242,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
                 Arena definition_scratch = scratch;
                 const char *copy = cstring_from_string(&definition_scratch, base_string_from_clex_data(lexer.token.data2));
-                clex_Lexer definition = clex_init(copy, 0, base_clex_define, 0);
+                clex_Lexer definition = clex_init(0, 0, copy, 0, base_clex_define, 0);
                 while (clex_lex(&definition)) {
                     token_data = base_string_from_clex_data(definition.token.data);
                     aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, S("BASE_OS"));
@@ -3296,14 +3403,17 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
                 const char *output_name = cstring_print(&scratch, "meta.generated.%s", object_extension);
                 const char *output_in_build_folder = cstring_print(&scratch, "%s/%s", build_folder, output_name);
-                bool ok = os_write_entire_file(output_in_build_folder, bytes, byte_count);
+                ok = os_write_entire_file(output_in_build_folder, bytes, byte_count);
                 if (!ok) return 1;
 
                 Build_Object object = { .object_path = output_name };
                 push(&scratch, &objects, object);
             } else {
-                input = os_read_entire_file(&scratch, input_path);
-                if (input.count == 0) return 1;
+                input = os_read_entire_file(&scratch, input_path, &ok);
+                if (!ok) {
+                    log_error("failed reading `meta(embed)` input '%s'", input_path);
+                    return 1;
+                }
 
                 String qualifiers = S("static const char ");
                 String assignment = S("[] = {");
@@ -3378,14 +3488,27 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
             if (!build_eat_token(&lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
         } else if (string_equals(token_data, S("link"))) {
-            // TODO(felix)
+            if (!build_eat_token(&lexer, clex_Token_STRING, "error: expected `meta(link \"Library\")`")) return 1;
+            String library = base_string_from_clex_data(lexer.token.data);
+            if (library.count == 0) {
+                log_error("link library name is empty");
+                return 1;
+            }
+            push(&scratch, &link_libraries, cstring_from_string(&scratch, library));
         } else {
             log_error("unsupported metaprogram directive '%S'", token_data);
             return 1;
         }
     }
     if (lexer.token.kind == clex_Token_ERROR) {
-        log_error("parser error");
+        int column = 0;
+        const char *path = 0, *path_end = 0;
+        int line = clex_get_current_location(&lexer, &column, &path, &path_end);
+
+        String s = string_from_pointers(path, path_end);
+        print("%S(%d,%d): error: parser error\n", s, line, column);
+        // TODO(felix): print absolute path
+        // TODO(felix): print parser message
         return 1;
     }
 
@@ -3493,7 +3616,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
 
                 const char *pdb_file = cstring_print(&scratch, "%S.pdb", object_basename);
                 if (fs_exists(pdb_file)) {
-                    bool ok = fs_remove_file(pdb_file);
+                    ok = fs_remove_file(pdb_file);
                     if (!ok) log_internal("warning: failure removing old PDB '%s'", pdb_file);
                 }
             }
@@ -3550,6 +3673,19 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         if (linker == Build_Linker_CLANG && use_asan) push(&scratch, &link, "-fsanitize=address");
 
         for (u64 i = 0; i < objects.count; i += 1) push(&scratch, &link, objects.data[i].object_path);
+
+        const char *link_prefix = "";
+        const char *link_suffix = "";
+        switch (linker) {
+            case Build_Linker_MSVC: link_suffix = ".lib"; break;
+            case Build_Linker_CLANG: link_prefix = "-l"; break;
+            default: unreachable;
+        }
+        for (u64 i = 0; i < link_libraries.count; i += 1) {
+            const char *library = link_libraries.data[i];
+            const char *to_push = cstring_print(&scratch, "%s%s%s", link_prefix, library, link_suffix);
+            push(&scratch, &link, to_push);
+        }
 
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];

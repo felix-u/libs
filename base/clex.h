@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-11
+// https://github.com/felix-u 2026-05-12
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -134,8 +134,9 @@ typedef struct {
     #define CLEX_FUNCTION
 #endif
 
+CLEX_FUNCTION int         clex_get_current_location(const clex_Lexer *l, int *column, const char **path, const char **path_end);
 CLEX_FUNCTION const char *clex_identifier_end(const char *start);
-CLEX_FUNCTION clex_Lexer  clex_init(const char *start, clex_Flags flags, clex_define_function *, void *define_data);
+CLEX_FUNCTION clex_Lexer  clex_init(const char *path, const char *path_end, const char *bytes, clex_Flags flags, clex_define_function *, void *define_data);
 CLEX_FUNCTION _Bool       clex_lex(clex_Lexer *l);
 CLEX_FUNCTION _Bool       clex_push_file(clex_Lexer *l, const char *path, const char *path_end, const char *start);
 
@@ -150,6 +151,24 @@ CLEX_FUNCTION _Bool       clex_push_file(clex_Lexer *l, const char *path, const 
     #include <assert.h>
     #define CLEX_ASSERT assert
 #endif
+
+CLEX_FUNCTION int clex_get_current_location(const clex_Lexer *l, int *column, const char **path, const char **path_end) {
+    clex_Cursor cursor = l->stack[l->depth];
+    *path = cursor.path;
+    *path_end = cursor.path_end;
+
+    int line = 1;
+    *column = 1;
+
+    for (const char *c = cursor.start; c < cursor.c; c += 1) {
+        if (*c == '\n') {
+            line += 1;
+            *column = 0;
+        } else *column += 1;
+    }
+
+    return line;
+}
 
 static _Bool clex__is_nondigit(char c) {
     _Bool is = c == '_';
@@ -166,10 +185,15 @@ CLEX_FUNCTION const char *clex_identifier_end(const char *start) {
     return end;
 }
 
-CLEX_FUNCTION clex_Lexer clex_init(const char *start, clex_Flags flags, clex_define_function *define, void *define_data) {
+CLEX_FUNCTION clex_Lexer clex_init(const char *path, const char *path_end, const char *bytes, clex_Flags flags, clex_define_function *define, void *define_data) {
     CLEX_ASSERT(define != 0);
     clex_Lexer lexer = {
-        .stack[0] = { .start = start, .c = start },
+        .stack[0] = {
+            .path = path,
+            .path_end = path_end,
+            .start = bytes,
+            .c = bytes,
+        },
         .flags = flags,
         .define = define,
         .define_data = define_data,
@@ -451,12 +475,23 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
         case '=': case '~':
         {
             _Bool single_line_comment = *c->c == '/' && c->c[1] == '/';
-            if (single_line_comment) {
+            _Bool old_comment = *c->c == '/' && c->c[1] == '*';
+            _Bool any_comment = single_line_comment || old_comment;
+
+            if (any_comment) {
                 c->c += 2;
                 const char *comment = c->c;
                 const char *comment_end = comment;
 
-                while (*c->c != 0 && !clex__is_newline(c, comment_end)) comment_end += 1;
+                if (single_line_comment) {
+                    while (comment_end != 0 && !clex__is_newline(c, comment_end)) comment_end += 1;
+                } else {
+                    CLEX_ASSERT(old_comment);
+                    while (comment_end != 0) {
+                        if (*comment_end == '*' && comment_end[1] == '/') break;
+                        comment_end += 1;
+                    }
+                }
                 if (*comment_end == 0) goto error;
 
                 c->c = comment_end + 1;
