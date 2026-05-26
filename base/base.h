@@ -69,7 +69,7 @@ _Static_assert(sizeof(f64) == 8, "");
         #include <fcntl.h>
         #include <unistd.h>
     #include <stdio.h> // TODO(felix): only needed for FILE. remove!
-#elif BASE_OS == BASE_OS_MACOS
+#elif BASE_OS & BASE_OS_ANY_APPLE
     // TODO(felix): same notes as above
 
     #define _WSTATUS(x)    ((x) & 0177)
@@ -873,8 +873,9 @@ static bool is_power_of_2(u64 x);
 
 static force_inline f32 radians_from_degrees(f32 degrees);
 
-static  V4 rgba_float_from_hex(u32 hex);
-static u32 rgba_hex_from_float(V4 rgba);
+static void rgba_double_from_hex(u32 hex, double rgba[4]);
+static V4   rgba_float_from_hex(u32 hex);
+static u32  rgba_hex_from_float(V4 rgba);
 
 static force_inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin);
 static       inline f32  f32_stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds);
@@ -1035,7 +1036,12 @@ typedef enum {
     Build_Mode_COUNT,
 } Build_Mode;
 
-static u32 build_default_everything(Arena scratch, const char *program_name, u8 target_os);
+typedef struct {
+    u8 target_os;
+    const char *apple_provision_path;
+} Build_Options;
+
+static u32 build_default_everything(Arena scratch, const char *program_name, Build_Options *build_options);
 
 // NOTE(felix): synced with ui_Key
 typedef enum {
@@ -1078,6 +1084,10 @@ typedef struct {
     bool mouse_down[App_Mouse_MAX_VALUE];
     bool key_down[App_Key_MAX_VALUE];
     bool key_pressed[App_Key_MAX_VALUE];
+    f32 safe_area_inset_left;
+    f32 safe_area_inset_top;
+    f32 safe_area_inset_right;
+    f32 safe_area_inset_bottom;
 } App_Frame_Info;
 
 static void app_frame_info_reset_end_of_frame(App_Frame_Info *);
@@ -1190,8 +1200,8 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
 #define UI_FUNCTION static
 #include "base/ui.h"
 
+static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame);
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
-static void    base_ui_input(ui_State *ui, App_Frame_Info *frame);
 static void    base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]);
 static void    base_ui_render(ui_State *ui, ui_Box *box);
 
@@ -1229,14 +1239,16 @@ raddbg_type_view(String, view:text($.data, size=count))
 static void program(void);
 
 #if LINK_CRT || (BASE_OS & BASE_OS_ANY_POSIX)
-    static int argument_count_;
-    static char **arguments_;
+    static int main_argc__;
+    static char **main_argv__;
 
-    int main(int argument_count, char **arguments) {
-        argument_count_ = argument_count;
-        arguments_ = arguments;
+    static int main_return_value__;
+
+    int main(int argc, char **argv) {
+        main_argc__ = argc;
+        main_argv__ = argv;
         program();
-        os_exit(0);
+        os_exit(main_return_value__);
     }
 #elif BASE_OS == BASE_OS_WINDOWS || BASE_OS == BASE_OS_WASM
     void entrypoint(void) {
@@ -1281,8 +1293,8 @@ static const char **os_get_arguments(Arena *arena, u64 *out_count) {
     #elif BASE_OS & BASE_OS_ANY_POSIX
     {
         (void)arena;
-        *out_count = (u64)argument_count_;
-        arguments = (const char **)arguments_;
+        *out_count = (u64)main_argc__;
+        arguments = (const char **)main_argv__;
     }
     #elif BASE_OS == BASE_OS_WASM
     {
@@ -1479,6 +1491,14 @@ static bool is_power_of_2(u64 x) {
 }
 
 static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * PI_F32 / 180.f; }
+
+static void rgba_double_from_hex(u32 hex, double rgba[4]) {
+    double pack = 1.0 / 255.0;
+    rgba[0] = pack * (hex >> 24);
+    rgba[1] = pack * ((hex >> 16) & 0xff);
+    rgba[2] = pack * ((hex >> 8) & 0xff);
+    rgba[3] = pack * (hex & 0xff);
+}
 
 static V4 rgba_float_from_hex(u32 hex) {
     f32 pack = 1.f / 255.f;
@@ -2593,6 +2613,8 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
     }
     #elif BASE_OS & BASE_OS_ANY_POSIX
     {
+        (void)scratch;
+
         pid_t pid = fork();
         if (pid < 0) {
             log_error("unable to fork() to start process '%s' (errno=%d)", arguments[0], errno);
@@ -2821,12 +2843,21 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
     },
     [Build_Linker_CLANG][BASE_OS_MACOS] = {
         "clang",
-        "-framework", "CoreFoundation",
-        "-framework", "Metal",
-        "-framework", "Cocoa",
-        "-framework", "Metalkit",
-        "-framework", "Quartz",
-        "-framework", "AudioToolbox",
+        // TODO(felix): Move to meta(framework "") directive (see what the Odin syntax is).
+        // "-framework", "CoreFoundation",
+        // "-framework", "Metal",
+        // "-framework", "Cocoa",
+        // "-framework", "Metalkit",
+        // "-framework", "Quartz",
+        // "-framework", "AudioToolbox",
+        0,
+    },
+    [Build_Linker_CLANG][BASE_OS_IOS_DEVICE] = {
+        "clang",
+        0,
+    },
+    [Build_Linker_CLANG][BASE_OS_IOS_SIMULATOR] = {
+        "clang",
         0,
     },
     [Build_Linker_CLANG][BASE_OS_WASM] = {
@@ -2852,6 +2883,7 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
     },
 };
 
+// TODO(felix): Seems this can be compiler-specific only. OS-specific versions repeat exactly.
 static const char *build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_COUNT][BASE_OS_COUNT][BUILD_FLAGS_MAX] = {
     [Build_Mode_DEBUG] = {
         [Build_Compiler_MSVC][BASE_OS_WINDOWS] = { "-MTd", "-Z7", 0 },
@@ -2869,6 +2901,20 @@ static const char *build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_CO
             "-O0",
             0,
         },
+        [Build_Compiler_CLANG][BASE_OS_IOS_DEVICE] = {
+            "-g3",
+            "-fsanitize=undefined",
+            "-fsanitize-trap",
+            "-O0",
+            0,
+        },
+        [Build_Compiler_CLANG][BASE_OS_IOS_SIMULATOR] = {
+            "-g3",
+            "-fsanitize=undefined",
+            "-fsanitize-trap",
+            "-O0",
+            0,
+        },
         // NOTE(felix): with clang for wasm, ubsan traps with no stack trace, which at the stage in WASM platform development I'm at while writing this, gets in the way of the stack traces for my `panic()`s in C code.
         // TODO(felix): make this configurable - the sanitisers are helpful too
         [Build_Compiler_CLANG][BASE_OS_WASM] = {
@@ -2880,10 +2926,12 @@ static const char *build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_CO
         },
     },
     [Build_Mode_RELEASE] = {
-        [Build_Compiler_MSVC][BASE_OS_WINDOWS]  = { "-MT", "-O2", 0 },
-        [Build_Compiler_CLANG][BASE_OS_WINDOWS] = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_MACOS]   = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_WASM]    = { "-O3", 0 },
+        [Build_Compiler_MSVC][BASE_OS_WINDOWS]        = { "-MT", "-O2", 0 },
+        [Build_Compiler_CLANG][BASE_OS_WINDOWS]       = { "-O3", 0 },
+        [Build_Compiler_CLANG][BASE_OS_MACOS]         = { "-O3", 0 },
+        [Build_Compiler_CLANG][BASE_OS_IOS_DEVICE]    = { "-O3", 0 },
+        [Build_Compiler_CLANG][BASE_OS_IOS_SIMULATOR] = { "-O3", 0 },
+        [Build_Compiler_CLANG][BASE_OS_WASM]          = { "-O3", 0 },
     },
 };
 
@@ -2923,15 +2971,19 @@ static const char *build_compiler_out[Build_Compiler_COUNT] = {
 };
 
 static const char *build_object_extension[BASE_OS_COUNT] = {
-    [BASE_OS_WINDOWS] = "obj",
-    [BASE_OS_MACOS] = "o",
-    [BASE_OS_WASM] = "o",
+    [BASE_OS_WINDOWS]       = "obj",
+    [BASE_OS_MACOS]         = "o",
+    [BASE_OS_IOS_DEVICE]    = "o",
+    [BASE_OS_IOS_SIMULATOR] = "o",
+    [BASE_OS_WASM]          = "o",
 };
 
 static const char *build_binary_extension[BASE_OS_COUNT] = {
-    [BASE_OS_WINDOWS] = "exe",
-    [BASE_OS_MACOS] = "bin",
-    [BASE_OS_WASM] = "wasm",
+    [BASE_OS_WINDOWS]       = "exe",
+    [BASE_OS_MACOS]         = "bin",
+    [BASE_OS_IOS_DEVICE]    = "bin",
+    [BASE_OS_IOS_SIMULATOR] = "bin",
+    [BASE_OS_WASM]          = "wasm",
 };
 
 typedef Array(const char *) Array_cstring;
@@ -2951,7 +3003,9 @@ static bool build_expect_include(Arena *arena, clex_Lexer *lexer, String *file) 
     }
 
     const char *copy = cstring_from_string(arena, base_string_from_clex_data(lexer->token.data2));
+
     clex_Lexer include = clex_init(0, 0, copy, 0, base_clex_define, 0);
+
     clex_lex(&include);
     if (include.token.kind != clex_Token_STRING) {
         log_error("expected string after `#include`");
@@ -2961,13 +3015,30 @@ static bool build_expect_include(Arena *arena, clex_Lexer *lexer, String *file) 
     return true;
 }
 
-static bool build_eat_token(clex_Lexer *lexer, clex_Token_Kind expected, const char *format, ...) {
+static bool build_eat_token(clex_Lexer *parent, clex_Lexer *lexer, clex_Token_Kind expected, const char *format, ...) {
     clex_lex(lexer);
     bool ok = lexer->token.kind == expected;
 
     va_list arguments;
     va_start(arguments, format);
-    if (!ok) log_internal_v(format, arguments);
+    if (!ok) {
+        print_(format, arguments);
+
+        int column = 0;
+        const char *path = 0, *path_end = 0;
+        int line = 0;
+        if (parent != 0) {
+            clex_Lexer shifted = *parent;
+            shifted.stack[shifted.depth].c = lexer->stack[lexer->depth].c;
+            line = clex_get_current_location(&shifted, &column, &path, &path_end);
+        } else {
+            line = clex_get_current_location(lexer, &column, &path, &path_end);
+        }
+
+        String path_string = string_from_pointers(path, path_end);
+        String token = base_string_from_clex_data(lexer->token.data);
+        print("; got '%S' in %S:%d:%d\n", token, path_string.count > 0 ? path_string : S("<MACRO>"), line, column);
+    }
     va_end(arguments);
 
     return ok;
@@ -3099,7 +3170,10 @@ static const char build_wasm_html_file[] = STRINGIFY(
     </script>
 );
 
-static u32 build_default_everything(Arena scratch, const char *program_name, u8 target_os) {
+static u32 build_default_everything(Arena scratch, const char *program_name, Build_Options *options) {
+    u8 target_os = BASE_OS;
+    if (options != 0 && options->target_os != 0) target_os = options->target_os;
+
     u32 exit_code = 1;
 
     u64 argument_count = 0;
@@ -3112,9 +3186,11 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     const char *c_file_path = cstring_print(&scratch, "%smain.c", source_folder);
 
     static const Build_Compiler build_default_compiler[BASE_OS_COUNT] = {
-        [BASE_OS_WINDOWS] = Build_Compiler_MSVC,
-        [BASE_OS_MACOS] = Build_Compiler_CLANG,
-        [BASE_OS_WASM] = Build_Compiler_CLANG,
+        [BASE_OS_WINDOWS]       = Build_Compiler_MSVC,
+        [BASE_OS_MACOS]         = Build_Compiler_CLANG,
+        [BASE_OS_IOS_DEVICE]    = Build_Compiler_CLANG,
+        [BASE_OS_IOS_SIMULATOR] = Build_Compiler_CLANG,
+        [BASE_OS_WASM]          = Build_Compiler_CLANG,
     };
     Build_Compiler compiler = build_default_compiler[target_os];
 
@@ -3125,6 +3201,8 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     } Build_Object;
     Array(Build_Object) objects = {0};
 
+    Array(const char *) compiler_extra_flags = {0};
+    Array(const char *) linker_extra_flags = {0};
     Array(const char *) link_libraries = {0};
 
     const char *object_extension = build_object_extension[target_os];
@@ -3248,14 +3326,16 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                     aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, S("BASE_OS"));
 
                     if (aware_of_this_static_if_condition) {
-                        if (!build_eat_token(&definition, clex_Token_EQUALITY_CHECK, "error: %s", error)) return 1;
+                        if (!build_eat_token(&lexer, &definition, clex_Token_EQUALITY_CHECK, "error: %s", error)) return 1;
 
-                        if (!build_eat_token(&definition, clex_Token_IDENTIFIER, "error: %s", error)) return 1;
+                        if (!build_eat_token(&lexer, &definition, clex_Token_IDENTIFIER, "error: %s", error)) return 1;
                         token_data = base_string_from_clex_data(definition.token.data);
 
                         u8 os_to_check = 0;
                         if (string_equals(token_data, S("BASE_OS_WINDOWS"))) os_to_check = BASE_OS_WINDOWS;
                         else if (string_equals(token_data, S("BASE_OS_MACOS"))) os_to_check = BASE_OS_MACOS;
+                        else if (string_equals(token_data, S("BASE_OS_IOS_DEVICE"))) os_to_check = BASE_OS_IOS_DEVICE;
+                        else if (string_equals(token_data, S("BASE_OS_IOS_SIMULATOR"))) os_to_check = BASE_OS_IOS_SIMULATOR;
                         else if (string_equals(token_data, S("BASE_OS_LINUX"))) os_to_check = BASE_OS_LINUX;
                         else if (string_equals(token_data, S("BASE_OS_WASM"))) os_to_check = BASE_OS_WASM;
                         else {
@@ -3294,7 +3374,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
         clex_lex(&lexer);
         if (lexer.token.kind != '(') continue;
 
-        if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `meta(...)`")) return 1;
+        if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `meta(...)`")) return 1;
         token_data = base_string_from_clex_data(lexer.token.data);
 
         // TODO(felix): remove
@@ -3306,16 +3386,16 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                 return 1;
             }
 
-            if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
 
             if (!build_expect_include(&scratch, &lexer, &metaprogram_output_file)) return 1;
         } else if (string_equals(token_data, S("embed"))) {
             const char *usage = "`meta(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
 
-            if (!build_eat_token(&lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
             String input_file = base_string_from_clex_data(lexer.token.data);
 
-            if (!build_eat_token(&lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
 
             // TODO(felix): get actual type info once we've got a C parser
 
@@ -3343,15 +3423,15 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                     return 1;
                 }
 
-                if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, "error: expected this: %s", usage)) return 1;
+                if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected this: %s", usage)) return 1;
                 names[i] = base_string_from_clex_data(lexer.token.data);
 
                 if (i == 0) {
-                    if (!build_eat_token(&lexer, '[', "error: expected this: %s", usage)) return 1;
-                    if (!build_eat_token(&lexer, ']', "error: expected this: %s", usage)) return 1;
+                    if (!build_eat_token(0, &lexer, '[', "error: expected this: %s", usage)) return 1;
+                    if (!build_eat_token(0, &lexer, ']', "error: expected this: %s", usage)) return 1;
                 }
 
-                if (!build_eat_token(&lexer, ';', "error: expected this: %s", usage)) return 1;
+                if (!build_eat_token(0, &lexer, ';', "error: expected this: %s", usage)) return 1;
             }
 
             String variable_name = names[0];
@@ -3360,7 +3440,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             String input = {0};
             const char *input_path = cstring_from_string(&scratch, input_file);
 
-            bool embed_via_object = target_os == BASE_OS_WINDOWS || target_os == BASE_OS_MACOS;
+            bool embed_via_object = target_os == BASE_OS_WINDOWS || !!(target_os & BASE_OS_ANY_APPLE);
             if (embed_via_object) {
                 static bool embedded_once_already = false;
                 if (embedded_once_already && embed_via_object) {
@@ -3375,10 +3455,15 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                     return 1;
                 }
 
+                // TODO(felix): Handle iOS separately from iOS-simulator.
                 object_Bundle_Flags flags = object_Bundle_READ;
-                if (target_os == BASE_OS_WINDOWS) flags |= object_Bundle_COFF;
-                else if (target_os == BASE_OS_MACOS) flags |= object_Bundle_MACHO;
-                else unreachable;
+                switch (target_os) {
+                    case BASE_OS_WINDOWS: flags |= object_Bundle_COFF; break;
+                    case BASE_OS_IOS_DEVICE: flags |= object_Bundle_MACHO_IOS; break;
+                    case BASE_OS_IOS_SIMULATOR: flags |= object_Bundle_MACHO_IOS_SIMULATOR; break;
+                    case BASE_OS_MACOS: flags |= object_Bundle_MACHO_MACOS; break;
+                    default: unreachable;
+                }
 
                 const char *array_name = variable_name.data;
                 u32 array_name_length = (u32)variable_name.count;
@@ -3471,9 +3556,9 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             specified_already = true;
 
             const char *error = "error: expected `link_libc = true/false`";
-            if (!build_eat_token(&lexer, '=', error)) return 1;
+            if (!build_eat_token(0, &lexer, '=', error)) return 1;
 
-            if (!build_eat_token(&lexer, clex_Token_IDENTIFIER, error)) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, error)) return 1;
             token_data = base_string_from_clex_data(lexer.token.data);
 
             meta_link_crt_override = true;
@@ -3486,15 +3571,52 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
                 return 1;
             }
 
-            if (!build_eat_token(&lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
         } else if (string_equals(token_data, S("link"))) {
-            if (!build_eat_token(&lexer, clex_Token_STRING, "error: expected `meta(link \"Library\")`")) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(link \"Library\")`")) return 1;
             String library = base_string_from_clex_data(lexer.token.data);
             if (library.count == 0) {
                 log_error("link library name is empty");
                 return 1;
             }
-            push(&scratch, &link_libraries, cstring_from_string(&scratch, library));
+
+            // TODO(felix): Remove this hack once parser correctly handles #if branches.
+            bool link_this = true;
+            if (target_os & BASE_OS_ANY_APPLE) {
+                if (string_equals(library, S("Kernel32"))) link_this = false;
+                else if (string_equals(library, S("Shell32"))) link_this = false;
+            }
+
+            if (link_this) push(&scratch, &link_libraries, cstring_from_string(&scratch, library));
+        } else if (string_equals(token_data, S("compile_flag"))) {
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(compile_flag \"...\")`")) return 1;
+            String flag = base_string_from_clex_data(lexer.token.data);
+            if (flag.count == 0) {
+                log_error("extra compile flag is empty string");
+                return 1;
+            }
+
+            push(&scratch, &compiler_extra_flags, cstring_from_string(&scratch, flag));
+        } else if (string_equals(token_data, S("link_flag"))) {
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(link_flag \"...\")`")) return 1;
+            String flag = base_string_from_clex_data(lexer.token.data);
+            if (flag.count == 0) {
+                log_error("extra linker flag is empty string");
+                return 1;
+            }
+
+            push(&scratch, &linker_extra_flags, cstring_from_string(&scratch, flag));
+        } else if (string_equals(token_data, S("compile_and_link_flag"))) {
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(compile_and_link_flag \"...\")`")) return 1;
+            String flag = base_string_from_clex_data(lexer.token.data);
+            if (flag.count == 0) {
+                log_error("extra compile and link flag is empty string");
+                return 1;
+            }
+
+            const char *as_cstring = cstring_from_string(&scratch, flag);
+            push(&scratch, &linker_extra_flags, as_cstring);
+            push(&scratch, &compiler_extra_flags, as_cstring);
         } else {
             log_error("unsupported metaprogram directive '%S'", token_data);
             return 1;
@@ -3533,7 +3655,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
     if (meta_link_crt_override) {
         link_crt = meta_link_crt_override_value;
     } else {
-        link_crt = target_os == BASE_OS_MACOS;
+        link_crt = !!(target_os & BASE_OS_ANY_APPLE);
     }
 
     // TODO(felix): should be handled by metaprogram
@@ -3583,6 +3705,9 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             Array_cstring compile = {0};
 
             build_push_arguments(&scratch, &compile, build_compiler_initial_command[compiler]);
+
+            push(&scratch, &compiler_extra_flags, 0);
+            build_push_arguments(&scratch, &compile, compiler_extra_flags.data);
 
             // TODO(felix): should be handled by reading meta() annotations
             if (target_os == BASE_OS_WASM) {
@@ -3687,11 +3812,26 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             push(&scratch, &link, to_push);
         }
 
+        push(&scratch, &linker_extra_flags, 0);
+        build_push_arguments(&scratch, &link, linker_extra_flags.data);
+
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];
 
         const char *output_name = target_os == BASE_OS_WASM ? "module" : program_name;
-        const char *output = cstring_print(&scratch, "%s%s.%s", syntax, output_name, extension);
+        const char *output = 0;
+        if (target_os & BASE_OS_ANY_APPLE) {
+            const char *app_folder = cstring_print(&scratch, "%s%c%s.app", build_folder, path_separator, output_name);
+            if (!fs_exists(app_folder)) {
+                bool app_folder_ok = fs_make_folder(app_folder);
+                if (!app_folder_ok) {
+                    log_error("failure making folder '%s'", app_folder);
+                    return 1;
+                }
+            }
+            output = cstring_print(&scratch, "%s%s.app%c%s", syntax, output_name, path_separator, output_name);
+        }
+        else output = cstring_print(&scratch, "%s%s.%s", syntax, output_name, extension);
         push(&scratch, &link, output);
 
         push(&scratch, &link, 0);
@@ -3706,6 +3846,68 @@ static u32 build_default_everything(Arena scratch, const char *program_name, u8 
             if (exit_code == 0) print("wrote '%s'\n", html_output_path);
             else print("unable to write '%s'\n", html_output_path);
         }
+    }
+
+    if (target_os & BASE_OS_ANY_IOS) {
+        ok = false;
+        const char *bundle_identifier = 0;
+        if (exit_code == 0) {
+            const char *plist_format = STRINGIFY(
+                <?xml version="1.0" encoding="UTF-8"?>
+                <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+                  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+                <plist version="1.0">
+                <dict>
+                    <key>CFBundleName</key>               <string>%s</string>
+                    <key>CFBundleDisplayName</key>        <string>%s</string>
+                    <key>CFBundleExecutable</key>         <string>%s</string>
+                    <key>CFBundleIdentifier</key>         <string>%s</string>
+                    <key>CFBundleVersion</key>            <string>1</string>
+                    <key>CFBundleShortVersionString</key> <string>1.0</string>
+                    <key>CFBundlePackageType</key>        <string>APPL</string>
+                    <key>MinimumOSVersion</key>           <string>16.0</string>
+                    <key>UIDeviceFamily</key>             <array><integer>1</integer></array>
+                    <key>UILaunchScreen</key>             <dict/>
+                    <key>UISupportedInterfaceOrientations</key>
+                    <array><string>UIInterfaceOrientationPortrait</string></array>
+                    <key>CFBundleSupportedPlatforms</key>
+                    <array><string>iPhoneSimulator</string></array>
+                </dict>
+                </plist>
+            );
+
+            // TODO(felix): Programmatically get user instead of hardcoding to "felix".
+            bundle_identifier = cstring_print(&scratch, "com.felix.%c%s", program_name[0] | 0x20, &program_name[1]);
+            String plist = string_print(&scratch, plist_format, program_name, program_name, program_name, bundle_identifier);
+
+            const char *path = cstring_print(&scratch, "%s%c%s.app%cInfo.plist", build_folder, path_separator, program_name, path_separator);
+
+            ok = os_write_entire_file(path, plist.data, plist.count);
+            if (!ok) {
+                log_error("failure writing '%s' (%llu bytes)", path, plist.count);
+            } else print("Wrote %llu bytes to '%s'.\n", plist.count, path);
+        }
+
+        if (ok) {
+
+        }
+
+        if (ok) {
+            if (target_os == BASE_OS_IOS_SIMULATOR) {
+                print("You can run: xcrun simctl install booted %s%c%s.app && "
+                    "xcrun simctl launch --terminate-running-process --console booted %s\n",
+                    build_folder, path_separator, program_name, bundle_identifier
+                );
+            } else {
+                assert(target_os == BASE_OS_IOS_DEVICE);
+                print("You can run: UDID=<UDID>; xcrun devicectl device install app -d $UDID %s%c%s.app && "
+                    "xcrun devicectl device process launch --terminate-existing --console -d $UDID %s",
+                    build_folder, path_separator, program_name, bundle_identifier
+                );
+            }
+        }
+
+        exit_code = ok ? 0 : 1;
     }
 
     return exit_code;
@@ -3745,6 +3947,31 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
 #define UI_IMPLEMENTATION
 #include "base/ui.h"
 
+static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame) {
+    ui->window_size[ui_X] = frame->window_size.x - frame->safe_area_inset_left - frame->safe_area_inset_right;
+    ui->window_size[ui_Y] = frame->window_size.y - frame->safe_area_inset_top - frame->safe_area_inset_bottom;
+    assert(ui->window_size[ui_X] != 0.f);
+    assert(ui->window_size[ui_Y] != 0.f);
+
+    ui->mouse_position[ui_X] = frame->mouse_position.x;
+    ui->mouse_position[ui_Y] = frame->mouse_position.y;
+
+    _Static_assert(sizeof ui->mouse_clicked == sizeof frame->mouse_clicked, "Base and UI types must be identical.");
+    memcpy(ui->mouse_clicked, frame->mouse_clicked, sizeof ui->mouse_clicked);
+
+    _Static_assert(sizeof ui->mouse_down == sizeof frame->mouse_down, "Base and UI types must be identical.");
+    memcpy(ui->mouse_down, frame->mouse_down, sizeof ui->mouse_down);
+
+    _Static_assert(sizeof ui->key_pressed == sizeof frame->key_pressed, "Base and UI types must be identical.");
+    memcpy(ui->key_pressed, frame->key_pressed, sizeof ui->key_pressed);
+
+    ui_begin(ui);
+    ui_Box *root = ui_push(ui, 0, ui_Y, 0);
+    root->rectangle.position[ui_X] = frame->safe_area_inset_left;
+    root->rectangle.position[ui_Y] = frame->safe_area_inset_top;
+    return root;
+}
+
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
@@ -3766,25 +3993,9 @@ static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *pa
     return box;
 }
 
-static void base_ui_input(ui_State *ui, App_Frame_Info *frame) {
-    ui->window_size[ui_X] = frame->window_size.x;
-    ui->window_size[ui_Y] = frame->window_size.y;
-
-    ui->mouse_position[ui_X] = frame->mouse_position.x;
-    ui->mouse_position[ui_Y] = frame->mouse_position.y;
-
-    _Static_assert(sizeof ui->mouse_clicked == sizeof frame->mouse_clicked, "base & ui types must be identical");
-    memcpy(ui->mouse_clicked, frame->mouse_clicked, sizeof ui->mouse_clicked);
-
-    _Static_assert(sizeof ui->mouse_down == sizeof frame->mouse_down, "base & ui types must be identical");
-    memcpy(ui->mouse_down, frame->mouse_down, sizeof ui->mouse_down);
-
-    _Static_assert(sizeof ui->key_pressed == sizeof frame->key_pressed, "base & ui types must be identical");
-    memcpy(ui->key_pressed, frame->key_pressed, sizeof ui->key_pressed);
-}
-
 static void base_ui_render(ui_State *ui, ui_Box *box) {
     Platform *platform = ui->user_data;
+    assert(platform != 0);
 
     if (box->flags & UI_FLAG_ANY_VISIBLE) {
         V4 clip = {0};

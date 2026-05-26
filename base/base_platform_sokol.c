@@ -19,7 +19,7 @@
 
 #if BASE_OS == BASE_OS_WINDOWS
 	#define SOKOL_D3D11
-#elif BASE_OS == BASE_OS_MACOS
+#elif BASE_OS == BASE_OS_APPLE
 	#define SOKOL_METAL
 #else
 	#error "unsupported OS"

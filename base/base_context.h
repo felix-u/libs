@@ -15,12 +15,17 @@
     #define BASE_C_VERSION 0
 #endif
 
-#define BASE_OS_WINDOWS (1 << 0)
-#define BASE_OS_MACOS   (1 << 1)
-#define BASE_OS_LINUX   (1 << 2)
-#define BASE_OS_WASM    (1 << 3)
-#define BASE_OS_COUNT   (1 << 4)
-#define BASE_OS_ANY_POSIX (BASE_OS_MACOS | BASE_OS_LINUX)
+#define BASE_OS_WINDOWS       (1 << 0)
+#define BASE_OS_MACOS         (1 << 1)
+#define BASE_OS_IOS_DEVICE    (1 << 2)
+#define BASE_OS_IOS_SIMULATOR (1 << 3)
+#define BASE_OS_LINUX         (1 << 4)
+#define BASE_OS_WASM          (1 << 5)
+#define BASE_OS_COUNT         (1 << 6)
+
+#define BASE_OS_ANY_IOS (BASE_OS_IOS_DEVICE | BASE_OS_IOS_SIMULATOR)
+#define BASE_OS_ANY_APPLE (BASE_OS_MACOS | BASE_OS_ANY_IOS)
+#define BASE_OS_ANY_POSIX (BASE_OS_ANY_APPLE | BASE_OS_LINUX)
 
 #if defined(BASE_OS)
     //
@@ -29,7 +34,16 @@
 #elif defined(__linux__) || defined(__gnu_linux__)
     #define BASE_OS BASE_OS_LINUX
 #elif defined(__APPLE__) && defined(__MACH__)
-    #define BASE_OS BASE_OS_MACOS
+    #if defined(__has_builtin) && __has_builtin(__is_target_os) && __is_target_os(ios)
+        // TODO(felix): Work out what's going on with this.
+        #if __has_builtin(__is_target_environment) && __is_target_environment(simulator)
+            #define BASE_OS BASE_OS_IOS_SIMULATOR
+        #else
+            #define BASE_OS BASE_OS_IOS_DEVICE
+        #endif
+    #else
+        #define BASE_OS BASE_OS_MACOS
+    #endif
 #elif defined(_WIN32)
     #define BASE_OS BASE_OS_WINDOWS
 #else

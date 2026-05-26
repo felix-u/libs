@@ -174,7 +174,6 @@ static void program(void) {
         ReleaseDC(platform.window, window_dc);
 
         app_frame_info_reset_end_of_frame(frame);
-        if (platform.base.should_quit) break;
     }
 
     DestroyWindow(platform.window);

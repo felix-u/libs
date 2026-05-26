@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-12
+// https://github.com/felix-u 2026-05-24
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -301,7 +301,7 @@ CLEX_FUNCTION _Bool clex_lex(clex_Lexer *l) {
     static clex__Token_Stack tokens = {0};
     if (clex__pop_token(&tokens, &l->token)) return 1;
 
-    next_token:
+    next_token:;
 
     clex_Cursor *c = &l->stack[l->depth];
     clex__skip_whitespace(c);

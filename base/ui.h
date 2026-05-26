@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-10
+// https://github.com/felix-u 2026-05-26
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(UI_H)
@@ -261,7 +261,9 @@ UI_FUNCTION void ui_create(ui_State *ui, ui_text_measure_function *text_measure_
 static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
     ui_Style *style = &box->style;
 
-    box->rectangle = (ui_Rectangle){0};
+    // NOTE(felix): If the box parent is nil, this is the root, so we don't reset the position in order to allow shifting on the user side--for example, to shift by the safe area inset.
+    if (box->parent == 0) UI_ASSERT(box->hash_string[0] == 0);
+    else box->rectangle = (ui_Rectangle){0};
 
     float text_size[2] = {0};
     _Bool measure = box->size[ui_X].kind == ui_Size_TEXT || box->size[ui_Y].kind == ui_Size_TEXT;
@@ -278,12 +280,20 @@ static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
             case ui_Size_PIXELS: {
                 box->rectangle.size[axis] = box->size[axis].value;
             } break;
-            case ui_Size_OF_PARENT: /* not solved here */ break;
-            case ui_Size_LARGEST_CHILD: /* not solved here */ break;
+            case ui_Size_SUM_OF_CHILDREN: case ui_Size_LARGEST_CHILD: {
+                // Not solved here, but let's error-check.
+                UI_ASSERT(box->first_child != 0);
+            } break;
+            case ui_Size_OF_PARENT: {
+                // Not solved here, but let's error-check.
+                UI_ASSERT(box->parent != 0);
+            } break;
             case ui_Size_TEXT: {
+                UI_ASSERT(box->display_string != 0);
+                UI_ASSERT(text_size[ui_X] > 0);
+                UI_ASSERT(text_size[ui_Y] > 0);
                 box->rectangle.size[axis] = text_size[axis];
             } break;
-            case ui_Size_SUM_OF_CHILDREN: /* not solved here */ break;
             default: UI_ASSERT(0 && "unreachable"); break;
         }
 
@@ -432,6 +442,7 @@ static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
 }
 
 UI_FUNCTION void ui_end(ui_State *ui) {
+    UI_ASSERT(ui->root != 0);
     ui__layout_standalone(ui, ui->root);
     ui__layout_dependent_ancestor(ui, ui->root);
     ui__layout_dependent_descendant(ui, ui->root);
