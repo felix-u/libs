@@ -76,10 +76,10 @@ typedef struct {
     const char *lpszClassName;
 } WNDCLASSA;
 
-meta(link "Gdi32")
+META(link "Gdi32")
 WIN32_CALL(int) ReleaseDC(void *window_handle, void *device_context_handle);
 
-meta(link "User32")
+META(link "User32")
 WIN32_CALL(void *)         CreateWindowExA(unsigned long extended_style, const char *class_name, const char *window_name, unsigned long style, int x, int y, int width, int height, void *window_parent_handle, void *menu_handle, void *instance_handle, void *param);
 WIN32_CALL(long long)      DefWindowProcA(void *window_handle, unsigned message, unsigned long long wparam, long long lparam);
 WIN32_CALL(int)            DestroyWindow(void *window_handle);
@@ -188,15 +188,6 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
     switch (message) {
         case WM_CLOSE: platform->should_quit = true; break;
         case WM_DESTROY: PostQuitMessage(0); break;
-        case WM_DISPLAYCHANGE: {
-            enum { monitor_defaulttonearest = 2 }; // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-monitorfrompoint
-            void *monitor = MonitorFromWindow(window, monitor_defaulttonearest);
-            MONITORINFO info = { .cbSize = sizeof info };
-            int ok = GetMonitorInfoA(monitor, &info);
-            ensure(ok);
-            window_size[0] = (f32)(info.rcMonitor.right - info.rcMonitor.left);
-            window_size[1] = (f32)(info.rcMonitor.bottom - info.rcMonitor.top);
-        } break;
         case WM_DPICHANGED: {
             f32 dpi_1x = 96.f;
             frame->dpi_scale = (f32)GetDpiForWindow(window) / dpi_1x;
@@ -250,5 +241,6 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
         } break;
         default: break;
     }
+
     return DefWindowProcA(window, message, w, l);
 }

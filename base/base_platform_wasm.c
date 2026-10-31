@@ -117,10 +117,6 @@ void platform__on_scroll(f32 x, f32 y) {
     platform__.base.frame.scroll = y / -120.f;
 }
 
-void platform__quit(void) {
-    app_quit(&platform__.base);
-}
-
 void platform__start(void) {
     Platform *base = &platform__.base;
 

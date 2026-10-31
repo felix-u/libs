@@ -3,29 +3,29 @@
 // TODO(felix): Add the right flags based on BASE_OS once metaprogram parser handles #ifs.
 
 // Actual iPhone
-meta(compile_and_link_flag "-isysroot")
-meta(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk")
-meta(compile_and_link_flag "-target")
-meta(compile_and_link_flag "arm64-apple-ios")
+META(compile_and_link_flag "-isysroot")
+META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk")
+META(compile_and_link_flag "-target")
+META(compile_and_link_flag "arm64-apple-ios")
 #if BASE_OS != BASE_OS_IOS_DEVICE
     #error "This is the wrong block."
 #endif
 
 // // iPhone Simulator
-// meta(compile_and_link_flag "-isysroot")
-// meta(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk")
-// meta(compile_and_link_flag "-target")
-// meta(compile_and_link_flag "arm64-apple-ios-simulator")
+// META(compile_and_link_flag "-isysroot")
+// META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk")
+// META(compile_and_link_flag "-target")
+// META(compile_and_link_flag "arm64-apple-ios-simulator")
 // #if BASE_OS != BASE_OS_IOS_SIMULATOR
 //     #error "This is the wrong block."
 // #endif
 
-meta(link_flag "-framework") meta(link_flag "UIKit")
-meta(link_flag "-framework") meta(link_flag "Foundation")
-meta(link_flag "-framework") meta(link_flag "CoreGraphics")
-meta(link_flag "-framework") meta(link_flag "QuartzCore")
-meta(link_flag "-framework") meta(link_flag "Metal")
-meta(link_flag "-framework") meta(link_flag "CoreText")
+META(link_flag "-framework") META(link_flag "UIKit")
+META(link_flag "-framework") META(link_flag "Foundation")
+META(link_flag "-framework") META(link_flag "CoreGraphics")
+META(link_flag "-framework") META(link_flag "QuartzCore")
+META(link_flag "-framework") META(link_flag "Metal")
+META(link_flag "-framework") META(link_flag "CoreText")
 
 // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjCRuntimeGuide/Articles/ocrtTypeEncodings.html
 // https://developer.apple.com/documentation/objectivec/objective-c-runtime
@@ -696,7 +696,6 @@ static void platform__tick(id self, SEL command, id link) {
 
     if (platform__.base.should_quit) {
         ((void(*)(id, SEL))(void *)objc_msgSend)(platform__.display_link, sel_registerName("invalidate"));
-        app_quit(&platform__.base);
     }
 }
 

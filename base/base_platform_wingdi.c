@@ -4,7 +4,7 @@
 
 WIN32_CALL(long) DwmFlush(void);
 
-meta(link "Gdi32")
+META(link "Gdi32")
 WIN32_CALL(void *) CreateCompatibleDC(void *device_context_handle);
 #if !defined(_WINGDI_)
     typedef struct {
@@ -168,7 +168,7 @@ static void program(void) {
             );
             ensure(ok);
 
-            meta(link "Dwmapi")
+            META(link "Dwmapi")
             DwmFlush(); // TODO(felix): better way to "vsync"
         }
         ReleaseDC(platform.window, window_dc);
@@ -179,6 +179,4 @@ static void program(void) {
     DestroyWindow(platform.window);
     DeleteObject(platform.bitmap);
     DeleteDC(platform.memory_dc);
-
-    app_quit(&platform.base);
 }

@@ -143,8 +143,6 @@ static void sokol_populate_frame_info(App_Frame_Info *info) {
 static void sokol_cleanup(void *user_data) {
     Platform *platform = user_data;
 
-    app_quit(&platform->base);
-
     sfons_destroy(platform->fontstash_context);
     sgl_shutdown();
     sg_shutdown();
@@ -328,8 +326,6 @@ static void sokol_frame(void *user_data) {
 
     app_frame_info_reset_end_of_frame(&platform->base.frame);
     scratch_end(scratch);
-
-    if (platform->base.should_quit) sapp_quit();
 }
 
 static V2 platform_measure_text(Platform_Base *platform, String text, f32 font_size) {

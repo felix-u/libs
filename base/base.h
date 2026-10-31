@@ -4,7 +4,7 @@
 
 #include "base/base_context.h"
 
-#define meta(...)
+#define META(...)
 
 #include <stdarg.h> // NOTE(felix): doesn't seem like anything can be done about this one
 
@@ -191,7 +191,7 @@ _Static_assert(sizeof(f64) == 8, "");
     #define os_abort() ExitProcess(1)
     #define os_exit(code) ExitProcess(code)
 
-    meta(link "Kernel32")
+    META(link "Kernel32")
     WIN32_CALL(int)           CloseHandle(void *);
     struct _SECURITY_ATTRIBUTES;
     WIN32_CALL(int)           CreateDirectoryA(const char *path, struct _SECURITY_ATTRIBUTES *);
@@ -271,7 +271,7 @@ _Static_assert(sizeof(f64) == 8, "");
     WIN32_CALL(unsigned long) WaitForSingleObject(void *handle, unsigned long milliseconds);
     WIN32_CALL(int)           WriteFile(void *file, const void *buffer, unsigned long number_of_bytes_to_write, unsigned long *number_of_bytes_written, struct _OVERLAPPED *);
 
-    meta(link "Shell32")
+    META(link "Shell32")
     WIN32_CALL(unsigned short **) CommandLineToArgvW(const unsigned short *command_line, int *number_of_arguments);
     WIN32_CALL(void *) ShellExecuteA(void *handle, const char *operation, const char *file, const char *parameters, const char *directory, int show_command_count);
 #elif BASE_OS == BASE_OS_WASM
@@ -774,6 +774,7 @@ static f32 tanhf_(f32 x) {
 
 #if !LINK_CRT
     #if !COMPILER_CLANG
+        #define floor  floor_
         #define frexpf frexpf_
         #define sinf   sinf_
         #define tanf   tanf_
@@ -812,6 +813,7 @@ static f32 tanhf_(f32 x) {
     #else
         #define ceil   ceil_
         #define ceilf  ceilf_
+        #define floor  floor_
         #define floorf floorf_
         #define sqrt   sqrt_
         #define sqrtf  sqrtf_
@@ -819,7 +821,6 @@ static f32 tanhf_(f32 x) {
     #define abs(x)   __builtin_abs(x)
     #define fabs(x)  __builtin_fabs(x)
     #define fabsf(x) __builtin_fabsf(x)
-    #define floor(x) __builtin_floor(x)
     #define isnan(x) __builtin_isnan(x)
     #define llabs(x) __builtin_llabs(x)
     #if BASE_OS == BASE_OS_WASM
@@ -1188,7 +1189,6 @@ typedef struct {
 
     static V2 platform_measure_text(Platform *platform, String text, f32 font_size);
 
-    static void app_quit(Platform *);
     static void app_start(Platform *);
     static void app_update_and_render(Platform *);
 #endif
@@ -1201,6 +1201,7 @@ static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
 #include "base/ui.h"
 
 static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame);
+static void    base_ui_create(ui_State *ui, Platform *platform);
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
 static void    base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]);
 static void    base_ui_render(ui_State *ui, ui_Box *box);
@@ -2843,7 +2844,7 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
     },
     [Build_Linker_CLANG][BASE_OS_MACOS] = {
         "clang",
-        // TODO(felix): Move to meta(framework "") directive (see what the Odin syntax is).
+        // TODO(felix): Move to META(framework "") directive (see what the Odin syntax is).
         // "-framework", "CoreFoundation",
         // "-framework", "Metal",
         // "-framework", "Cocoa",
@@ -2873,7 +2874,6 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
         "-Wl,--export=platform__on_mouse_down",
         "-Wl,--export=platform__on_mouse_up",
         "-Wl,--export=platform__on_scroll",
-        "-Wl,--export=platform__quit",
         "-Wl,--export=platform__start",
         "-Wl,--export=platform__update_and_render",
         "-Wl,--initial-memory=134217728", // 128mb, but TODO(felix): make configurable
@@ -3164,8 +3164,6 @@ static const char build_wasm_html_file[] = STRINGIFY(
                 requestAnimationFrame(frame);
             }
             requestAnimationFrame(frame);
-
-            addEventListener("beforeunload", () => { exports.platform__quit(); });
         })();
     </script>
 );
@@ -3369,12 +3367,12 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
         if (lexer.token.kind != clex_Token_IDENTIFIER) continue;
         String token_data = base_string_from_clex_data(lexer.token.data);
 
-        if (!string_equals(token_data, S("meta"))) continue;
+        if (!string_equals(token_data, S("META"))) continue;
 
         clex_lex(&lexer);
         if (lexer.token.kind != '(') continue;
 
-        if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `meta(...)`")) return 1;
+        if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `META(...)`")) return 1;
         token_data = base_string_from_clex_data(lexer.token.data);
 
         // TODO(felix): remove
@@ -3382,20 +3380,20 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
         if (string_equals(token_data, generate_here_directive)) {
             if (metaprogram_output_file.count != 0) {
-                log_error("directive `meta(%S)` can only be used once", generate_here_directive);
+                log_error("directive `META(%S)` can only be used once", generate_here_directive);
                 return 1;
             }
 
-            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing META(...) block")) return 1;
 
             if (!build_expect_include(&scratch, &lexer, &metaprogram_output_file)) return 1;
         } else if (string_equals(token_data, S("embed"))) {
-            const char *usage = "`meta(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
+            const char *usage = "`META(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
 
             if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
             String input_file = base_string_from_clex_data(lexer.token.data);
 
-            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing meta(...) block")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing META(...) block")) return 1;
 
             // TODO(felix): get actual type info once we've got a C parser
 
@@ -3496,7 +3494,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
             } else {
                 input = os_read_entire_file(&scratch, input_path, &ok);
                 if (!ok) {
-                    log_error("failed reading `meta(embed)` input '%s'", input_path);
+                    log_error("failed reading `META(embed)` input '%s'", input_path);
                     return 1;
                 }
 
@@ -3567,13 +3565,13 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
             } else if (string_equals(token_data, S("false"))) {
                 meta_link_crt_override_value = false;
             } else {
-                log_error("expected `true` or `false` in `meta(link_libc = true/false)`, got `%S`", token_data);
+                log_error("expected `true` or `false` in `META(link_libc = true/false)`, got `%S`", token_data);
                 return 1;
             }
 
-            if (!build_eat_token(0, &lexer, ')', "error: expected `)` to close `meta(...)` directive")) return 1;
+            if (!build_eat_token(0, &lexer, ')', "error: expected `)` to close `META(...)` directive")) return 1;
         } else if (string_equals(token_data, S("link"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(link \"Library\")`")) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(link \"Library\")`")) return 1;
             String library = base_string_from_clex_data(lexer.token.data);
             if (library.count == 0) {
                 log_error("link library name is empty");
@@ -3589,7 +3587,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
             if (link_this) push(&scratch, &link_libraries, cstring_from_string(&scratch, library));
         } else if (string_equals(token_data, S("compile_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(compile_flag \"...\")`")) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(compile_flag \"...\")`")) return 1;
             String flag = base_string_from_clex_data(lexer.token.data);
             if (flag.count == 0) {
                 log_error("extra compile flag is empty string");
@@ -3598,7 +3596,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
             push(&scratch, &compiler_extra_flags, cstring_from_string(&scratch, flag));
         } else if (string_equals(token_data, S("link_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(link_flag \"...\")`")) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(link_flag \"...\")`")) return 1;
             String flag = base_string_from_clex_data(lexer.token.data);
             if (flag.count == 0) {
                 log_error("extra linker flag is empty string");
@@ -3607,7 +3605,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
             push(&scratch, &linker_extra_flags, cstring_from_string(&scratch, flag));
         } else if (string_equals(token_data, S("compile_and_link_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `meta(compile_and_link_flag \"...\")`")) return 1;
+            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(compile_and_link_flag \"...\")`")) return 1;
             String flag = base_string_from_clex_data(lexer.token.data);
             if (flag.count == 0) {
                 log_error("extra compile and link flag is empty string");
@@ -3640,7 +3638,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
     if (metaprogram_code.count > 0) {
         if (metaprogram_output_file.count == 0) {
-            log_error("missing `meta(%S)` followed by #include to designate codegen destination", generate_here_directive);
+            log_error("missing `META(%S)` followed by #include to designate codegen destination", generate_here_directive);
             return 1;
         }
 
@@ -3709,7 +3707,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
             push(&scratch, &compiler_extra_flags, 0);
             build_push_arguments(&scratch, &compile, compiler_extra_flags.data);
 
-            // TODO(felix): should be handled by reading meta() annotations
+            // TODO(felix): should be handled by reading META() annotations
             if (target_os == BASE_OS_WASM) {
                 assert(compiler == Build_Compiler_CLANG);
 
@@ -3970,6 +3968,11 @@ static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame) {
     root->rectangle.position[ui_X] = frame->safe_area_inset_left;
     root->rectangle.position[ui_Y] = frame->safe_area_inset_top;
     return root;
+}
+
+static void base_ui_create(ui_State *ui, Platform *platform) {
+    ui_create(ui, base_ui_measure_text);
+    ui->user_data = platform;
 }
 
 static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
