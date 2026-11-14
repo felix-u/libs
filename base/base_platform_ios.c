@@ -1,24 +1,18 @@
 #define BASE_PLATFORM_IOS
 
-// TODO(felix): Add the right flags based on BASE_OS once metaprogram parser handles #ifs.
-
-// Actual iPhone
-META(compile_and_link_flag "-isysroot")
-META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk")
-META(compile_and_link_flag "-target")
-META(compile_and_link_flag "arm64-apple-ios")
-#if BASE_OS != BASE_OS_IOS_DEVICE
-    #error "This is the wrong block."
+#if BASE_OS == BASE_OS_IOS_DEVICE
+    META(compile_and_link_flag "-isysroot")
+    META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk")
+    META(compile_and_link_flag "-target")
+    META(compile_and_link_flag "arm64-apple-ios")
+#elif BASE_OS == BASE_OS_IOS_SIMULATOR
+    META(compile_and_link_flag "-isysroot")
+    META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk")
+    META(compile_and_link_flag "-target")
+    META(compile_and_link_flag "arm64-apple-ios-simulator")
+#else
+    #error "base_platform_ios.c supports only iOS devices and the iOS simulator"
 #endif
-
-// // iPhone Simulator
-// META(compile_and_link_flag "-isysroot")
-// META(compile_and_link_flag "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk")
-// META(compile_and_link_flag "-target")
-// META(compile_and_link_flag "arm64-apple-ios-simulator")
-// #if BASE_OS != BASE_OS_IOS_SIMULATOR
-//     #error "This is the wrong block."
-// #endif
 
 META(link_flag "-framework") META(link_flag "UIKit")
 META(link_flag "-framework") META(link_flag "Foundation")
@@ -137,7 +131,7 @@ extern void                  objc_registerClassPair(Class);
 extern Class                 object_getClass(id);
 extern SEL                   sel_registerName(const char *name);
 
-#define CGAffineTransformIdentity ((CGAffineTransform){ 1.0, 0, 0, 1.0, 0, 0 })
+#define CGAffineTransformIdentity ((CGAffineTransform){ .a = 1.0, .b = 0, .c = 0, .d = 1.0, .tx = 0, .ty = 0 })
 
 extern const CFStringRef kCTFontAttributeName;
 extern id                NSDefaultRunLoopMode;
@@ -165,7 +159,7 @@ static Class object__get_class(id id) {
 struct Platform_Implementation {
     Platform base;
 
-    Arena frame_scratch;
+    Scratch frame_scratch;
     Class AppDelegate_class;
     Class TickDriver_class;
     id tick_driver;
@@ -195,11 +189,13 @@ typedef struct {
 } Vertex;
 _Static_assert(sizeof(Vertex) == 80, "Vertex must match MSL stride");
 
-static void platform__draw_text(Draw_Command *c, V2 *only_measure, id encoder) {
-    CTFontRef font = CTFontCreateWithGraphicsFont(platform__.core_graphics_font, (CGFloat)c->text.font_size, 0, 0);
+static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
+    (void)platform;
+
+    CTFontRef font = CTFontCreateWithGraphicsFont(platform__.core_graphics_font, (CGFloat)font_size, 0, 0);
 
     CFStringRef cf_str = CFStringCreateWithBytes(
-        0, (const u8 *)c->text.string.data, (CFIndex)c->text.string.count,
+        0, (const u8 *)text.data, (CFIndex)text.count,
         kCFStringEncodingUTF8, false);
     const void *keys[] = { kCTFontAttributeName };
     const void *vals[] = { font };
@@ -208,91 +204,14 @@ static void platform__draw_text(Draw_Command *c, V2 *only_measure, id encoder) {
     CTLineRef line = CTLineCreateWithAttributedString(attr_str);
 
     CGFloat ascent = 0, descent = 0;
-    double width_d = CTLineGetTypographicBounds(line, &ascent, &descent, 0);
-    f32 width = (f32)width_d;
-    f32 height = (f32)(ascent + descent);
+    double width = CTLineGetTypographicBounds(line, &ascent, &descent, 0);
+    V2 size = { .x = (f32)width, .y = (f32)(ascent + descent) };
 
-    if (only_measure) {
-        *only_measure = (V2){ width, height };
-        goto cleanup;
-    }
-
-    size_t bitmap_width = (size_t)ceilf(width);
-    size_t bitmap_height = (size_t)ceilf(height);
-    if (bitmap_width == 0 || bitmap_height == 0) goto cleanup;
-
-    CGContextRef ctx = CGBitmapContextCreate(0, bitmap_width, bitmap_height, 8, bitmap_width, 0, kCGImageAlphaOnly);
-    CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
-    CGContextSetTextPosition(ctx, 0, (CGFloat)descent);
-    CTLineDraw(line, ctx);
-    void *bitmap = CGBitmapContextGetData(ctx);
-
-    // Upload texture
-    Class MTLTextureDescriptor = objc__get_class("MTLTextureDescriptor");
-    id desc = ((id(*)(Class, SEL, unsigned long, unsigned long, unsigned long, _Bool))(void *)objc_msgSend)(
-        MTLTextureDescriptor,
-        sel_registerName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
-        MTLPixelFormatR8Unorm, (unsigned long)bitmap_width, (unsigned long)bitmap_height, false
-    );
-    id tex = ((id(*)(id, SEL, id))(void *)objc_msgSend)(platform__.device, sel_registerName("newTextureWithDescriptor:"), desc);
-    MTLRegion region = { {0,0,0}, {(unsigned long)bitmap_width, (unsigned long)bitmap_height, 1} };
-    ((void(*)(id, SEL, MTLRegion, unsigned long, void *, unsigned long))(void *)objc_msgSend)(
-        tex,
-        sel_registerName("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
-        region,
-        0UL,
-        bitmap,
-        (unsigned long)bitmap_width
-    );
-
-    V4 fill = rgba_float_from_hex(c->color[Draw_Color_SOLID]);
-    Vertex base = { .mode = 1.f };
-    memcpy(&base.fill_color, &fill, sizeof base.fill_color);
-
-    Vertex verts[6];
-    f32 l = c->position.x, t = c->position.y;
-    f32 w = (f32)bitmap_width, h = (f32)bitmap_height;
-    #define V(idx, px, py, u, vv) do { \
-        verts[idx] = base; \
-        verts[idx].position[0] = (px); verts[idx].position[1] = (py); \
-        verts[idx].uv[0] = (u);  verts[idx].uv[1] = (vv); \
-    } while (0)
-    V(0, l,     t,     0, 0);
-    V(1, l,     t + h, 0, 1);
-    V(2, l + w, t + h, 1, 1);
-    V(3, l,     t,     0, 0);
-    V(4, l + w, t + h, 1, 1);
-    V(5, l + w, t,     1, 0);
-    #undef V
-
-    ((void(*)(id, SEL, id, unsigned long))(void *)objc_msgSend)(encoder, sel_registerName("setFragmentTexture:atIndex:"), tex, 0UL);
-    ((void(*)(id, SEL, void *, unsigned long, unsigned long))(void *)objc_msgSend)(encoder, sel_registerName("setVertexBytes:length:atIndex:"), verts, sizeof verts, 0UL);
-    ((void(*)(id, SEL, unsigned long, unsigned long, unsigned long))(void *)objc_msgSend)(encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), (unsigned long)MTLPrimitiveTypeTriangle, 0UL, 6UL);
-
-    // (CGContext released below; texture released by autorelease pool)
-    // Restore dummy texture for following rect draws
-    ((void(*)(id, SEL, id, unsigned long))(void *)objc_msgSend)(encoder, sel_registerName("setFragmentTexture:atIndex:"), platform__.dummy_texture, 0UL);
-
-    extern void CGContextRelease(CGContextRef);
-    CGContextRelease(ctx);
-
-    cleanup:
     CFRelease(line);
     CFRelease(attr_str);
     CFRelease(attrs);
     CFRelease(cf_str);
     CFRelease(font);
-}
-
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
-    (void)platform;
-
-    V2 size = {0};
-    Draw_Command c = {
-        .kind = Draw_Kind_TEXT,
-        .text = { .string = text, .font_size = font_size },
-    };
-    platform__draw_text(&c, &size, 0);
 
     return size;
 }
@@ -308,9 +227,7 @@ static _Bool platform__did_launch(id self, SEL command, id app, id options) {
 
     {
         static Arena persistent_arena;
-        persistent_arena = arena_init(4 * 1024 * 1024);
         static Arena frame_arena;
-        frame_arena = arena_init(4 * 1024 * 1024);
         platform__.base = (Platform){
             .persistent_arena = &persistent_arena,
             .frame_arena = &frame_arena,
@@ -318,7 +235,7 @@ static _Bool platform__did_launch(id self, SEL command, id app, id options) {
 
         app_start(&platform__.base);
 
-        platform__.frame_scratch = *platform__.base.frame_arena;
+        platform__.frame_scratch = scratch_begin(platform__.base.frame_arena);
     }
 
     Class UIScreen = objc__get_class("UIScreen");
@@ -496,7 +413,7 @@ static _Bool platform__did_launch(id self, SEL command, id app, id options) {
         platform__.dummy_texture = ((id(*)(id, SEL, id))(void *)objc_msgSend)(platform__.device, sel_registerName("newTextureWithDescriptor:"), dummy_descriptor);
         {
             u8 white = 255;
-            MTLRegion region = { { 0, 0, 0 }, { 1, 1, 1 } };
+            MTLRegion region = { .origin = { .x = 0, .y = 0, .z = 0 }, .size = { .width = 1, .height = 1, .depth = 1 } };
             ((void(*)(id, SEL, MTLRegion, unsigned long, void *, unsigned long))(void *)objc_msgSend)(platform__.dummy_texture, sel_registerName("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"), region, 0UL, &white, 1UL);
         }
     }
@@ -524,9 +441,7 @@ static void platform__tick(id self, SEL command, id link) {
     (void)command;
     (void)link;
 
-    *platform__.base.frame_arena = platform__.frame_scratch;
-    Array_Draw_Command *draw_commands = &platform__.base.draw_commands;
-    *draw_commands = (Array_Draw_Command){0};
+    scratch_end(platform__.frame_scratch);
 
     App_Frame_Info *frame = &platform__.base.frame;
 
@@ -550,63 +465,6 @@ static void platform__tick(id self, SEL command, id link) {
     app_update_and_render(&platform__.base);
 
     {
-        // TODO(felix): This whole thing feels hacky. Do we really need to count all the rectangles before-hand?
-        u64 rectangle_count = 0;
-        for (u64 i = 0; i < draw_commands->count; i += 1) {
-            Draw_Command *c = &draw_commands->data[i];
-            rectangle_count += (u64)(c->kind == Draw_Kind_RECTANGLE);
-        }
-
-        u64 rectangle_vertex_count = rectangle_count * 6;
-        Vertex *rectangle_vertices = arena_make(platform__.base.frame_arena, rectangle_vertex_count, Vertex);
-
-        u64 vertex_index = 0;
-        for (u64 i = 0; i < draw_commands->count; i += 1) {
-            Draw_Command *c = &draw_commands->data[i];
-            if (c->kind != Draw_Kind_RECTANGLE) continue;
-
-            // TODO(felix): Support clipping.
-            assert(memcmp(&c->clip, &(V4){0}, sizeof c->clip) == 0);
-
-            f32 left = c->position.x, top = c->position.y;
-            f32 width = c->rectangle.size.x, height = c->rectangle.size.y;
-            f32 half_width = width * 0.5f, half_height = height * 0.5f;
-
-            V4 color_top_left = rgba_float_from_hex(c->color[Draw_Color_TOP_LEFT]);
-            V4 color_bottom_left = color_top_left;
-            V4 color_bottom_right = color_top_left;
-            V4 color_top_right = color_top_left;
-            if (c->gradient) {
-                color_bottom_left = rgba_float_from_hex(c->color[Draw_Color_BOTTOM_LEFT]);
-                color_bottom_right = rgba_float_from_hex(c->color[Draw_Color_BOTTOM_RIGHT]);
-                color_top_right = rgba_float_from_hex(c->color[Draw_Color_TOP_RIGHT]);
-            }
-
-            Vertex base = {
-                .half_size = { half_width, half_height },
-                .corner_radius = c->rectangle.border_radius,
-                .border_width = c->rectangle.border_width,
-            };
-            V4 color_border = rgba_float_from_hex(c->rectangle.border_color);
-            memcpy(&base.border_color, &color_border, sizeof base.border_color);
-
-            // TODO(felix): Deobfuscate.
-            #define V(px, py, u, vv, color) do { \
-                Vertex temp = base; \
-                temp.position[0] = (px); temp.position[1] = (py); \
-                temp.uv[0] = (u); temp.uv[1] = (vv); \
-                memcpy(&temp.fill_color, &(color), sizeof temp.fill_color); \
-                rectangle_vertices[vertex_index++] = temp; \
-            } while (0)
-            V(left,         top,          -1.f, -1.f, color_top_left);     // top left
-            V(left,         top + height, -1.f,  1.f, color_bottom_left);  // bottom left
-            V(left + width, top + height,  1.f,  1.f, color_bottom_right); // bottom right
-            V(left,         top,          -1.f, -1.f, color_top_left);     // top left
-            V(left + width, top + height,  1.f,  1.f, color_bottom_right); // bottom right
-            V(left + width, top,           1.f, -1.f, color_top_right);    // top right
-            #undef V
-        }
-
         void *pool = objc_autoreleasePoolPush();
 
         id drawable = ((id(*)(id, SEL))objc_msgSend)(platform__.metal_layer, sel_registerName("nextDrawable"));
@@ -623,9 +481,9 @@ static void platform__tick(id self, SEL command, id link) {
         ((void(*)(id, SEL, id))(void *)objc_msgSend)(color_attachment_0, sel_registerName("setTexture:"), drawable_tex);
         ((void(*)(id, SEL, unsigned long))(void *)objc_msgSend)(color_attachment_0, sel_registerName("setLoadAction:"), MTLLoadActionClear);
         ((void(*)(id, SEL, unsigned long))(void *)objc_msgSend)(color_attachment_0, sel_registerName("setStoreAction:"), MTLStoreActionStore);
-        CGFloat clear_rgba[4];
+        CGFloat clear_rgba[4] = {0};
         rgba_double_from_hex(platform__.base.clear_color, clear_rgba);
-        MTLClearColor clear = { clear_rgba[0], clear_rgba[1], clear_rgba[2], clear_rgba[3] };
+        MTLClearColor clear = { .red = clear_rgba[0], .green = clear_rgba[1], .blue = clear_rgba[2], .alpha = clear_rgba[3] };
         ((void(*)(id, SEL, MTLClearColor))(void *)objc_msgSend)(color_attachment_0, sel_registerName("setClearColor:"), clear);
 
         id command_buffer = ((id(*)(id, SEL))objc_msgSend)(platform__.queue, sel_registerName("commandBuffer"));
@@ -645,44 +503,7 @@ static void platform__tick(id self, SEL command, id link) {
         // NOTE(felix): Binding dummy texture because shader signature apparently requires a valid texture.
         ((void(*)(id, SEL, id, unsigned long))(void *)objc_msgSend)(render_command_encoder, sel_registerName("setFragmentTexture:atIndex:"), platform__.dummy_texture, 0UL);
 
-        id rectangle_buffer = 0;
-        if (rectangle_vertex_count > 0) {
-            rectangle_buffer = ((id(*)(id, SEL, void *, unsigned long, unsigned long))(void *)objc_msgSend)(platform__.device, sel_registerName("newBufferWithBytes:length:options:"), rectangle_vertices, rectangle_vertex_count * sizeof *rectangle_vertices, (unsigned long)MTLResourceStorageModeShared);
-            ((void(*)(id, SEL, id, unsigned long, unsigned long))(void *)objc_msgSend)(render_command_encoder, sel_registerName("setVertexBuffer:offset:atIndex:"), rectangle_buffer, 0UL, 0UL);
-        }
-
-        u64 batch_start = 0;
-        u64 batch_count = 0;
-        for (u64 i = 0; i < draw_commands->count; i++) {
-            Draw_Command *c = &draw_commands->data[i];
-            switch (c->kind) {
-                case Draw_Kind_NIL: break;
-                case Draw_Kind_RECTANGLE: {
-                    batch_count += 6;
-                } break;
-                case Draw_Kind_TEXT: {
-                    if (batch_count > 0) {
-                        ((void(*)(id, SEL, unsigned long, unsigned long, unsigned long))(void *)objc_msgSend)(
-                            render_command_encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"),
-                            (unsigned long)MTLPrimitiveTypeTriangle, batch_start, batch_count);
-                        batch_start += batch_count;
-                        batch_count = 0;
-                    }
-                    // Text path re-binds rectangle_buffer for following rect batches
-                    platform__draw_text(c, 0, render_command_encoder);
-                    if (rectangle_buffer != 0) {
-                        ((void(*)(id, SEL, id, unsigned long, unsigned long))(void *)objc_msgSend)(
-                            render_command_encoder, sel_registerName("setVertexBuffer:offset:atIndex:"),
-                            rectangle_buffer, 0UL, 0UL);
-                    }
-                } break;
-                default: unreachable;
-            }
-        }
-
-        if (batch_count > 0) {
-            ((void(*)(id, SEL, unsigned long, unsigned long, unsigned long))(void *)objc_msgSend)(render_command_encoder, sel_registerName("drawPrimitives:vertexStart:vertexCount:"), (unsigned long)MTLPrimitiveTypeTriangle, batch_start, batch_count);
-        }
+        // TODO(felix): Support the new GPU API.
 
         ((void(*)(id, SEL))(void *)objc_msgSend)(render_command_encoder, sel_registerName("endEncoding"));
         ((void(*)(id, SEL, id))(void *)objc_msgSend)(command_buffer, sel_registerName("presentDrawable:"), drawable);
@@ -710,8 +531,8 @@ static void platform__touches_began(id self, SEL command, id touches, id event) 
     App_Frame_Info *frame = &platform__.base.frame;
     assert(frame->dpi_scale > 0);
     frame->mouse_position = v2_scale((V2){ .x = (f32)point.x, .y = (f32)point.y }, frame->dpi_scale);
-    frame->mouse_clicked[App_Mouse_LEFT] = true;
-    frame->mouse_down[App_Mouse_LEFT] = true;
+    frame->mouse_clicked[App_Mouse_Button_LEFT] = true;
+    frame->mouse_down[App_Mouse_Button_LEFT] = true;
 }
 
 static void platform__touches_moved(id self, SEL command, id touches, id event) {
@@ -733,7 +554,7 @@ static void platform__touches_ended(id self, SEL command, id touches, id event) 
     (void)touches;
     (void)event;
 
-    platform__.base.frame.mouse_down[App_Mouse_LEFT] = false;
+    platform__.base.frame.mouse_down[App_Mouse_Button_LEFT] = false;
 }
 
 static Class platform__layer_class(id self, SEL command) {

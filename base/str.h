@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-12
+// https://github.com/felix-u 2026-11-08
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(STR_H)
@@ -28,6 +28,7 @@ typedef struct {
 #endif
 
 STR_FUNCTION _Bool              cstring_equals(const char *a, const char *b);
+STR_FUNCTION _Bool              cstring_equals_case_insensitive(const char *a, const char *b);
 STR_FUNCTION unsigned long long cstring_length(const char *cstring);
 STR_FUNCTION String_Cut         string_cut_last(String s, char c);
 STR_FUNCTION _Bool              string_equals(String a, String b);
@@ -56,6 +57,19 @@ STR_FUNCTION _Bool cstring_equals(const char *a, const char *b) {
         b += 1;
     }
     return *a == *b;
+}
+
+STR_FUNCTION _Bool cstring_equals_case_insensitive(const char *a, const char *b) {
+    if (*a == 0 || *b == 0) return 0;
+    char lower_a = 0;
+    char lower_b = 0;
+    do {
+        lower_a = (char)(*a | ((('A' <= *a) & (*a <= 'Z')) << 5));
+        lower_b = (char)(*b | ((('A' <= *b) & (*b <= 'Z')) << 5));
+        a += 1;
+        b += 1;
+    } while (lower_a != 0 && lower_a == lower_b);
+    return lower_a == lower_b;
 }
 
 STR_FUNCTION unsigned long long cstring_length(const char *cstring) {
@@ -133,7 +147,7 @@ static String string_range(String s, unsigned long long start, unsigned long lon
 
 static _Bool string_starts_with(String s, String start) {
     if (s.count < start.count) return 0;
-    for (u64 i = 0; i < start.count; i += 1) if (s.data[i] != start.data[i]) return 0;
+    for (unsigned long long i = 0; i < start.count; i += 1) if (s.data[i] != start.data[i]) return 0;
     return 1;
 }
 

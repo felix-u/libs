@@ -6,8 +6,6 @@ if not exist build.exe (
         -link -subsystem:console -incremental:no -entry:entrypoint ^
         Kernel32.lib Shell32.lib -Fe:build.exe
     if errorlevel 1 exit /b %errorlevel%
-) else (
-    echo Reusing last compiled build.exe.
 )
 
 build.exe %*

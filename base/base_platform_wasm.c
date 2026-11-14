@@ -1,12 +1,15 @@
 #define BASE_PLATFORM_WASM
 
+#include "base/base_platform_gles3_common.c"
+
 struct Platform_Implementation {
     Platform base;
-
-    f32 real_over_virtual_window_scale;
-    cpu_draw_Surface surface;
-    cpu_draw_Font font;
+    GLES3_GPU gpu;
 };
+
+static GLES3_GPU *gles3__gpu_from_platform(Platform *platform) {
+    return &((Platform_Implementation *)platform)->gpu;
+}
 
 static Platform_Implementation platform__;
 
@@ -48,6 +51,7 @@ static App_Key app_key_from_js(const char *bytes, u32 count) {
     if (key == 0) {
         if (0) {}
         else if (string_equals(js_key, S("ShiftLeft"))) key = App_Key_SHIFT;
+        else if (string_equals(js_key, S("ControlLeft")) || string_equals(js_key, S("ControlRight"))) key = App_Key_CONTROL;
         else if (string_equals(js_key, S("Equal"))) key = '=';
         else if (string_equals(js_key, S("Minus")))  key = '-';
         else {
@@ -65,9 +69,9 @@ static App_Key app_key_from_js(const char *bytes, u32 count) {
 static App_Mouse_Button app_mouse_button_from_js(JS_Mouse_Button js_button) {
     App_Mouse_Button button = 0;
     switch (js_button) {
-        case JS_Mouse_Button_LEFT: button = App_Mouse_LEFT; break;
-        case JS_Mouse_Button_MIDDLE: button = App_Mouse_MIDDLE; break;
-        case JS_Mouse_Button_RIGHT: button = App_Mouse_RIGHT; break;
+        case JS_Mouse_Button_LEFT: button = App_Mouse_Button_LEFT; break;
+        case JS_Mouse_Button_MIDDLE: button = App_Mouse_Button_MIDDLE; break;
+        case JS_Mouse_Button_RIGHT: button = App_Mouse_Button_RIGHT; break;
         default: {
             static bool once = false;
             if (!once) {
@@ -79,15 +83,14 @@ static App_Mouse_Button app_mouse_button_from_js(JS_Mouse_Button js_button) {
     return button;
 }
 
-cpu_draw_Surface *platform__get_draw_surface_pointer(void) {
-    return &platform__.surface;
-}
-
+// TODO(felix): Replace these with a bespoke META(export) directive? Once the metaprogram has semantic parsing.
+META(link_flag "-Wl,--export=platform__get_temp_js_string_buffer")
 char *platform__get_temp_js_string_buffer(void) {
     static char platform__js_string_buffer[64];
     return platform__js_string_buffer;
 }
 
+META(link_flag "-Wl,--export=platform__on_key_down")
 void platform__on_key_down(const char *bytes, u32 count) {
     App_Frame_Info *frame = &platform__.base.frame;
     App_Key key = app_key_from_js(bytes, count);
@@ -95,11 +98,13 @@ void platform__on_key_down(const char *bytes, u32 count) {
     frame->key_down[key] = true;
 }
 
+META(link_flag "-Wl,--export=platform__on_key_up")
 void platform__on_key_up(const char *bytes, u32 count) {
     App_Key key = app_key_from_js(bytes, count);
     platform__.base.frame.key_down[key] = false;
 }
 
+META(link_flag "-Wl,--export=platform__on_mouse_down")
 void platform__on_mouse_down(JS_Mouse_Button js_button) {
     App_Frame_Info *frame = &platform__.base.frame;
     App_Mouse_Button button = app_mouse_button_from_js(js_button);
@@ -107,38 +112,40 @@ void platform__on_mouse_down(JS_Mouse_Button js_button) {
     frame->mouse_down[button] = true;
 }
 
+META(link_flag "-Wl,--export=platform__on_mouse_up")
 void platform__on_mouse_up(JS_Mouse_Button js_button) {
     App_Mouse_Button button = app_mouse_button_from_js(js_button);
     platform__.base.frame.mouse_down[button] = false;
 }
 
+META(link_flag "-Wl,--export=platform__on_scroll")
 void platform__on_scroll(f32 x, f32 y) {
     (void)x; // for now
-    platform__.base.frame.scroll = y / -120.f;
+    platform__.base.frame.scroll += y / -120.f;
 }
 
+META(link_flag "-Wl,--export=platform__start")
 void platform__start(void) {
-    Platform *base = &platform__.base;
-
     static Arena persistent_arena, frame_arena;
-
-    persistent_arena = arena_init(16 * 1024 * 1024);
+    Platform *base = &platform__.base;
     base->persistent_arena = &persistent_arena;
-
-    frame_arena = arena_init(16 * 1024 * 1024);
     base->frame_arena = &frame_arena;
 
     app_start(base);
-
-    platform__.font = cpu_draw_font_from_bdf(platform__font_bytes, platform__font_size);
+    base_platform_reserve_frame_arena(base);
 
     base->frame.dpi_scale = 1.f;
-    if (platform__.real_over_virtual_window_scale == 0.f) platform__.real_over_virtual_window_scale = 3.f;
+    gles3__initialise(&platform__.gpu, base->persistent_arena);
 }
 
+META(link_flag "-Wl,--export=platform__update_and_render")
 void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_x, f32 mouse_y) {
-    Arena scratch = *platform__.base.frame_arena;
+    Scratch scratch = scratch_begin(platform__.base.frame_arena);
     App_Frame_Info *frame = &platform__.base.frame;
+    frame->window_size = (V2){ .x = window_width, .y = window_height };
+    frame->mouse_position = (V2){ .x = mouse_x, .y = mouse_y };
+
+    gles3__begin_frame(&platform__.base);
 
     static Time_Averaged_Sampler sampler = {0};
     static bool sampler_init = false;
@@ -152,44 +159,15 @@ void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_
     frame->seconds_since_last_frame = (f32)time_averaged_sample_elapsed_seconds(&sampler);
     frame->seconds_since_last_frame = CLAMP_HIGH(0.1f, frame->seconds_since_last_frame);
 
-    // NOTE(felix): these have to match the values on the JS side!
-    i32 max_virtual_width = 1920;
-    i32 max_virtual_height = 1200;
-
-    cpu_draw_Surface *surface = &platform__.surface;
-    if (surface->pixels == 0) {
-        u32 *pixels = arena_make(platform__.base.persistent_arena, (u64)(max_virtual_width * max_virtual_height), u32);
-        *surface = cpu_draw_surface(pixels, max_virtual_width, (int)roundf(window_width), (int)roundf(window_height));
-    }
-
-    f32 actual_real_over_virtual_window_scale = platform__.real_over_virtual_window_scale;
-    actual_real_over_virtual_window_scale = ceilf(MAX(window_width / (f32)max_virtual_width, actual_real_over_virtual_window_scale));
-    actual_real_over_virtual_window_scale = ceilf(MAX(window_height / (f32)max_virtual_height, actual_real_over_virtual_window_scale));
-    assert(actual_real_over_virtual_window_scale > 0);
-
-    platform__.base.frame.window_size = v2_scale((V2){ window_width, window_height }, 1.f / actual_real_over_virtual_window_scale);
-    surface->clip_right = (int)roundf(platform__.base.frame.window_size.x);
-    surface->clip_bottom = (int)roundf(platform__.base.frame.window_size.y);
-
-    f32 real_window_size[2] = { window_width, window_height };
-    f32 real_mouse_position[2] = { mouse_x, mouse_y };
-    for (u64 i = 0; i < 2; i += 1) {
-        v(frame->mouse_position)[i] = real_mouse_position[i] * (v(frame->window_size)[i] / real_window_size[i]);
-    }
-
-    platform__.base.draw_commands = (Array_Draw_Command){0};
     app_update_and_render(&platform__.base);
 
-    u32 clear = abgr_from_rgba(platform__.base.clear_color);
-    cpu_draw_rectangle(*surface, 0, 0, surface->clip_right, surface->clip_bottom, clear);
-    cpu_draw_commands(*surface, &platform__.font, platform__.base.draw_commands.data, platform__.base.draw_commands.count);
+    void js_set_cursor_hidden(bool hidden);
+    js_set_cursor_hidden(platform__.base.hide_cursor);
+
+    gles3__end_frame(&platform__.base);
 
     app_frame_info_reset_end_of_frame(frame);
-    *platform__.base.frame_arena = scratch;
-}
-
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
-    return cpu_draw_platform_measure_text(&((Platform_Implementation *)platform)->font, text, font_size);
+    scratch_end(scratch);
 }
 
 static void program(void) {

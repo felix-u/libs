@@ -21,9 +21,8 @@ enum { // https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles
     WS_EX_APPWINDOW = 0x00040000L,
 };
 
-#define MAKEINTRESOURCEA(i) ((char *)((unsigned long)((unsigned short)(i))))
-#define MAKEINTRESOURCE MAKEINTRESOURCEA
-#define IDC_ARROW MAKEINTRESOURCE(32512)
+#define MAKEINTRESOURCEW(i) ((unsigned short *)((unsigned long long)((unsigned short)(i))))
+#define IDC_ARROW MAKEINTRESOURCEW(32512)
 
 #define WIN32__LOWORD(l) ((unsigned short)(((unsigned long long)(l)) & 0xffff))
 #define WIN32__HIWORD(l) ((unsigned short)((((unsigned long long)(l)) >> 16) & 0xffff))
@@ -38,19 +37,6 @@ typedef struct {
     POINT ptMinTrackSize;
     POINT ptMaxTrackSize;
 } MINMAXINFO;
-
-typedef struct {
-    long left;
-    long top;
-    long right;
-    long bottom;
-} RECT;
-typedef struct {
-    unsigned long cbSize;
-    RECT rcMonitor;
-    RECT rcWork;
-    unsigned long dwFlags;
-} MONITORINFO;
 
 typedef struct {
     void *hwnd;
@@ -72,49 +58,52 @@ typedef struct {
     void *hIcon;
     void *hCursor;
     void *hbrBackground;
-    const char *lpszMenuName;
-    const char *lpszClassName;
-} WNDCLASSA;
+    const unsigned short *lpszMenuName;
+    const unsigned short *lpszClassName;
+} WNDCLASSW;
 
 META(link "Gdi32")
-WIN32_CALL(int) ReleaseDC(void *window_handle, void *device_context_handle);
+int ReleaseDC(void *window_handle, void *device_context_handle);
 
 META(link "User32")
-WIN32_CALL(void *)         CreateWindowExA(unsigned long extended_style, const char *class_name, const char *window_name, unsigned long style, int x, int y, int width, int height, void *window_parent_handle, void *menu_handle, void *instance_handle, void *param);
-WIN32_CALL(long long)      DefWindowProcA(void *window_handle, unsigned message, unsigned long long wparam, long long lparam);
-WIN32_CALL(int)            DestroyWindow(void *window_handle);
-WIN32_CALL(long long)      DispatchMessageA(const MSG *);
-WIN32_CALL(void *)         GetDC(void *window_handle);
-WIN32_CALL(unsigned)       GetDpiForWindow(void *window_handle);
-WIN32_CALL(int)            GetMonitorInfoA(void *monitor_handle, MONITORINFO *);
-WIN32_CALL(void *)         LoadCursorA(void *instance_handle, const char *cursor_name);
-WIN32_CALL(void *)         MonitorFromWindow(void *window_handle, unsigned long flags);
-WIN32_CALL(int)            PeekMessageA(MSG *, void *window_handle, unsigned message_filter_min, unsigned message_filter_max, unsigned remove_message);
-WIN32_CALL(void)           PostQuitMessage(int exit_code);
-WIN32_CALL(unsigned short) RegisterClassA(const WNDCLASSA *);
-WIN32_CALL(int)            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT);
-WIN32_CALL(int)            ShowWindow(void *window_handle, int show_command);
-WIN32_CALL(int)            TranslateMessage(const MSG *);
+void *         CreateWindowExW(unsigned long extended_style, const unsigned short *class_name, const unsigned short *window_name, unsigned long style, int x, int y, int width, int height, void *window_parent_handle, void *menu_handle, void *instance_handle, void *param);
+long long      DefWindowProcW(void *window_handle, unsigned message, unsigned long long wparam, long long lparam);
+int            DestroyWindow(void *window_handle);
+long long      DispatchMessageW(const MSG *);
+void *         GetDC(void *window_handle);
+unsigned       GetDpiForWindow(void *window_handle);
+void *         LoadCursorW(void *instance_handle, const unsigned short *cursor_name);
+int            PeekMessageW(MSG *, void *window_handle, unsigned message_filter_min, unsigned message_filter_max, unsigned remove_message);
+void           PostQuitMessage(int exit_code);
+unsigned short RegisterClassW(const WNDCLASSW *);
+void *         SetCursor(void *cursor_handle);
+int            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT);
+int            ShowWindow(void *window_handle, int show_command);
+int            TranslateMessage(const MSG *);
 
 static void *win32_create_window(const char *window_name, WNDPROC window_procedure) {
-    const char *class_name = window_name;
-    WNDCLASSA window_class = {
+    enum { WINDOW_NAME_MAX_LENGTH = 256 };
+    u16 window_name_utf16[WINDOW_NAME_MAX_LENGTH] = {0};
+    utf_Conversion conversion = utf16_from_utf8(window_name_utf16, WINDOW_NAME_MAX_LENGTH - 1, window_name, cstring_length(window_name));
+    window_name_utf16[conversion.destination_units_written] = 0;
+
+    const u16 *class_name = window_name_utf16;
+    WNDCLASSW window_class = {
         .lpfnWndProc = window_procedure,
-        .hCursor = LoadCursorA(0, IDC_ARROW),
         .lpszClassName = class_name,
     };
     {
-        unsigned short ok = RegisterClassA(&window_class);
+        unsigned short ok = RegisterClassW(&window_class);
         ensure(ok != 0);
     }
 
     int ok = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     ensure(ok);
 
-    unsigned long extended_style = WS_EX_APPWINDOW;
+    unsigned extended_style = WS_EX_APPWINDOW;
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT, width = CW_USEDEFAULT, height = CW_USEDEFAULT;
 
-    void *window = CreateWindowExA(extended_style, class_name, window_name, WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, 0, 0);
+    void *window = CreateWindowExW(extended_style, class_name, window_name_utf16, WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, 0, 0);
     ensure(window != 0);
 
     return window;
@@ -126,10 +115,10 @@ static void win32_process_messages(bool *should_quit) {
 
     enum { WM_QUIT = 0x0012 };
 
-    for (MSG message = {0}; PeekMessageA(&message, 0, 0, 0, PM_REMOVE);) {
+    for (MSG message = {0}; PeekMessageW(&message, 0, 0, 0, PM_REMOVE);) {
         if (message.message == WM_QUIT) *should_quit = true;
         TranslateMessage(&message);
-        DispatchMessageA(&message);
+        DispatchMessageW(&message);
     }
 }
 
@@ -140,6 +129,7 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
         WM_DESTROY       = 0x0002,
         WM_SIZE          = 0x0005,
         WM_CLOSE         = 0x0010,
+        WM_SETCURSOR     = 0x0020,
         WM_GETMINMAXINFO = 0x0024,
         WM_DISPLAYCHANGE = 0x007E,
         WM_KEYDOWN       = 0x0100,
@@ -150,7 +140,6 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
         WM_LBUTTONUP     = 0x0202,
         WM_RBUTTONDOWN   = 0x0204,
         WM_RBUTTONUP     = 0x0205,
-        WM_SIZING        = 0x0214,
         WM_DPICHANGED    = 0x02E0,
     };
 
@@ -206,12 +195,12 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
             frame->key_down[key] = false;
         } break;
         case WM_LBUTTONDOWN: {
-            App_Mouse_Button button = App_Mouse_LEFT;
+            App_Mouse_Button button = App_Mouse_Button_LEFT;
             frame->mouse_clicked[button] = !frame->mouse_down[button];
             frame->mouse_down[button] = true;
         } break;
         case WM_LBUTTONUP: {
-            App_Mouse_Button button = App_Mouse_LEFT;
+            App_Mouse_Button button = App_Mouse_Button_LEFT;
             frame->mouse_down[button] = false;
         } break;
         case WM_MOUSEMOVE: {
@@ -220,27 +209,28 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
         } break;
         case WM_MOUSEWHEEL: {
             i16 delta = (i16)WIN32__HIWORD(w);
-            frame->scroll = (f32)delta / 120.f;
+            frame->scroll += (f32)delta / 120.f;
         } break;
         case WM_RBUTTONDOWN: {
-            App_Mouse_Button button = App_Mouse_RIGHT;
+            App_Mouse_Button button = App_Mouse_Button_RIGHT;
             frame->mouse_clicked[button] = !frame->mouse_down[button];
             frame->mouse_down[button] = true;
         } break;
         case WM_RBUTTONUP: {
-            App_Mouse_Button button = App_Mouse_RIGHT;
+            App_Mouse_Button button = App_Mouse_Button_RIGHT;
             frame->mouse_down[button] = false;
+        } break;
+        case WM_SETCURSOR: {
+            enum { HTCLIENT = 1 };
+            bool is_client_area = WIN32__LOWORD(l) == HTCLIENT;
+            if (is_client_area) SetCursor(platform->hide_cursor ? 0 : LoadCursorW(0, IDC_ARROW));
         } break;
         case WM_SIZE: {
             window_size[0] = (f32)WIN32__LOWORD(l);
             window_size[1] = (f32)WIN32__HIWORD(l);
         } break;
-        case WM_SIZING: {
-            // TODO(felix): handle redrawing here so that we're not blocked while resizing
-            // NOTE(felix): apparently there might be some problems with this and the better way to do it is for the thread with window events to be different than the application thread that submits draw calls and updates the program
-        } break;
         default: break;
     }
 
-    return DefWindowProcA(window, message, w, l);
+    return DefWindowProcW(window, message, w, l);
 }

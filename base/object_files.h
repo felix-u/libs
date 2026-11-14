@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-25
+// https://github.com/felix-u 2026-11-07
 // Public domain. NO WARRANTY - use at your own risk
 
 
@@ -13,10 +13,14 @@
     #define OBJECT_FUNCTION
 #endif
 
-#if __STDC_VERSION__ >= 201112L
-    #define OBJECT_STATIC_ASSERT(expression, message) _Static_assert(expression, message)
-#else
-    #define OBJECT_STATIC_ASSERT(expression, message)
+#if !defined(OBJECT_STATIC_ASSERT)
+    #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+        #define OBJECT_STATIC_ASSERT(expression, message) _Static_assert(expression, message)
+    #else
+        #define OBJECT__GLUE(a, b) a##b
+        #define OBJECT__GLUE_GLUE(a, b) OBJECT__GLUE(a, b)
+        #define OBJECT_STATIC_ASSERT(expression, message) typedef char OBJECT__GLUE_GLUE(object__static_assert_line_, __LINE__)[(expression) ? 1 : -1]
+    #endif
 #endif
 
 typedef enum {
@@ -24,15 +28,15 @@ typedef enum {
     object_Bundle_MACHO_MACOS           = 1 << 1,
     object_Bundle_MACHO_IOS             = 1 << 2,
     object_Bundle_MACHO_IOS_SIMULATOR   = 1 << 3,
+    object_Bundle_WASM                  = 1 << 4,
 
-    object_Bundle_READ = 1 << 4,
-    object_Bundle_WRITE = 1 << 5,
+    object_Bundle_READ = 1 << 5,
+    object_Bundle_WRITE = 1 << 6,
 } object_Bundle_Flags;
 #define OBJECT_BUNDLE_ANY_MACHO (object_Bundle_MACHO_MACOS | object_Bundle_MACHO_IOS | object_Bundle_MACHO_IOS_SIMULATOR)
 
 OBJECT_FUNCTION unsigned char *object_bundle(
     const char *array_name, unsigned array_name_length,
-    const char *length_name, unsigned length_name_length,
     void *data, unsigned data_size,
     unsigned char *buffer, unsigned long long *buffer_size,
     object_Bundle_Flags flags
@@ -554,18 +558,31 @@ static inline unsigned object__macho_version(unsigned short major, unsigned char
     return result;
 }
 
+#define OBJECT__WASM_PADDED_LEB128_SIZE 5
+
+static inline void object__write_wasm_padded_u32(unsigned char *buffer, unsigned long long *written, unsigned value) {
+    for (int i = 0; i < OBJECT__WASM_PADDED_LEB128_SIZE; i += 1) {
+        _Bool is_last_byte = i == OBJECT__WASM_PADDED_LEB128_SIZE - 1;
+        unsigned char continuation = is_last_byte ? 0 : 0x80;
+        buffer[*written] = (unsigned char)((value & 0x7f) | continuation);
+        *written += 1;
+        value >>= 7;
+    }
+}
+
+static inline void object__write_wasm_name(unsigned char *buffer, unsigned long long *written, const char *name, unsigned name_length) {
+    object__write_wasm_padded_u32(buffer, written, name_length);
+    object__write(buffer, written, name, name_length);
+}
+
 OBJECT_FUNCTION unsigned char *object_bundle(
     const char *array_name, unsigned array_name_length,
-    const char *length_name, unsigned length_name_length,
     void *data, unsigned data_size,
     unsigned char *buffer, unsigned long long *buffer_size,
     object_Bundle_Flags flags
 ) {
     unsigned char *data_in_object_file = 0;
     unsigned long long written = 0;
-
-    unsigned long long data_size_without_length = (unsigned long long)data_size;
-    data_size += sizeof(unsigned long long); // for length variable
 
     _Bool read = !!(flags & object_Bundle_READ);
     _Bool write = !!(flags & object_Bundle_WRITE);
@@ -579,13 +596,11 @@ OBJECT_FUNCTION unsigned char *object_bundle(
         unsigned long long align_padding = (4 - (size_of_headers & 3)) & 3;
 
         _Bool array_name_is_in_string_table = array_name_length > 8;
-        _Bool length_name_is_in_string_table = length_name_length > 8;
         unsigned string_table_size = sizeof string_table_size;
         string_table_size += (unsigned)array_name_is_in_string_table * (array_name_length + 1);
-        string_table_size += (unsigned)length_name_is_in_string_table * (length_name_length + 1);
 
         unsigned long long bytes_needed = size_of_headers + align_padding + (unsigned long long)data_size;
-        bytes_needed += 2 * sizeof(object_COFF_Symbol);
+        bytes_needed += OBJECT_COFF_SYMBOL_SIZE;
         bytes_needed += (unsigned long long)string_table_size;
 
         OBJECT_ASSERT(bytes_needed <= 0xffffffff && "COFF file offsets are 32-bit");
@@ -600,7 +615,7 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             .number_of_sections = 1,
             .time_date_stamp = 0, // none
             .pointer_to_symbol_table = (unsigned)(size_of_headers + align_padding) + data_size,
-            .number_of_symbols = 2,
+            .number_of_symbols = 1,
             .size_of_optional_header = 0, // should be zero for object file
             .flags = object_COFF_File_Header_LARGE_ADDRESS_AWARE | object_COFF_File_Header_DEBUG_STRIPPED,
         };
@@ -623,7 +638,7 @@ OBJECT_FUNCTION unsigned char *object_bundle(
                 OBJECT_MEMCPY(section_header.name, ".rdata", sizeof ".rdata" - 1);
             }
 
-            section_header.flags = object_COFF_Section_Header_CNT_INITIALIZED_DATA;
+            section_header.flags = object_COFF_Section_Header_CNT_INITIALIZED_DATA | object_COFF_Section_Header_ALIGN_8BYTES;
             section_header.flags |= read * object_COFF_Section_Header_MEM_READ;
             section_header.flags |= write * object_COFF_Section_Header_MEM_WRITE;
 
@@ -633,36 +648,17 @@ OBJECT_FUNCTION unsigned char *object_bundle(
         object__write(buffer, &written, "\0\0\0", align_padding);
         OBJECT_ASSERT((unsigned)written == section_header.pointer_to_raw_data);
         {
-            object__write(buffer, &written, &data_size_without_length, sizeof data_size_without_length);
             data_in_object_file = &buffer[written];
 
             // if data == 0, user will write
-            if (data != 0) OBJECT_MEMCPY(buffer + written, data, data_size_without_length);
-            written += data_size_without_length;
+            if (data != 0) OBJECT_MEMCPY(buffer + written, data, data_size);
+            written += data_size;
         }
         OBJECT_ASSERT((unsigned)written == file_header.pointer_to_symbol_table);
 
-        { // size of data
+        {
             object_COFF_Symbol symbol = {
                 .value = 0, // offset in section header data
-                .section_number = 1, // one-based index
-                .type = {
-                    .complex = object_COFF_Symbol_Complex_Type_NULL,
-                    .base = object_COFF_Symbol_Base_Type_NULL, // no such thing as u64?
-                },
-                .storage_class = object_COFF_Symbol_Storage_Class_EXTERNAL,
-                .number_of_aux_symbols = 0,
-            };
-
-            if (!length_name_is_in_string_table) OBJECT_MEMCPY(symbol.name.short_name, length_name, length_name_length);
-            else symbol.name.string_table.offset = 4;
-
-            object__write(buffer, &written, &symbol, OBJECT_COFF_SYMBOL_SIZE);
-        }
-
-        { // data array
-            object_COFF_Symbol symbol = {
-                .value = sizeof(unsigned long long), // offset in section header data
                 .section_number = 1, // one-based index
                 .type = {
                     .complex = object_COFF_Symbol_Complex_Type_ARRAY,
@@ -673,7 +669,6 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             };
 
             if (!array_name_is_in_string_table) OBJECT_MEMCPY(symbol.name.short_name, array_name, array_name_length);
-            else if (length_name_is_in_string_table) symbol.name.string_table.offset = 4 + length_name_length + 1;
             else symbol.name.string_table.offset = 4;
 
             object__write(buffer, &written, &symbol, OBJECT_COFF_SYMBOL_SIZE);
@@ -681,10 +676,6 @@ OBJECT_FUNCTION unsigned char *object_bundle(
 
         unsigned string_table_begin = (unsigned)written;
         object__write(buffer, &written, &string_table_size, sizeof string_table_size);
-        if (length_name_is_in_string_table) {
-            object__write(buffer, &written, length_name, length_name_length);
-            buffer[written++] = 0;
-        }
         if (array_name_is_in_string_table) {
             object__write(buffer, &written, array_name, array_name_length);
             buffer[written++] = 0;
@@ -713,11 +704,11 @@ OBJECT_FUNCTION unsigned char *object_bundle(
         bytes_needed += data_size;
         unsigned symbol_table_offset = (unsigned)bytes_needed;
 
-        bytes_needed += 2 * sizeof(object_MachO_Symbol_64_Bit);
+        bytes_needed += sizeof(object_MachO_Symbol_64_Bit);
         unsigned strings_offset = (unsigned)bytes_needed;
 
-        // add leading underscore and trailing nil byte to each symbol name
-        unsigned string_table_size = 1 + (1 + length_name_length + 1) + (1 + array_name_length + 1);
+        // add leading underscore and trailing nil byte to the symbol name
+        unsigned string_table_size = 1 + (1 + array_name_length + 1);
         bytes_needed += (unsigned long long)string_table_size;
 
         OBJECT_ASSERT(bytes_needed <= 0xffffffff && "Mach-O file offsets are 32-bit");
@@ -790,7 +781,7 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             .type = object_MachO_Load_Command_Type_SYMBOL_TABLE,
             .command_size = sizeof symbol_table_command,
             .symbols_file_offset = symbol_table_offset,
-            .number_of_symbols = 2,
+            .number_of_symbols = 1,
             .string_table_file_offset = strings_offset,
             .string_table_size = string_table_size,
         };
@@ -800,8 +791,8 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             .type = object_MachO_Load_Command_Type_SYMBOL_TABLE_INFO,
             .command_size = sizeof symbol_table_info_command,
             .external_symbols_index = 0,
-            .number_of_external_symbols = 2,
-            .undefined_symbols_index = 2,
+            .number_of_external_symbols = 1,
+            .undefined_symbols_index = 1,
         };
         object__write(buffer, &written, &symbol_table_info_command, sizeof symbol_table_info_command);
 
@@ -830,17 +821,16 @@ OBJECT_FUNCTION unsigned char *object_bundle(
         OBJECT_ASSERT(written == raw_data_offset);
 
         {
-            object__write(buffer, &written, &data_size_without_length, sizeof data_size_without_length);
             data_in_object_file = &buffer[written];
 
             // if data == 0, user will write
-            if (data != 0) OBJECT_MEMCPY(buffer + written, data, data_size_without_length);
-            written += data_size_without_length;
+            if (data != 0) OBJECT_MEMCPY(buffer + written, data, data_size);
+            written += data_size;
         }
 
         OBJECT_ASSERT(written == (unsigned long long)symbol_table_command.symbols_file_offset);
 
-        object_MachO_Symbol_64_Bit length_symbol = {
+        object_MachO_Symbol_64_Bit array_symbol = {
             .name_offset = 1,
             .type =
                 object_MachO_Symbol_Type_DEFINED_IN_SECTION_NUMBER |
@@ -849,32 +839,115 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             .data_info = {0},
             .address = 0,
         };
-        object__write(buffer, &written, &length_symbol, sizeof length_symbol);
-
-        object_MachO_Symbol_64_Bit array_symbol = {
-            .name_offset = 1 + (1 + length_name_length + 1),
-            .type =
-                object_MachO_Symbol_Type_DEFINED_IN_SECTION_NUMBER |
-                object_MachO_Symbol_Type_EXTERNAL,
-            .section_number = 1,
-            .data_info = {0},
-            .address = data_size - data_size_without_length,
-        };
-        OBJECT_ASSERT(array_symbol.address == sizeof(unsigned long long));
         object__write(buffer, &written, &array_symbol, sizeof array_symbol);
 
         OBJECT_ASSERT(written == (unsigned long long)symbol_table_command.string_table_file_offset);
         buffer[written++] = 0; // string table has leading nil by convention
         {
             buffer[written++] = '_';
-            object__write(buffer, &written, length_name, length_name_length);
-            buffer[written++] = 0;
-        }
-        {
-            buffer[written++] = '_';
             object__write(buffer, &written, array_name, array_name_length);
             buffer[written++] = 0;
         }
+    } else if (flags & object_Bundle_WASM) {
+        enum {
+            WASM_SECTION_CUSTOM = 0,
+            WASM_SECTION_IMPORT = 2,
+            WASM_SECTION_DATA = 11,
+            WASM_EXTERNAL_KIND_MEMORY = 2,
+            WASM_LIMITS_MINIMUM_ONLY = 0,
+            WASM_DATA_SEGMENT_ACTIVE = 0,
+            WASM_OPCODE_I32_CONST = 0x41,
+            WASM_OPCODE_END = 0x0b,
+            WASM_LINKING_VERSION = 2,
+            WASM_LINKING_SEGMENT_INFO = 5,
+            WASM_LINKING_SYMBOL_TABLE = 8,
+            WASM_SYMBOL_KIND_DATA = 1,
+            WASM_SYMBOL_FLAGS_GLOBAL_DEFAULT_VISIBILITY = 0,
+            WASM_PAGE_SIZE = 65536,
+            DATA_ALIGNMENT_EXPONENT = 3,
+        };
+        unsigned long long leb = OBJECT__WASM_PADDED_LEB128_SIZE;
+
+        const char header[] = { 0, 'a', 's', 'm', 1, 0, 0, 0 };
+        const char memory_module[] = "env";
+        const char memory_field[] = "__linear_memory";
+        const char linking_name[] = "linking";
+        const char *segment_prefix = write ? ".data." : ".rodata.";
+        unsigned segment_prefix_length = write ? sizeof ".data." - 1 : sizeof ".rodata." - 1;
+        unsigned segment_name_length = segment_prefix_length + array_name_length;
+        unsigned memory_page_count = (unsigned)(((unsigned long long)data_size + WASM_PAGE_SIZE - 1) / WASM_PAGE_SIZE);
+
+        unsigned long long import_body_size = leb + (leb + sizeof memory_module - 1) + (leb + sizeof memory_field - 1) + 1 + 1 + leb;
+        unsigned long long data_body_size = leb + leb + 3 + leb + (unsigned long long)data_size;
+        unsigned long long symbol_fixed_size = 1 + leb + leb + leb + leb + leb;
+        unsigned long long symbol_table_body_size = leb + symbol_fixed_size + array_name_length;
+        unsigned long long segment_info_body_size = leb + (leb + segment_name_length) + leb + leb;
+        unsigned long long linking_body_size = (leb + sizeof linking_name - 1) + leb + (1 + leb + symbol_table_body_size) + (1 + leb + segment_info_body_size);
+
+        unsigned long long bytes_needed = sizeof header;
+        bytes_needed += 1 + leb + import_body_size;
+        bytes_needed += 1 + leb + data_body_size;
+        bytes_needed += 1 + leb + linking_body_size;
+        OBJECT_ASSERT(bytes_needed <= 0xffffffff && "wasm section sizes are 32-bit");
+
+        if (buffer == 0 || *buffer_size < bytes_needed) {
+            *buffer_size = bytes_needed;
+            return 0;
+        }
+
+        object__write(buffer, &written, header, sizeof header);
+
+        buffer[written++] = WASM_SECTION_IMPORT;
+        object__write_wasm_padded_u32(buffer, &written, (unsigned)import_body_size);
+        object__write_wasm_padded_u32(buffer, &written, 1);
+        object__write_wasm_name(buffer, &written, memory_module, sizeof memory_module - 1);
+        object__write_wasm_name(buffer, &written, memory_field, sizeof memory_field - 1);
+        buffer[written++] = WASM_EXTERNAL_KIND_MEMORY;
+        buffer[written++] = WASM_LIMITS_MINIMUM_ONLY;
+        object__write_wasm_padded_u32(buffer, &written, memory_page_count);
+
+        buffer[written++] = WASM_SECTION_DATA;
+        object__write_wasm_padded_u32(buffer, &written, (unsigned)data_body_size);
+        object__write_wasm_padded_u32(buffer, &written, 1);
+        object__write_wasm_padded_u32(buffer, &written, WASM_DATA_SEGMENT_ACTIVE);
+        buffer[written++] = WASM_OPCODE_I32_CONST;
+        buffer[written++] = 0;
+        buffer[written++] = WASM_OPCODE_END;
+        object__write_wasm_padded_u32(buffer, &written, data_size);
+        {
+            data_in_object_file = &buffer[written];
+
+            if (data != 0) OBJECT_MEMCPY(buffer + written, data, data_size);
+            written += data_size;
+        }
+
+        buffer[written++] = WASM_SECTION_CUSTOM;
+        object__write_wasm_padded_u32(buffer, &written, (unsigned)linking_body_size);
+        object__write_wasm_name(buffer, &written, linking_name, sizeof linking_name - 1);
+        object__write_wasm_padded_u32(buffer, &written, WASM_LINKING_VERSION);
+
+        buffer[written++] = WASM_LINKING_SYMBOL_TABLE;
+        object__write_wasm_padded_u32(buffer, &written, (unsigned)symbol_table_body_size);
+        object__write_wasm_padded_u32(buffer, &written, 1);
+        {
+            buffer[written++] = WASM_SYMBOL_KIND_DATA;
+            object__write_wasm_padded_u32(buffer, &written, WASM_SYMBOL_FLAGS_GLOBAL_DEFAULT_VISIBILITY);
+            object__write_wasm_name(buffer, &written, array_name, array_name_length);
+            object__write_wasm_padded_u32(buffer, &written, 0);
+            object__write_wasm_padded_u32(buffer, &written, 0);
+            object__write_wasm_padded_u32(buffer, &written, data_size);
+        }
+
+        buffer[written++] = WASM_LINKING_SEGMENT_INFO;
+        object__write_wasm_padded_u32(buffer, &written, (unsigned)segment_info_body_size);
+        object__write_wasm_padded_u32(buffer, &written, 1);
+        object__write_wasm_padded_u32(buffer, &written, segment_name_length);
+        object__write(buffer, &written, segment_prefix, segment_prefix_length);
+        object__write(buffer, &written, array_name, array_name_length);
+        object__write_wasm_padded_u32(buffer, &written, DATA_ALIGNMENT_EXPONENT);
+        object__write_wasm_padded_u32(buffer, &written, 0);
+
+        OBJECT_ASSERT(written == bytes_needed);
     } else {
         OBJECT_ASSERT(0 && "unsupported or unset object file type; check `flags`");
     }
@@ -882,6 +955,5 @@ OBJECT_FUNCTION unsigned char *object_bundle(
     *buffer_size = written;
     return data_in_object_file;
 }
-
 
 #endif // OBJECT_IMPLEMENTATION

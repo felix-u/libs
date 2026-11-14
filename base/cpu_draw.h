@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-04-16
+// https://github.com/felix-u 2026-11-03
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(CPU_DRAW_H)
@@ -432,7 +432,7 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
     float reciprocal_total_area = 1.f / total_area;
 
     unsigned colors[3] = { acolor, bcolor, ccolor };
-    float channels[3][4];
+    float channels[3][4] = {0};
     for (int i = 0; i < 3; i += 1) {
         channels[i][0] = (float)(colors[i] >> 24);
         channels[i][1] = (float)((colors[i] >> 16) & 0xff);
@@ -455,7 +455,7 @@ CPU_DRAW_FUNCTION void cpu_draw_triangle_interpolate(cpu_draw_Surface surface, i
             if (outside) continue;
 
             // TODO(felix): is there fast integer-based interpolation we can do?
-            unsigned interpolated[4];
+            unsigned interpolated[4] = {0};
             for (int i = 0; i < 4; i += 1) {
                 interpolated[i] = (unsigned)(alpha * channels[0][i] + beta * channels[1][i] + gamma * channels[2][i]);
             }

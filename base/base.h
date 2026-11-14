@@ -6,7 +6,25 @@
 
 #define META(...)
 
-#include <stdarg.h> // NOTE(felix): doesn't seem like anything can be done about this one
+#if COMPILER_CLANG || COMPILER_GCC
+    typedef __builtin_va_list va_list;
+    #define va_start(arguments, last_parameter)  __builtin_va_start(arguments, last_parameter)
+    #define va_arg(arguments, T)                 __builtin_va_arg(arguments, T)
+    #define va_end(arguments)                    __builtin_va_end(arguments)
+    #define va_copy(destination, source)         __builtin_va_copy(destination, source)
+#elif COMPILER_MSVC && BASE_ARCH == BASE_ARCH_X86_64
+    typedef char *va_list;
+    void __va_start(va_list *arguments, ...);
+    #define va_start(arguments, last_parameter) ((void)__va_start(&(arguments), last_parameter))
+    #define va_arg(arguments, T) \
+        ((sizeof(T) > 8 || (sizeof(T) & (sizeof(T) - 1)) != 0) \
+            ? **(T **)(((arguments) += 8) - 8) \
+            :  *(T * )(((arguments) += 8) - 8))
+    #define va_end(arguments) ((void)((arguments) = (va_list)0))
+    #define va_copy(destination, source) ((destination) = (source))
+#else
+    #error "UNIMPLEMENTED"
+#endif
 
 #if !defined(__bool_true_false_are_defined)
     #if defined(bool)
@@ -24,9 +42,11 @@
     #define __bool_true_false_are_defined 1
 #endif
 
+#define BASE__GLUE(a, b) a##b
+#define BASE__GLUE_GLUE(a, b) BASE__GLUE(a, b)
+
 #if BASE_C_VERSION < 2011
-    // TODO(felix): is there a typedef hack we can do here?
-    #define _Static_assert(expression, message)
+    #define _Static_assert(expression, message) typedef char BASE__GLUE_GLUE(BASE__STATIC_ASSERT_LINE_, __LINE__)[(expression) ? 1 : -1]
 #endif
 
 typedef unsigned char       u8;
@@ -61,17 +81,8 @@ _Static_assert(sizeof(f64) == 8, "");
 #endif
 
 #if BASE_OS == BASE_OS_LINUX
-    void exit(int); // TODO(felix): can remove?
-    void abort(void); // TODO(felix): own implementation to not depend on libc
-    void *calloc(size_t item_count, size_t item_size); // TODO(felix): remove once using virtual alloc arena
-    void free(void *pointer); // TODO(felix): remove once using virtual alloc arena
-    // TODO(felix): which of these can be removed in favour of doing direct syscalls?
-        #include <fcntl.h>
-        #include <unistd.h>
-    #include <stdio.h> // TODO(felix): only needed for FILE. remove!
+    #error "TODO(felix)"
 #elif BASE_OS & BASE_OS_ANY_APPLE
-    // TODO(felix): same notes as above
-
     #define _WSTATUS(x)    ((x) & 0177)
     #define	_WSTOPPED      0177
     #define WEXITSTATUS(x) (int)(((unsigned)(x) >> 8) & 0xff)
@@ -154,8 +165,6 @@ _Static_assert(sizeof(f64) == 8, "");
     };
 
     void    abort(void);
-    int     access(const char *path, int mode);
-    void   *calloc(size_t item_count, size_t item_size);
     int     chdir(const char *path);
     int     clock_gettime(clockid_t, struct timespec *);
     int     execvp(const char *file, char *const argv[]);
@@ -164,13 +173,16 @@ _Static_assert(sizeof(f64) == 8, "");
     FILE   *fopen(const char *path, const char *mode);
     pid_t   fork(void);
     size_t  fread(void *pointer, size_t size, size_t number_of_items, FILE *file);
-    void    free(void *pointer);
+    int     fseek(FILE *file, long offset, int whence);
     size_t  fwrite(const void *pointer, size_t size, size_t number_of_items, FILE *file);
     int     lstat(const char *path, struct stat *buffer);
-    void   *malloc(size_t bytes);
     int     mkdir(const char *path, mode_t mode);
     int     pthread_create(pthread_t *, const pthread_attr_t *, void *(*start_routine)(void *), void *argument);
     char   *realpath(const char *file_name, char *resolved_name); //  __DARWIN_EXTSN(realpath); // NOTE(felix): `__DARWIN_EXTSN` needed to silence "error: cannot apply asm label to function after its first use"
+    int     close(int descriptor);
+    int     dup2(int descriptor, int new_descriptor);
+    int     pipe(int descriptors[2]);
+    ssize_t read(int descriptor, void *buffer, size_t number_of_bytes);
     int     remove(const char *path);
     int     stat(const char *path, struct stat *buf);
     void    rewind(FILE *file);
@@ -184,109 +196,146 @@ _Static_assert(sizeof(f64) == 8, "");
     #define os_abort() abort()
     #define os_exit(code) exit(code)
 #elif BASE_OS == BASE_OS_WINDOWS
-    #if COMPILER_CLANG || COMPILER_MSVC
-        #define WIN32_CALL(T) __declspec(dllimport) T __stdcall
+    #if BASE_ARCH_BITS == 64
+        typedef u64 size_t;
+    #else
+        #error "UNIMPLEMENTED"
     #endif
 
-    #define os_abort() ExitProcess(1)
-    #define os_exit(code) ExitProcess(code)
+    #define os_abort() NtTerminateProcess((void *)-1, 1)
+    #define os_exit(code) RtlExitUserProcess((int)(code))
 
     META(link "Kernel32")
-    WIN32_CALL(int)           CloseHandle(void *);
-    struct _SECURITY_ATTRIBUTES;
-    WIN32_CALL(int)           CreateDirectoryA(const char *path, struct _SECURITY_ATTRIBUTES *);
-    WIN32_CALL(void *)        CreateFileA(const char *file_name, unsigned long desired_access, unsigned long share_mode, struct _SECURITY_ATTRIBUTES *, unsigned long creation_disposition, unsigned long flags_and_attributes, void *template_file);
-    #if !defined(_PROCESSTHREADSAPI_H_)
-        typedef struct { // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfoa
-            unsigned long cb;
-            char *lpReserved;
-            char *lpDesktop;
-            char *lpTitle;
-            unsigned long dwX;
-            unsigned long dwY;
-            unsigned long dwXSize;
-            unsigned long dwYSize;
-            unsigned long dwXCountChars;
-            unsigned long dwYCountChars;
-            unsigned long dwFillAttribute;
-            unsigned long dwFlags;
-            unsigned short wShowWindow;
-            unsigned short cbReserved2;
-            unsigned char *lpReserved2;
-            void *hStdInput;
-            void *hStdOutput;
-            void *hStdError;
-        } STARTUPINFOA;
-        typedef struct { // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_information
-            void *hProcess;
-            void *hThread;
-            unsigned long dwProcessId;
-            unsigned long dwThreadId;
-        } PROCESS_INFORMATION;
-    #endif
-    WIN32_CALL(int)           CreateProcessA(const char *application_name, char *command_line, struct _SECURITY_ATTRIBUTES *process_attributes, struct _SECURITY_ATTRIBUTES *thread_attributes, int should_inherit_handles, unsigned long creation_flags, void *environment, const char *current_directory, STARTUPINFOA *, PROCESS_INFORMATION *);
-    WIN32_CALL(int)           DeleteFileA(const char *file_name);
-    WIN32_CALL(void)          ExitProcess(unsigned exit_code);
-    WIN32_CALL(int) FindClose(void *find_file_handle);
-    typedef struct {
-        unsigned long dwLowDateTime;
-        unsigned long dwHighDateTime;
-    } FILETIME;
-    #define MAX_PATH 260
-    typedef struct {
-        unsigned long dwFileAttributes;
-        FILETIME ftCreationTime;
-        FILETIME ftLastAccessTime;
-        FILETIME ftLastWriteTime;
-        unsigned long nFileSizeHigh;
-        unsigned long nFileSizeLow;
-        unsigned long dwReserved0;
-        unsigned long dwReserved1;
-        char cFileName[MAX_PATH];
-        char cAlternateFileName[14];
-        unsigned long dwFileType; // Obsolete. Do not use.
-        unsigned long dwCreatorType; // Obsolete. Do not use
-        unsigned short wFinderFlags; // Obsolete. Do not use
-    } WIN32_FIND_DATAA;
-    WIN32_CALL(void *) FindFirstFileA(const char *file_name, WIN32_FIND_DATAA *);
-    WIN32_CALL(int) FindNextFileA(void *find_file_handle, WIN32_FIND_DATAA *);
-    WIN32_CALL(unsigned short *) GetCommandLineW(void);
-    WIN32_CALL(int)           GetExitCodeProcess(void *process, unsigned long *exit_code);
-    WIN32_CALL(unsigned long) GetFileAttributesA(const char *file_name);
-    #if !defined(_WINNT_)
-        typedef long long LARGE_INTEGER;
-    #endif
-    WIN32_CALL(int)           GetFileSizeEx(void *file, LARGE_INTEGER *file_size);
-    WIN32_CALL(unsigned long) GetFinalPathNameByHandleA(void *handle, char *path, unsigned long path_size, unsigned long flags);
-    WIN32_CALL(unsigned long) GetLastError(void);
-    WIN32_CALL(void *)        GetProcessHeap(void);
-    WIN32_CALL(void *)        GetStdHandle(unsigned long standard_handle);
-    WIN32_CALL(void *)        HeapAlloc(void *heap, unsigned long flags, u64 bytes);
-    WIN32_CALL(int)           HeapFree(void *heap, unsigned long flags, void *memory);
-    WIN32_CALL(void)          OutputDebugStringA(const char *output_string);
-    WIN32_CALL(int)           QueryPerformanceCounter(LARGE_INTEGER *performance_count);
-    WIN32_CALL(int)           QueryPerformanceFrequency(LARGE_INTEGER *frequency);
-    struct _OVERLAPPED;
-    WIN32_CALL(int)           ReadFile(void *file, void *buffer, unsigned long number_of_bytes_to_read, unsigned long *number_of_bytes_read, struct _OVERLAPPED *);
-    WIN32_CALL(unsigned long) WaitForSingleObject(void *handle, unsigned long milliseconds);
-    WIN32_CALL(int)           WriteFile(void *file, const void *buffer, unsigned long number_of_bytes_to_write, unsigned long *number_of_bytes_written, struct _OVERLAPPED *);
 
-    META(link "Shell32")
-    WIN32_CALL(unsigned short **) CommandLineToArgvW(const unsigned short *command_line, int *number_of_arguments);
-    WIN32_CALL(void *) ShellExecuteA(void *handle, const char *operation, const char *file, const char *parameters, const char *directory, int show_command_count);
+    #if LINK_CRT
+        void *memcpy(void *destination, const void *source, size_t number_of_bytes);
+        void *memset(void *destination, int byte, size_t length);
+        int   memcmp(const void *s1, const void *s2, size_t number_of_bytes);
+    #endif
+
+    struct _SECURITY_ATTRIBUTES { // https://learn.microsoft.com/en-us/windows/win32/api/wtypesbase/ns-wtypesbase-security_attributes
+        unsigned long nLength;
+        void *lpSecurityDescriptor;
+        int bInheritHandle;
+    };
+    typedef struct { // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfow
+        unsigned long cb;
+        unsigned short *lpReserved;
+        unsigned short *lpDesktop;
+        unsigned short *lpTitle;
+        unsigned long dwX;
+        unsigned long dwY;
+        unsigned long dwXSize;
+        unsigned long dwYSize;
+        unsigned long dwXCountChars;
+        unsigned long dwYCountChars;
+        unsigned long dwFillAttribute;
+        unsigned long dwFlags;
+        unsigned short wShowWindow;
+        unsigned short cbReserved2;
+        unsigned char *lpReserved2;
+        void *hStdInput;
+        void *hStdOutput;
+        void *hStdError;
+    } STARTUPINFOW;
+    typedef struct { // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_information
+        void *hProcess;
+        void *hThread;
+        unsigned long dwProcessId;
+        unsigned long dwThreadId;
+    } PROCESS_INFORMATION;
+    int  CreatePipe(void **read_pipe, void **write_pipe, struct _SECURITY_ATTRIBUTES *pipe_attributes, unsigned long size);
+    int  CreateProcessW(const unsigned short *application_name, unsigned short *command_line, struct _SECURITY_ATTRIBUTES *process_attributes, struct _SECURITY_ATTRIBUTES *thread_attributes, int should_inherit_handles, unsigned long creation_flags, void *environment, const unsigned short *current_directory, STARTUPINFOW *, PROCESS_INFORMATION *);
+    int  SetHandleInformation(void *object, unsigned long mask, unsigned long flags);
+    void OutputDebugStringW(const unsigned short *output_string);
+    int  WriteConsoleW(void *console_output, const void *buffer, unsigned long number_of_characters_to_write, unsigned long *number_of_characters_written, void *reserved);
+
+    META(link "User32")
+    int MessageBoxW(void *window, const unsigned short *text, const unsigned short *caption, unsigned type);
+
+    META(link "Ntdll")
+    typedef struct {
+        unsigned short Length;
+        unsigned short MaximumLength;
+        unsigned short *Buffer;
+    } UNICODE_STRING;
+    typedef struct {
+        unsigned long Length;
+        void *RootDirectory;
+        UNICODE_STRING *ObjectName;
+        unsigned long Attributes;
+        void *SecurityDescriptor;
+        void *SecurityQualityOfService;
+    } OBJECT_ATTRIBUTES;
+    typedef struct {
+        union {
+            long Status;
+            void *Pointer;
+        };
+        unsigned long long Information;
+    } IO_STATUS_BLOCK;
+    long NtClose(void *Handle);
+    long NtCreateFile(void **FileHandle, unsigned long DesiredAccess, OBJECT_ATTRIBUTES *ObjectAttributes, IO_STATUS_BLOCK *IoStatusBlock, long long *AllocationSize, unsigned long FileAttributes, unsigned long ShareAccess, unsigned long CreateDisposition, unsigned long CreateOptions, void *EaBuffer, unsigned long EaLength);
+    long NtQueryObject(void *Handle, int ObjectInformationClass, void *ObjectInformation, unsigned long ObjectInformationLength, unsigned long *ReturnLength);
+
+    typedef struct {
+        UNICODE_STRING DosPath;
+        void *Handle;
+    } CURDIR;
+    typedef struct {
+        unsigned long  MaximumLength;
+        unsigned long  Length;
+        unsigned long  Flags;
+        unsigned long  DebugFlags;
+        void          *ConsoleHandle;
+        unsigned long  ConsoleFlags;
+        void          *StandardInput;
+        void          *StandardOutput;
+        void          *StandardError;
+        CURDIR         CurrentDirectory;
+        UNICODE_STRING DllPath;
+        UNICODE_STRING ImagePathName;
+        UNICODE_STRING CommandLine;
+    } RTL_USER_PROCESS_PARAMETERS;
+    typedef struct {
+        unsigned char  InheritedAddressSpace;
+        unsigned char  ReadImageFileExecOptions;
+        unsigned char  BeingDebugged;
+        unsigned char  BitField;
+        void          *Mutant;
+        void          *ImageBaseAddress;
+        void          *Ldr;
+        RTL_USER_PROCESS_PARAMETERS *ProcessParameters;
+    } PEB;
+    typedef struct {
+        long               ExitStatus;
+        PEB               *PebBaseAddress;
+        unsigned long long AffinityMask;
+        long               BasePriority;
+        unsigned long long UniqueProcessId;
+        unsigned long long InheritedFromUniqueProcessId;
+    } PROCESS_BASIC_INFORMATION;
+    typedef struct {
+        unsigned long DeviceType;
+        unsigned long Characteristics;
+    } FILE_FS_DEVICE_INFORMATION;
+    long          NtQueryInformationProcess(void *ProcessHandle, int ProcessInformationClass, void *ProcessInformation, unsigned long ProcessInformationLength, unsigned long *ReturnLength);
+    long          NtQueryVolumeInformationFile(void *FileHandle, IO_STATUS_BLOCK *IoStatusBlock, void *FsInformation, unsigned long Length, int FsInformationClass);
+    long          NtReadFile(void *FileHandle, void *Event, void *ApcRoutine, void *ApcContext, IO_STATUS_BLOCK *, void *Buffer, unsigned long Length, long long *ByteOffset, unsigned long *Key);
+    long          NtTerminateProcess(void *ProcessHandle, long ExitStatus);
+    long          NtWaitForSingleObject(void *Handle, unsigned char Alertable, long long *Timeout);
+    long          NtWriteFile(void *FileHandle, void *Event, void *ApcRoutine, void *ApcContext, IO_STATUS_BLOCK *IoStatusBlock, const void *Buffer, unsigned long Length, long long *ByteOffset, unsigned long *Key);
+    void          RtlExitUserProcess(long ExitStatus);
+    PEB          *RtlGetCurrentPeb(void);
+    unsigned long RtlGetLastWin32Error(void);
 #elif BASE_OS == BASE_OS_WASM
-    typedef u64 size_t;
+    typedef __SIZE_TYPE__ size_t; _Static_assert(sizeof(size_t) == 4, "Assumes wasm32");
     #define os_abort() // TODO(felix)
     #define os_exit(code) // TODO(felix)
 #endif // BASE_OS
 
-#if COMPILER_CLANG || COMPILER_GCC // they share many builtins
+#if COMPILER_CLANG || COMPILER_GCC // they share some builtins
     #define builtin_unreachable __builtin_unreachable()
-    #define force_inline inline __attribute__((always_inline))
-    #if BASE_OS == BASE_OS_WINDOWS
-        // TODO(felix): this is only for memcmp, etc. fix!
-        #include <string.h>
-    #endif
 #endif
 
 #if COMPILER_CLANG
@@ -301,15 +350,13 @@ _Static_assert(sizeof(f64) == 8, "");
     #define builtin_assume(expr) __assume(expr)
     #define breakpoint __debugbreak()
     #define builtin_unreachable assert(false)
-    #define force_inline inline __forceinline
 
 #elif COMPILER_STANDARD
-    // NOTE(felix): I don't even know why I have this. Getting my base layer working with a non-major compiler is not a priority
+    // NOTE(felix): Not tested at all.
     #include <assert.h>
     #define builtin_assume(expr) assert(expr)
     #define breakpoint builtin_assume(false)
     #define builtin_unreachable assert(false)
-    #define force_inline inline
 
 #endif // COMPILER
 
@@ -318,7 +365,7 @@ _Static_assert(sizeof(f64) == 8, "");
 #endif
 
 #if BUILD_DEBUG
-    #define assert(expr) do { if((expr) == 0) panic("failed assertion `"#expr"`"); } while (0)
+    #define assert(expr) do { if((expr) == 0) panic("failed assertion `%s`", #expr); } while (0)
     #define ensure(expression) assert(expression)
     #define unreachable panic("reached unreachable code")
 #else
@@ -336,6 +383,10 @@ _Static_assert(sizeof(f64) == 8, "");
 #define SMALL_SNPRINTF_NO_STD_INCLUDE
 #include "base/small_snprintf.h"
 
+#define UTF_FUNCTION static
+#define UTF_NO_SYSTEM_INCLUDE
+#include "base/utf.h"
+
 #define TIME_FUNCTION static
 #define TIME_NO_SYSTEM_INCLUDE
 #include "base/time.h"
@@ -343,9 +394,10 @@ _Static_assert(sizeof(f64) == 8, "");
 #define PRNG_FUNCTION static
 #include "base/prng.h"
 
-typedef struct Arena Arena;
-#define Array(T) struct { T *data; u64 count, capacity; }
-typedef Array(void) Array_void;
+#define ARENA_FUNCTION static
+#define ARENA_NO_SYSTEM_INCLUDE
+#include "base/arena.h"
+typedef arena_Scratch Scratch;
 
 #define DS_FUNCTION static
 #define ds_u32 u32
@@ -359,85 +411,35 @@ typedef Array(void) Array_void;
 #define log_internal_v(format, arguments) log_internal_with_location_v(__FILE__, __LINE__, __func__, format, arguments)
 static void log_internal_with_location(const char *file, u64 line, const char *func, const char *format, ...);
 static void log_internal_with_location_v(const char *file, u64 line, const char *func, const char *format, va_list arguments);
+static void os_show_fatal_error(const char *file, u64 line, const char *function, const char *format, ...);
 
 #define panic(...) panic_(__FILE__, __LINE__, __func__, __VA_ARGS__)
 #define panic_(file, line, function, ...) do { \
     log_internal_with_location((file), (line), (function), "panic: " __VA_ARGS__); \
+    os_show_fatal_error((file), (line), (function), "panic: " __VA_ARGS__); \
     breakpoint; os_abort(); \
 } while (0)
 
-static void reserve_exactly_(Arena *arena ,Array_void *a, u64 item_size, u64 new_capacity, bool zero);
-static u64 grow_capacity(u64 current, u64 minimum);
-#define reserve(arena, a, c) reserve_exactly((arena), (a), grow_capacity((a)->capacity, (c)))
-#define reserve_exactly(arena, a, c) do { \
-    _Static_assert(sizeof *(a) == sizeof(Array_void), "parameter must point to an Array(T)"); \
-    reserve_exactly_((arena), (Array_void *)(a), sizeof *((a)->data), (c), true); \
-} while (0)
-#define reserve_unused(arena, a, c) reserve((arena), (a), (a)->count + (c))
-#define reserve_unused_exactly(arena, a, c) reserve_exactly((arena), (a), (a)->count + (c))
-#define push(arena, a, o) do { \
-    reserve_unused((arena), (a), 1); \
-    (a)->data[(a)->count++] = (o); \
-} while (0)
-#define push_assume_capacity(a, o) do { \
-    _Static_assert(sizeof *(a) == sizeof(Array_void), "parameter must point to an Array(T)"); \
-    assert((a)->count + 1 <= (a)->capacity); \
-    (a)->data[(a)->count++] = (o); \
-} while (0)
-#define push_many(arena, a, items, num) do { \
-    reserve_unused((arena), (a), (num)); \
-    for (u64 i__pm__ = 0; i__pm__ < (num); i__pm__ += 1) { \
-        (a)->data[(a)->count++] = (items)[i__pm__]; \
-    } \
-} while (0)
-#define push_many_assume_capacity(a, items, num) do { \
-    _Static_assert(sizeof *(a) == sizeof(Array_void), "parameter must point to an Array(T)"); \
-    assert((a)->count + (num) <= (a)->capacity); \
-    for (u64 i__pmac__ = 0; i__pmac__ < (num); i__pmac__ += 1) { \
-        (a)->data[(a)->count++] = (items)[i__pmac__]; \
-    } \
-} while (0)
-#define push_slice(a, b) push_many((a), (b).data, (b).count)
-#define push_slice_assume_capacity(a, b) push_many_assume_capacity((a), (b).data, (b).count)
-static void swap_remove_(Array_void *array, u64 index, u64 item_size);
-#define swap_remove(a, i) do { \
-    _Static_assert(sizeof *(a) == sizeof(Array_void), "parameter must point to an Array(T)"); \
-    swap_remove_((Array_void *)(a), (i), sizeof *(a)->data); \
-} while (0)
+static inline size_t size_t_from_u64(u64 value) {
+    assert(value <= (size_t)-1);
+    return (size_t)value;
+}
 
-// NOTE(felix): these are function-like macros and so I would've liked them to be lowercase, but windows.h defines lowercase min,max and it's too much of a hassle to work out, especially with more than one translation unit. This is the simpler solution by far.
+#define arena_array_reserve(arena, data, count, capacity, minimum) arena_array_reserve_((arena), (data), sizeof *(data), (count), (capacity), (minimum))
+static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 minimum);
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define CLAMP_LOW MAX
 #define CLAMP_HIGH MIN
 #define CLAMP(value, low, high) CLAMP_HIGH(CLAMP_LOW((value), (low)), (high))
 
-static force_inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
+static inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
     const u8 *a = a_, *b = b_;
     for (u64 i = 0; i < byte_count; i += 1) {
         if (a[i] != b[i]) return a[i] - b[i];
     }
     return 0;
-}
-
-static force_inline void *memcpy_(void *destination_, const void *source_, u64 byte_count) {
-    u8 *destination = destination_;
-    const u8 *source = source_;
-    if (byte_count != 0) {
-        assert(destination != 0);
-        assert(source != 0);
-    }
-    for (u64 i = 0; i < byte_count; i += 1) destination[i] = source[i];
-    return destination;
-}
-
-static force_inline void *memset_(void *destination_, int byte_, u64 byte_count) {
-    assert(byte_ < 256);
-    u8 byte = (u8)byte_;
-    u8 *destination = destination_;
-    assert(destination != 0);
-    for (u64 i = 0; i < byte_count; i += 1) destination[i] = byte;
-    return destination;
 }
 
 #if !LINK_CRT && BASE_OS != BASE_OS_WASM
@@ -449,23 +451,84 @@ static force_inline void *memset_(void *destination_, int byte_, u64 byte_count)
         return memcmp_(a, b, byte_count);
     }
 
+    // NOTE(felix): Optimising compilers turn a copy or fill loop into a call to memcpy or memset, so this loop turns into stack-overflowing recursion.
+    //              MSVC does this to memcpy and clang to memset. The volatile pointer stops the loop from being recognised for the non-intrinsic fallback case.
+    // TODO(felix): Use metaprogram inline assembly once it exists.
+    #if COMPILER_MSVC && BASE_ARCH == BASE_ARCH_X86_64
+        void __movsb(unsigned char *destination, const unsigned char *source, size_t byte_count);
+        void __stosb(unsigned char *destination, unsigned char byte, size_t byte_count);
+        #pragma intrinsic(__movsb, __stosb)
+    #endif
+
     void *memcpy(void *destination, const void *source, u64 byte_count) {
-        return memcpy_(destination, source, byte_count);
+        assert(byte_count == 0 || (destination != 0 && source != 0));
+
+        #if COMPILER_MSVC && BASE_ARCH == BASE_ARCH_X86_64
+            __movsb(destination, source, size_t_from_u64(byte_count));
+        #elif (COMPILER_CLANG || COMPILER_GCC) && BASE_ARCH == BASE_ARCH_X86_64
+            void *destination_cursor = destination;
+            __asm__ volatile("rep movsb" : "+D"(destination_cursor), "+S"(source), "+c"(byte_count) : : "memory");
+        #else
+            volatile u8 *destination_bytes = destination;
+            const u8 *source_bytes = source;
+            for (u64 i = 0; i < byte_count; i += 1) destination_bytes[i] = source_bytes[i];
+        #endif
+
+        return destination;
     }
 
     void *memset(void *destination, int byte, u64 byte_count) {
-        return memset_(destination, byte, byte_count);
+        assert(byte_count == 0 || destination != 0);
+
+        #if COMPILER_MSVC && BASE_ARCH == BASE_ARCH_X86_64
+            __stosb(destination, (u8)byte, size_t_from_u64(byte_count));
+        #elif (COMPILER_CLANG || COMPILER_GCC) && BASE_ARCH == BASE_ARCH_X86_64
+            void *destination_cursor = destination;
+            __asm__ volatile("rep stosb" : "+D"(destination_cursor), "+c"(byte_count) : "a"(byte) : "memory");
+        #else
+            volatile u8 *destination_bytes = destination;
+            for (u64 i = 0; i < byte_count; i += 1) destination_bytes[i] = (u8)byte;
+        #endif
+
+        return destination;
     }
 #endif
 
-static force_inline f32 ceilf_(f32 x) {
+#if BASE_OS == BASE_OS_WASM
+    // NOTE(felix): We build without compiler-rt, which defines the 128-bit multiply that ubsan needs for wasm32 signed 64-bit multiply overflow checks.
+    __extension__ typedef __int128 i128;
+    __extension__ typedef unsigned __int128 u128;
+
+    i128 __multi3(i128 a, i128 b) {
+        u64 a_low = (u64)a;
+        u64 a_high = (u64)((u128)a >> 64);
+        u64 b_low = (u64)b;
+        u64 b_high = (u64)((u128)b >> 64);
+
+        u64 half_mask = 0xffffffff;
+        u64 low_times_low = (a_low & half_mask) * (b_low & half_mask);
+        u64 high_times_low = (a_low >> 32) * (b_low & half_mask);
+        u64 low_times_high = (a_low & half_mask) * (b_low >> 32);
+        u64 high_times_high = (a_low >> 32) * (b_low >> 32);
+
+        u64 middle = (low_times_low >> 32) + (high_times_low & half_mask) + (low_times_high & half_mask);
+        u64 result_low = (low_times_low & half_mask) | (middle << 32);
+        u64 result_high = high_times_high + (high_times_low >> 32) + (low_times_high >> 32) + (middle >> 32);
+        result_high += a_high * b_low + a_low * b_high;
+
+        u128 result = ((u128)result_high << 64) | result_low;
+        return (i128)result;
+    }
+#endif
+
+static inline f32 ceilf_(f32 x) {
     assert((f32)INT64_MIN <= x && x <= (f32)INT64_MAX);
     i64 as_i64 = (i64)x;
     f32 result = (f32)((f32)as_i64 + (f32)(x > (f32)as_i64));
     return result;
 }
 
-static force_inline f32 floorf_(f32 x) {
+static inline f32 floorf_(f32 x) {
     assert((f32)INT64_MIN <= x && x <= (f32)INT64_MAX);
     i64 as_i64 = (i64)x;
     f32 result = (f32)((f32)as_i64 - (f32)(x < (f32)as_i64));
@@ -526,9 +589,9 @@ static f64 acos_(f64 x) {
 
 #if !LINK_CRT
     #if COMPILER_CLANG
-        #if BASE_OS == BASE_OS_WASM // is this the right solution?
-            // #define memcmp(a, b, c) __builtin_memcmp((a), (b), (unsigned long)(c))
-            #define memcmp(a, b, c) memcmp_wasm((a), (b), (unsigned long)(c))
+        #if BASE_OS == BASE_OS_WASM // TODO(felix): is this the right solution?
+            // #define memcmp(a, b, c) __builtin_memcmp((a), (b), (size_t)(c))
+            #define memcmp(a, b, c) memcmp_wasm((a), (b), (size_t)(c))
             static int memcmp_wasm(const void *a_, const void *b_, size_t c) {
                 const unsigned char *a = a_, *b = b_;
                 for (size_t i = 0; i < c; i += 1) {
@@ -536,8 +599,8 @@ static f64 acos_(f64 x) {
                 }
                 return 0;
             }
-            #define memcpy(d, s, c) __builtin_memcpy((d), (s), (unsigned long)(c))
-            #define memset(m, b, c) __builtin_memset((m), (b), (unsigned long)(c))
+            #define memcpy(d, s, c) __builtin_memcpy((d), (s), (size_t)(c))
+            #define memset(m, b, c) __builtin_memset((m), (b), (size_t)(c))
         #else
             #define memcmp __builtin_memcmp
             #define memcpy __builtin_memcpy
@@ -545,34 +608,7 @@ static f64 acos_(f64 x) {
     #endif
 #endif
 
-struct Arena {
-    void *mem;
-    u64 offset;
-    u64 capacity;
-    u64 last_offset;
-};
-
-static void  arena_deinit(Arena *arena);
-static Arena arena_from_memory(u8 *bytes, u64 count);
-static Arena arena_init(u64 initial_size_bytes); // TODO(felix): remove this function. A zeroed reserve+commit arena will be valid and will grow on demand
-#define      arena_make(a, i, T) (T *)arena_make_((a), (i), sizeof(T), true)
-static void *arena_make_(Arena *arena, u64 item_count, u64 item_size, bool zero);
-static void *arena_push(Arena *arena, const void *data, u64 count);
-
-#if BUILD_ASAN
-    #define asan_poison_memory_region(address, byte_count)   __asan_poison_memory_region(address, byte_count)
-    #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
-    void __asan_poison_memory_region(const void *address, u64 size);
-    void __asan_unpoison_memory_region(const void *address, u64 size);
-#else
-    #define asan_poison_memory_region(address, byte_count)   do { (void)(address); (void)(byte_count); } while (0)
-    #define asan_unpoison_memory_region(address, byte_count) do { (void)(address); (void)(byte_count); } while (0)
-#endif // BUILD_ASAN
-
 static const char **os_get_arguments(Arena *, u64 *out_count);
-
-static u64 hash_djb2(const void *bytes, u64 byte_count);
-static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index);
 
 #define v(vector) (&(vector).x)
 typedef struct { f32 x, y; } V2;
@@ -631,21 +667,21 @@ static f32 sinf_(f32 x) {
     return sign * result_unsigned;
 }
 
-static force_inline f64 ceil_(f64 x) {
+static inline f64 ceil_(f64 x) {
     assert((f64)INT64_MIN <= x && x <= (f64)INT64_MAX);
     i64 as_i64 = (i64)x;
     f64 result = (f64)((f64)as_i64 + (f64)(x > (f64)as_i64));
     return result;
 }
 
-static force_inline f64 floor_(f64 x) {
+static inline f64 floor_(f64 x) {
     assert((f64)INT64_MIN <= x && x <= (f64)INT64_MAX);
     i64 as_i64 = (i64)x;
     f64 result = (f64)((f64)as_i64 - (f64)(x < (f64)as_i64));
     return result;
 }
 
-static force_inline f64 round(f64 x) {
+static inline f64 round(f64 x) {
     if (x >= 0) return floor_(x + 0.5);
     else return ceil_(x - 0.5);
 }
@@ -719,7 +755,7 @@ static f32 frexpf_(f32 x, i32 *exponent) {
 }
 
 static f32 logf_(f32 x) {
-    i32 exponent;
+    i32 exponent = 0;
     f32 mantissa = frexpf_(x, &exponent);
     if (mantissa < 0.5f) {
         mantissa *= 2.f;
@@ -801,7 +837,7 @@ static f32 tanhf_(f32 x) {
     #define llabs _abs64
     // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
     // NOTE(felix): corecrt_math.h defines fabsf as an inline function casting fabs to f32. Might be good to benchmark that approach versus what I'm doing here
-    static force_inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
+    static inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
 #elif COMPILER_CLANG || COMPILER_GCC
     #define INFINITY __builtin_inff()
     #if LINK_CRT
@@ -858,7 +894,7 @@ static f32 tanhf_(f32 x) {
     #endif
 #endif
 
-static force_inline f32 roundf(f32 x) {
+static inline f32 roundf(f32 x) {
     if (x >= 0) return floorf(x + 0.5f);
     else return ceilf(x - 0.5f);
 }
@@ -872,84 +908,84 @@ static force_inline f32 roundf(f32 x) {
 static bool intersect_point_in_rectangle(V2 point, V4 rectangle);
 static bool is_power_of_2(u64 x);
 
-static force_inline f32 radians_from_degrees(f32 degrees);
+static inline f32 radians_from_degrees(f32 degrees);
 
 static void rgba_double_from_hex(u32 hex, double rgba[4]);
 static V4   rgba_float_from_hex(u32 hex);
 static u32  rgba_hex_from_float(V4 rgba);
 
-static force_inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin);
-static       inline f32  f32_stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds);
-static force_inline f32  f32_lerp(f32 a, f32 b, f32 amount);
+static inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin);
+static inline f32  f32_stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds);
+static inline f32  f32_lerp(f32 a, f32 b, f32 amount);
 
-static force_inline V2   v2(f32 value);
-static force_inline V2   v2_add(V2 a, V2 b);
-static force_inline V2   v2_div(V2 a, V2 b);
-static       inline f32  v2_dot(V2 a, V2 b);
-static force_inline bool v2_difference_within_margin(V2 a, V2 b, f32 margin);
-static       inline f32  v2_len(V2 v);
-static       inline f32  v2_len_squared(V2 v);
-static       inline V2   v2_lerp(V2 a, V2 b, f32 amount);
-static force_inline V2   v2_max(V2 a, V2 b);
-static force_inline V2   v2_min(V2 a, V2 b);
-static force_inline V2   v2_mul(V2 a, V2 b);
-static       inline V2   v2_norm(V2 v);
-static force_inline V2   v2_reciprocal(V2 v);
-static       inline V2   v2_rotate(V2 v, f32 angle_radians);
-static       inline V2   v2_round(V2 v);
-static       inline V2   v2_round_down(V2 v);
-static force_inline V2   v2_scale(V2 v, f32 s);
-static       inline V2   v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds);
-static force_inline V2   v2_sub(V2 a, V2 b);
+static inline V2   v2(f32 value);
+static inline V2   v2_add(V2 a, V2 b);
+static inline V2   v2_div(V2 a, V2 b);
+static inline f32  v2_dot(V2 a, V2 b);
+static inline bool v2_difference_within_margin(V2 a, V2 b, f32 margin);
+static inline f32  v2_len(V2 v);
+static inline f32  v2_len_squared(V2 v);
+static inline V2   v2_lerp(V2 a, V2 b, f32 amount);
+static inline V2   v2_max(V2 a, V2 b);
+static inline V2   v2_min(V2 a, V2 b);
+static inline V2   v2_mul(V2 a, V2 b);
+static inline V2   v2_norm(V2 v);
+static inline V2   v2_reciprocal(V2 v);
+static inline V2   v2_rotate(V2 v, f32 angle_radians);
+static inline V2   v2_round(V2 v);
+static inline V2   v2_round_down(V2 v);
+static inline V2   v2_scale(V2 v, f32 s);
+static inline V2   v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds);
+static inline V2   v2_sub(V2 a, V2 b);
 
-static force_inline V3   v3_add(V3 a, V3 b);
-static       inline V3   v3_cross(V3 a, V3 b);
-static       inline f32  v3_dot(V3 a, V3 b);
-static force_inline bool v3_difference_within_margin(V3 a, V3 b, f32 margin);
-static force_inline V3   v3_forward_from_view(M4 view);
-static       inline f32  v3_len(V3 v);
-static       inline f32  v3_len_squared(V3 v);
-static       inline V3   v3_lerp(V3 a, V3 b, f32 amount);
-static force_inline V3   v3_neg(V3 v);
-static       inline V3   v3_norm(V3 v);
-static force_inline V3   v3_right_from_view(M4 view);
-static force_inline V3   v3_scale(V3 v, f32 s);
-static force_inline V3   v3_sub(V3 a, V3 b);
-static       inline V3   v3_unproject(V3 pos, M4 view_projection);
-static force_inline V3   v3_up_from_view(M4 view);
+static inline V3   v3_add(V3 a, V3 b);
+static inline V3   v3_cross(V3 a, V3 b);
+static inline f32  v3_dot(V3 a, V3 b);
+static inline bool v3_difference_within_margin(V3 a, V3 b, f32 margin);
+static inline V3   v3_forward_from_view(M4 view);
+static inline f32  v3_len(V3 v);
+static inline f32  v3_len_squared(V3 v);
+static inline V3   v3_lerp(V3 a, V3 b, f32 amount);
+static inline V3   v3_neg(V3 v);
+static inline V3   v3_norm(V3 v);
+static inline V3   v3_right_from_view(M4 view);
+static inline V3   v3_scale(V3 v, f32 s);
+static inline V3   v3_sub(V3 a, V3 b);
+static inline V3   v3_unproject(V3 pos, M4 view_projection);
+static inline V3   v3_up_from_view(M4 view);
 
-static force_inline V4   v4_add(V4 a, V4 b);
-static       inline f32  v4_dot(V4 a, V4 b);
-static force_inline bool v4_difference_within_margin(V4 a, V4 b, f32 margin);
-static       inline V4   v4_lerp(V4 a, V4 b, f32 amount);
-static       inline V4   v4_round(V4 v);
-static force_inline V4   v4_scale(V4 v, f32 s);
-static       inline V4   v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds);
-static force_inline V4   v4_sub(V4 a, V4 b);
-static force_inline V4   v4v(V3 xyz, f32 w);
-static force_inline V3   v4_xyz(V4 v);
+static inline V4   v4_add(V4 a, V4 b);
+static inline f32  v4_dot(V4 a, V4 b);
+static inline bool v4_difference_within_margin(V4 a, V4 b, f32 margin);
+static inline V4   v4_lerp(V4 a, V4 b, f32 amount);
+static inline V4   v4_round(V4 v);
+static inline V4   v4_scale(V4 v, f32 s);
+static inline V4   v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds);
+static inline V4   v4_sub(V4 a, V4 b);
+static inline V4   v4v(V3 xyz, f32 w);
+static inline V3   v4_xyz(V4 v);
 
 static inline Quat quat_from_rotation(V3 axis, f32 angle);
 static inline Quat quat_mul_quat(Quat a, Quat b);
 static inline V3   quat_rotate_v3(Quat q, V3 v);
 
-static force_inline M3 m3_fill_diagonal(f32 value);
-static       inline M3 m3_from_rotation(f32 radians, V2 pivot);
-static       inline M3 m3_inverse(M3 m);
-static       inline M3 m3_model(V2 scale, f32 radians, V2 pivot, V2 post_translation);
-static       inline V3 m3_mul_v3(M3 m, V3 v);
-static       inline M3 m3_transpose(M3 m);
+static inline M3 m3_fill_diagonal(f32 value);
+static inline M3 m3_from_rotation(f32 radians, V2 pivot);
+static inline M3 m3_inverse(M3 m);
+static inline M3 m3_model(V2 scale, f32 radians, V2 pivot, V2 post_translation);
+static inline V3 m3_mul_v3(M3 m, V3 v);
+static inline M3 m3_transpose(M3 m);
 
-static force_inline M4 m4_fill_diagonal(f32 value);
-static       inline M4 m4_from_rotation(V3 axis, f32 angle);
-static       inline M4 m4_from_top_left_m3(M3 m);
-static       inline M4 m4_from_translation(V3 translation);
-static       inline M4 m4_inverse(M4 m);
-static       inline M4 m4_look_at(V3 eye, V3 centre, V3 up_direction);
-static       inline M4 m4_mul_m4(M4 a, M4 b);
-static       inline V4 m4_mul_v4(M4 m, V4 v);
-static       inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far);
-static force_inline M4 m4_transpose(M4 m);
+static inline M4 m4_fill_diagonal(f32 value);
+static inline M4 m4_from_rotation(V3 axis, f32 angle);
+static inline M4 m4_from_top_left_m3(M3 m);
+static inline M4 m4_from_translation(V3 translation);
+static inline M4 m4_inverse(M4 m);
+static inline M4 m4_look_at(V3 eye, V3 centre, V3 up_direction);
+static inline M4 m4_mul_m4(M4 a, M4 b);
+static inline V4 m4_mul_v4(M4 m, V4 v);
+static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_over_height, f32 range_near, f32 range_far);
+static inline M4 m4_transpose(M4 m);
 
 #define CPU_DRAW_FUNCTION static
 #include "base/cpu_draw.h"
@@ -974,10 +1010,15 @@ static String string_from_int_base(Arena *arena, i64 _num, u8 base);
 static String string_print_(Arena *arena, const char *fmt, va_list arguments);
 static String string_print(Arena *arena, const char *fmt, ...);
 
-typedef Array(char) String_Builder;
+typedef struct {
+    char *data;
+    u64 count, capacity;
+} String_Builder;
+static   void string_builder_push(String_Builder *builder, String string);
 static   void string_builder_null_terminate(Arena *arena, String_Builder *builder);
 static   void string_builder_print(Arena *arena, String_Builder *builder, const char* format, ...);
 static   void string_builder_print_(Arena *arena, String_Builder *builder, const char *fmt, va_list arguments);
+static   void string_builder_reserve_unused(Arena *arena, String_Builder *builder, u64 unused_count);
 static String string_builder_string(String_Builder builder);
 
 #define FS_FUNCTION static
@@ -986,15 +1027,26 @@ static String string_builder_string(String_Builder builder);
 static String os_read_entire_file(Arena *arena, const char *path, bool *ok);
 static   bool os_write_entire_file(const char *path, const void *data, u64 count);
 
+typedef struct {
+    u64 name_offset;
+    u64 data_offset;
+    u64 data_size;
+} Embedded_File_Entry;
+static String base_embedded_files_get(String name);
+
 typedef enum {
     Os_Process_Flag_PRINT_COMMAND_BEFORE_RUNNING = 1 << 0,
     Os_Process_Flag_PRINT_EXECUTION_TIME = 1 << 1,
     Os_Process_Flag_PRINT_EXIT_CODE = 1 << 2,
+    Os_Process_Flag_CAPTURE_OUTPUT = 1 << 3,
 } Os_Process_Flags;
 
-static void *os_heap_allocate(u64 byte_count);
-static void  os_heap_free(void *pointer);
-static  u32  os_process_run(Arena scratch, const char **arguments, const char *directory, Os_Process_Flags);
+typedef struct {
+    u32 exit_code;
+    String output;
+} Os_Process_Result;
+
+static Os_Process_Result os_process_run(Arena *arena, const char **arguments, const char *directory, Os_Process_Flags flags);
 static void  os_write_console(const char *bytes, u64 count);
 
 static void print(const char *format, ...);
@@ -1002,15 +1054,50 @@ static void print_(const char *format, va_list arguments);
 
 #define CLEX_FUNCTION static
 #include "base/clex.h"
-#define BASE_CLEX_DEFINE_EXPONENT 10
-#define BASE_CLEX_DEFINE_CAPACITY (1 << BASE_CLEX_DEFINE_EXPONENT)
+// TODO(felix): Make this growable.
+#define BUILD_MACROS_EXPONENT 12
+#define BUILD_MACROS_CAPACITY (1 << BUILD_MACROS_EXPONENT)
+
+typedef u8 Build_Macro_State;
+enum {
+    Build_Macro_State_UNDEFINED = 0,
+    Build_Macro_State_DEFINED,
+    Build_Macro_State_DEFINED_VALUE_UNKNOWN,
+    Build_Macro_State_UNKNOWN,
+};
+
+typedef u32 Build_Unknown_Reason_Id;
+
 typedef struct {
-    const char *names[BASE_CLEX_DEFINE_CAPACITY];
-    const char *definitions[BASE_CLEX_DEFINE_CAPACITY];
+    const char *description;
+    Build_Unknown_Reason_Id cause;
+} Build_Unknown_Reason;
+
+typedef struct {
+    Build_Unknown_Reason *items;
+    u64 count;
+    u64 capacity;
+} Build_Unknown_Reasons;
+
+typedef struct {
+    Build_Macro_State state;
+    String definition;
+    Build_Unknown_Reason_Id unknown_reason;
+} Build_Macro;
+
+typedef struct {
+    String name;
+    Build_Macro macro;
+    bool is_defined_by_source;
+} Build_Macro_Slot;
+
+typedef struct {
+    Build_Macro_Slot slots[BUILD_MACROS_CAPACITY];
     u32 used;
-} Base_Clex_Define;
-static const char *base_clex_define(void *user_data, const char *symbol, const char *definition);
-static bool base_clex_symbols_match(const char *a, const char *b);
+    bool collect_unknown_reasons;
+    Build_Unknown_Reasons reasons;
+} Build_Macros;
+
 static String base_string_from_clex_data(clex_Data data);
 
 #define OBJECT_FUNCTION static
@@ -1042,7 +1129,7 @@ typedef struct {
     const char *apple_provision_path;
 } Build_Options;
 
-static u32 build_default_everything(Arena scratch, const char *program_name, Build_Options *build_options);
+static u32 build_default_everything(Arena *scratch_arena, const char *program_name, const Build_Options *build_options);
 
 // NOTE(felix): synced with ui_Key
 typedef enum {
@@ -1069,10 +1156,10 @@ typedef enum {
 
 // NOTE(felix): synced with ui_Mouse_Button
 typedef enum {
-    App_Mouse_LEFT,
-    App_Mouse_MIDDLE,
-    App_Mouse_RIGHT,
-    App_Mouse_MAX_VALUE,
+    App_Mouse_Button_LEFT,
+    App_Mouse_Button_MIDDLE,
+    App_Mouse_Button_RIGHT,
+    App_Mouse_Button_MAX_VALUE,
 } App_Mouse_Button;
 
 typedef struct {
@@ -1081,8 +1168,8 @@ typedef struct {
     f32 seconds_since_last_frame;
     V2 mouse_position;
     f32 scroll;
-    bool mouse_clicked[App_Mouse_MAX_VALUE];
-    bool mouse_down[App_Mouse_MAX_VALUE];
+    bool mouse_clicked[App_Mouse_Button_MAX_VALUE];
+    bool mouse_down[App_Mouse_Button_MAX_VALUE];
     bool key_down[App_Key_MAX_VALUE];
     bool key_pressed[App_Key_MAX_VALUE];
     f32 safe_area_inset_left;
@@ -1093,82 +1180,212 @@ typedef struct {
 
 static void app_frame_info_reset_end_of_frame(App_Frame_Info *);
 
-typedef enum {
-    Draw_Kind_NIL = 0,
-    Draw_Kind_TEXT,
-    Draw_Kind_RECTANGLE,
-    Draw_Kind_QUADRILATERAL,
-    Draw_Kind_LINE,
-    Draw_Kind_SPRITE_1BIT,
-
-    Draw_Kind_COUNT,
-} Draw_Kind;
-
-typedef enum {
-    Draw_Color_SOLID = 0,
-
-    Draw_Color_TOP_LEFT = Draw_Color_SOLID,
-    Draw_Color_BOTTOM_LEFT,
-    Draw_Color_BOTTOM_RIGHT,
-    Draw_Color_TOP_RIGHT,
-
-    Draw_Color_MAX_VALUE,
-} Draw_Color;
-
-typedef enum {
-    Draw_Corner_TOP_LEFT,
-    Draw_Corner_BOTTOM_LEFT,
-    Draw_Corner_BOTTOM_RIGHT,
-    Draw_Corner_TOP_RIGHT,
-
-    Draw_Corner_COUNT,
-} Draw_Corner;
-
 #define BYTE_FROM_BITS(_0, _1, _2, _3, _4, _5, _6, _7) \
     ( ((_0) << 7) | ((_1) << 6) | ((_2) << 5) | ((_3) << 4) | \
       ((_4) << 3) | ((_5) << 2) | ((_6) << 1) | ((_7) << 0) )
 
+typedef u32 GPU_Mesh_Id;
+typedef u32 GPU_Shader_Id;
+typedef u32 GPU_Texture_Id;
+
 typedef struct {
-    Draw_Kind kind;
-    V2 position;
+    const void *data;
+    u64 size;
+} GPU_Bytes;
+
+// TODO(felix): Check the full std140 layout once the metaprogram can use the parser to do that.
+#define gpu_arguments(value) ((GPU_Bytes){ \
+    .data = &(value), \
+    .size = sizeof(value) + 0 * sizeof(char[sizeof(value) % 16 == 0 ? 1 : -1]), /*NOTE(felix): This acts as a static assert.*/\
+})
+
+typedef u8 GPU_Blend_Mode;
+enum {
+    GPU_Blend_Mode_ALPHA = 0,
+    GPU_Blend_Mode_PREMULTIPLIED_ALPHA,
+    GPU_Blend_Mode_ADDITIVE,
+    GPU_Blend_Mode_NONE,
+
+    GPU_Blend_Mode_COUNT,
+};
+
+typedef u8 GPU_Cull_Mode;
+enum {
+    GPU_Cull_Mode_NONE = 0,
+    GPU_Cull_Mode_BACK,
+    GPU_Cull_Mode_FRONT,
+
+    GPU_Cull_Mode_COUNT,
+};
+
+typedef u8 GPU_Depth_Test;
+enum {
+    GPU_Depth_Test_NONE = 0,
+    GPU_Depth_Test_LESS,
+    GPU_Depth_Test_LESS_OR_EQUAL,
+
+    GPU_Depth_Test_COUNT,
+};
+
+typedef u8 GPU_Index_Format;
+enum {
+    GPU_Index_Format_NONE = 0,
+    GPU_Index_Format_U16,
+    GPU_Index_Format_U32,
+
+    GPU_Index_Format_COUNT,
+};
+
+typedef u8 GPU_Texture_Filter;
+enum {
+    GPU_Texture_Filter_LINEAR = 0,
+    GPU_Texture_Filter_NEAREST,
+
+    GPU_Texture_Filter_COUNT,
+};
+
+typedef u8 GPU_Texture_Flags;
+enum {
+    GPU_Texture_Flag_RENDER_TARGET = 1 << 0,
+    GPU_Texture_Flag_DEPTH_BUFFER  = 1 << 1,
+    GPU_Texture_Flag_MIPMAPS       = 1 << 2,
+};
+
+typedef u8 GPU_Texture_Format;
+enum {
+    GPU_Texture_Format_RGBA8 = 0,
+    GPU_Texture_Format_R8,
+    GPU_Texture_Format_RGBA16F,
+
+    GPU_Texture_Format_COUNT,
+};
+
+typedef u8 GPU_Texture_Wrap;
+enum {
+    GPU_Texture_Wrap_CLAMP_TO_EDGE = 0,
+    GPU_Texture_Wrap_REPEAT,
+    GPU_Texture_Wrap_MIRRORED_REPEAT,
+
+    GPU_Texture_Wrap_COUNT,
+};
+
+typedef u8 GPU_Topology;
+enum {
+    GPU_Topology_TRIANGLES = 0,
+    GPU_Topology_TRIANGLE_STRIP,
+    GPU_Topology_LINES,
+    GPU_Topology_POINTS,
+
+    GPU_Topology_COUNT,
+};
+
+// TODO(felix): Vertex pulling (texelFetch from an RGBA32F/RGBA32UI data texture with gl_VertexID) would remove GPU_Vertex_Format and the per-mesh vertex array state.
+typedef u8 GPU_Vertex_Format;
+enum {
+    GPU_Vertex_Format_NONE = 0,
+    GPU_Vertex_Format_F32X1,
+    GPU_Vertex_Format_F32X2,
+    GPU_Vertex_Format_F32X3,
+    GPU_Vertex_Format_F32X4,
+    GPU_Vertex_Format_U8X4_NORMALISED,
+    GPU_Vertex_Format_U32X1,
+
+    GPU_Vertex_Format_COUNT,
+};
+
+typedef struct {
+    String vertex_source;
+    String fragment_source;
+} GPU_Shader;
+
+#define GPU_MAX_VERTEX_ATTRIBUTES 8
+typedef struct {
+    GPU_Bytes vertices;
+    GPU_Vertex_Format vertex_attributes[GPU_MAX_VERTEX_ATTRIBUTES];
+    GPU_Bytes indices;
+    GPU_Index_Format index_format;
+} GPU_Mesh;
+
+// NOTE(felix): Key == 0 identifies the texture by a hash of its content; key != 0 with pixels uploads them under the key; key != 0 without pixels uses what the key already has, or creates an empty texture if given a size.
+typedef struct {
+    u64 key;
+    u32 width;
+    u32 height;
+    u32 pixels_per_row;
+    GPU_Texture_Format format;
+    GPU_Texture_Flags flags;
+    GPU_Texture_Filter filter;
+    GPU_Texture_Wrap wrap;
+    GPU_Bytes pixels;
+} GPU_Texture;
+
+#define GPU_MAX_TEXTURES_PER_DRAW 4
+#define GPU_MAX_INSTANCE_ATTRIBUTES 8
+_Static_assert(GPU_MAX_VERTEX_ATTRIBUTES + GPU_MAX_INSTANCE_ATTRIBUTES <= 16, "GLES 3.0 and WebGL2 guarantee 16 vertex attributes");
+typedef struct {
+    GPU_Texture_Id target;
     V4 clip;
-    u32 color[Draw_Color_MAX_VALUE];
-    bool gradient;
-    union {
-        struct {
-            String string;
-            f32 font_size;
-        } text;
-        struct {
-            u32 border_color;
-            f32 border_width;
-            f32 border_radius;
-            V2 size;
-        } rectangle;
-        struct {
-            V2 corners[Draw_Corner_COUNT];
-            u32 border_color;
-            f32 border_width;
-        } quadrilateral;
-        struct {
-            V2 end;
-            f32 thickness;
-        } line;
-        struct {
-            u64 width, height;
-            u8 bytes[32];
-        } sprite;
-    };
-    u64 user_data;
-} Draw_Command;
-typedef Array(Draw_Command) Array_Draw_Command;
+    M4 transform;
+
+    GPU_Shader_Id shader;
+    GPU_Mesh_Id mesh;
+    V4 rectangle;
+    GPU_Texture_Id textures[GPU_MAX_TEXTURES_PER_DRAW];
+    GPU_Bytes arguments;
+
+    GPU_Bytes instances;
+    GPU_Vertex_Format instance_attributes[GPU_MAX_INSTANCE_ATTRIBUTES];
+    u32 instance_count;
+
+    GPU_Topology topology;
+    GPU_Blend_Mode blend_mode;
+    GPU_Depth_Test depth_test;
+    bool depth_write;
+    GPU_Cull_Mode cull_mode;
+} GPU_Draw;
+
+typedef struct {
+    u32 commands;
+    u32 draw_calls;
+    u32 program_changes;
+    u32 shader_compiles;
+    u32 cache_hits;
+    u32 cache_misses;
+    u32 promotions;
+    u32 evictions;
+    u32 failed_draws;
+    u64 bytes_uploaded;
+    u64 cached_bytes;
+} GPU_Frame_Stats;
+
+static const u32 gpu_vertex_format_size[GPU_Vertex_Format_COUNT] = {
+    [GPU_Vertex_Format_F32X1] = 4,
+    [GPU_Vertex_Format_F32X2] = 8,
+    [GPU_Vertex_Format_F32X3] = 12,
+    [GPU_Vertex_Format_F32X4] = 16,
+    [GPU_Vertex_Format_U8X4_NORMALISED] = 4,
+    [GPU_Vertex_Format_U32X1] = 4,
+};
+
+static const u32 gpu_index_format_size[GPU_Index_Format_COUNT] = {
+    [GPU_Index_Format_U16] = 2,
+    [GPU_Index_Format_U32] = 4,
+};
+
+static const u32 gpu_texture_bytes_per_pixel[GPU_Texture_Format_COUNT] = {
+    [GPU_Texture_Format_RGBA8]   = 4,
+    [GPU_Texture_Format_R8]      = 1,
+    [GPU_Texture_Format_RGBA16F] = 8,
+};
 
 typedef struct {
     App_Frame_Info frame;
     Arena *persistent_arena;
     Arena *frame_arena;
-    Array_Draw_Command draw_commands;
+    u64 frame_arena_startup_reservation_in_bytes;
+    GPU_Frame_Stats gpu_stats_of_last_frame;
 
+    bool hide_cursor;
     bool should_quit;
     const char *window_name;
     u32 clear_color;
@@ -1193,16 +1410,24 @@ typedef struct {
     static void app_update_and_render(Platform *);
 #endif
 
-static void draw(Platform *platform, Draw_Command command);
-static V2   draw_command_bounds(Draw_Command command);
-static void draw_many(Platform *platform, Draw_Command *commands, u64 count);
+static void base_platform_reserve_frame_arena(Platform *platform);
+
+
+// TODO(felix): Reorder neighbouring draws by state when their blend mode does not depend on order.
+static void           gpu_clear(Platform *platform, GPU_Texture_Id target, u32 color);
+static void           gpu_draw(Platform *platform, const GPU_Draw *draw);
+static GPU_Mesh_Id    gpu_mesh_id(Platform *platform, const GPU_Mesh *mesh);
+static GPU_Shader_Id  gpu_shader_id(Platform *platform, const GPU_Shader *shader, bool *ok);
+static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *texture);
 
 #define UI_FUNCTION static
+#define ui_va_list va_list
+#define ui_va_start va_start
+#define ui_va_end va_end
 #include "base/ui.h"
 
 static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame);
 static void    base_ui_create(ui_State *ui, Platform *platform);
-static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...);
 static void    base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]);
 static void    base_ui_render(ui_State *ui, ui_Box *box);
 
@@ -1213,7 +1438,7 @@ static void    base_ui_render(ui_State *ui, ui_Box *box);
 #if defined(BASE_IMPLEMENTATION)
 
 
-static force_inline bool assert_expression(bool value) {
+static inline bool assert_expression(bool value) {
     assert(value);
     return true;
 }
@@ -1234,7 +1459,6 @@ static force_inline bool assert_expression(bool value) {
 #endif
 
 raddbg_entry_point(program)
-raddbg_type_view(Array_?, $.slice())
 raddbg_type_view(String, view:text($.data, size=count))
 
 static void program(void);
@@ -1258,38 +1482,73 @@ static void program(void);
     }
 #endif
 
+#if BASE_OS == BASE_OS_WINDOWS
+    static bool os_windows_is_argument_separator(char c) {
+        return c == ' ' || c == '\t';
+    }
+#endif
+
 static const char **os_get_arguments(Arena *arena, u64 *out_count) {
     const char **arguments = 0;
 
     #if BASE_OS == BASE_OS_WINDOWS
     {
-        int argument_count = 0;
-        u16 **arguments_utf16 = CommandLineToArgvW(GetCommandLineW(), &argument_count);
-        if (arguments_utf16 == 0) {
-            log_error("unable to get command line arguments");
-            *out_count = 0;
-            return 0;
+        UNICODE_STRING command_line_utf16 = RtlGetCurrentPeb()->ProcessParameters->CommandLine;
+        u64 unit_count = command_line_utf16.Length / sizeof(u16);
+        u64 count = utf8_from_utf16(0, 0, command_line_utf16.Buffer, unit_count).destination_units_written;
+
+        char *command_line = arena_make(arena, count + 1, char);
+        utf8_from_utf16(command_line, count, command_line_utf16.Buffer, unit_count);
+
+        // NOTE(felix): Follows the splitting rules of the Microsoft C runtime since 2008.
+        u64 read = 0;
+        u64 written = 0;
+        u64 argument_count = 0;
+        bool program_name_is_quoted = count > 0 && command_line[0] == '"';
+        read += program_name_is_quoted;
+        while (read < count && (program_name_is_quoted ? command_line[read] != '"' : !os_windows_is_argument_separator(command_line[read]))) {
+            command_line[written++] = command_line[read++];
         }
 
-        arguments = arena_make(arena, (u64)argument_count + 1, const char *);
+        read += program_name_is_quoted && read < count;
+        while (read < count && os_windows_is_argument_separator(command_line[read])) read += 1;
+        command_line[written++] = 0;
+        argument_count += 1;
 
-        for (u64 i = 0; i < (u64)argument_count; i += 1) {
-            u16 *argument_utf16 = arguments_utf16[i];
+        while (read < count) {
+            bool in_quotes = false;
+            while (read < count && (in_quotes || !os_windows_is_argument_separator(command_line[read]))) {
+                u64 backslash_count = 0;
+                while (read < count && command_line[read] == '\\') {
+                    backslash_count += 1;
+                    read += 1;
+                }
 
-            u64 length = 1;
-            while (argument_utf16[length] != 0) length += 1;
+                bool quote_follows = read < count && command_line[read] == '"';
+                u64 literal_backslash_count = quote_follows ? backslash_count / 2 : backslash_count;
+                for (u64 i = 0; i < literal_backslash_count; i += 1) command_line[written++] = '\\';
 
-            // TODO(felix): convert to UTF-8, not ascii
-            char *argument = arena_make(arena, length + 1, char);
-            for (u64 j = 0; j < length; j += 1) {
-                u16 wide_character = argument_utf16[j];
-                assert(wide_character < 128);
-                argument[j] = (char)wide_character;
+                if (quote_follows) {
+                    bool is_escaped_quote = backslash_count % 2 == 1;
+                    bool is_doubled_quote = !is_escaped_quote && in_quotes && read + 1 < count && command_line[read + 1] == '"';
+                    if (is_escaped_quote || is_doubled_quote) command_line[written++] = '"';
+                    else in_quotes = !in_quotes;
+                    read += 1 + is_doubled_quote;
+                } else if (backslash_count == 0) command_line[written++] = command_line[read++];
             }
 
-            arguments[i] = argument;
+            while (read < count && os_windows_is_argument_separator(command_line[read])) read += 1;
+            command_line[written++] = 0;
+            argument_count += 1;
         }
-        *out_count = (u64)argument_count;
+
+        arguments = arena_make(arena, argument_count + 1, const char *);
+        const char *argument = command_line;
+        for (u64 i = 0; i < argument_count; i += 1) {
+            arguments[i] = argument;
+            argument += cstring_length(argument) + 1;
+        }
+        *out_count = argument_count;
     }
     #elif BASE_OS & BASE_OS_ANY_POSIX
     {
@@ -1309,176 +1568,77 @@ static const char **os_get_arguments(Arena *arena, u64 *out_count) {
 
 #define STRINGIFY(...) #__VA_ARGS__
 
-static inline bool ascii_is_alpha(u8 c) { return ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z'); }
+static inline bool ascii_is_alpha(char c) { return ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z'); }
 
-static inline bool ascii_is_decimal(u8 c) { return '0' <= c && c <= '9'; }
+static inline bool ascii_is_decimal(char c) { return '0' <= c && c <= '9'; }
 
-static inline bool ascii_is_hexadecimal(u8 c) { return ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') || ('a' <= c && c <= 'f'); }
+static inline bool ascii_is_hexadecimal(char c) { return ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') || ('a' <= c && c <= 'f'); }
 
-static inline bool ascii_is_whitespace(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
+static inline bool ascii_is_whitespace(char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
+
+#if BUILD_ASAN
+    void __asan_poison_memory_region(void const volatile *address, size_t byte_count);
+    void __asan_unpoison_memory_region(void const volatile *address, size_t byte_count);
+    #define asan_poison_memory_region(address, byte_count)   __asan_poison_memory_region((address), (byte_count))
+    #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region((address), (byte_count))
+#else
+    #define asan_poison_memory_region(address, byte_count)   ((void)(address), (void)(byte_count))
+    #define asan_unpoison_memory_region(address, byte_count) ((void)(address), (void)(byte_count))
+#endif
 
 #define POISON_BYTE 0xcd
 
+#define ARENA_IMPLEMENTATION
+#define ARENA_ASSERT assert
+#define ARENA_PANIC(message) panic(message)
+#define ARENA_MEMCPY memcpy
+#define ARENA_MEMSET memset
+#define ARENA_ASAN_POISON(address, byte_count)   asan_poison_memory_region((address), (byte_count))
+#define ARENA_ASAN_UNPOISON(address, byte_count) asan_unpoison_memory_region((address), (byte_count))
+#define ARENA_ASAN BUILD_ASAN
+#if BUILD_DEBUG
+    #define ARENA_POISON_BYTE POISON_BYTE
+#endif
+#include "base/arena.h"
+
+static void *base_allocate_from_arena_wrapper(void *context, void *pointer, size_t old_size, size_t new_size) {
+    Arena *arena = context;
+    void *result = 0;
+    if (new_size != 0) {
+        result = arena_make_(arena, new_size, 1, true);
+        if (pointer != 0) memcpy(result, pointer, MIN(old_size, new_size));
+    }
+    return result;
+}
+
 #define DS_IMPLEMENTATION
+#define DS_ALLOCATE(context, pointer, old_size, new_size) base_allocate_from_arena_wrapper((context), (pointer), (old_size), (new_size))
 #include "base/data_structures.h"
 
-static void reserve_exactly_(Arena *arena, Array_void *a, u64 item_size, u64 new_capacity, bool zero) {
-    if (a->capacity >= new_capacity) return;
+static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 minimum) {
+    void *result = data;
+    if (*capacity < minimum) {
+        assert(item_size > 0);
+        assert(count <= *capacity);
 
-    u64 byte_count = new_capacity * item_size;
-    assert(byte_count >= new_capacity); // overflow
-
-    // TODO(felix): assert the array was allocated on the arena passed in, unless I can think of any situation where it'd be useful for that not to be true
-    void *raw = arena_make_(arena, byte_count, 1, false);
-    memcpy(raw, a->data, a->count * item_size);
-
-    u8 byte = 0;
-    if (BUILD_DEBUG && !zero) byte = POISON_BYTE;
-    if (zero || BUILD_DEBUG) {
-        u64 growth_bytes = item_size * (new_capacity - a->capacity);
-        void *unused_new_memory = (u8 *)raw + item_size * a->capacity;
-        memset(unused_new_memory, byte, growth_bytes);
-    }
-
-    a->data = raw;
-    a->capacity = new_capacity;
-}
-
-static void swap_remove_(Array_void *array, u64 index, u64 item_size) {
-    assert(index < array->count);
-
-    char *memory = array->data;
-    void *destination = &memory[item_size * index];
-    void *source = &memory[item_size * (array->count - 1)];
-    memcpy(destination, source, item_size);
-
-    if (BUILD_DEBUG) memset(source, POISON_BYTE, item_size);
-    array->count -= 1;
-}
-
-static u64 grow_capacity(u64 current, u64 minimum) {
-    if (current >= minimum) return current;
-    if (minimum >= 0x7fffffffffffffff) return minimum;
-    current += !current;
-    while (current < minimum) current *= 2;
-    return current;
-}
-
-static Arena arena_from_memory(u8 *bytes, u64 count) {
-    Arena arena = { .mem = bytes, .capacity = count };
-    return arena;
-}
-
-static Arena arena_init(u64 initial_size_bytes) {
-    Arena arena = {0};
-
-    // TODO(felix): switch to os_heap_allocate and os_heap_free in these functions as the fallback, since those already do the right os-specific thing
-
-    // TODO(felix): switch to reserve+commit with (virtually) no limit: reserve something like 64gb and commit pages as needed
-    #if BASE_OS == BASE_OS_WINDOWS
-    {
-        enum { heap_zero_memory = 8 }; // https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapalloc
-        arena.mem = HeapAlloc(GetProcessHeap(), heap_zero_memory, initial_size_bytes);
-    }
-    #elif BASE_OS & BASE_OS_ANY_POSIX
-    {
-        arena.mem = calloc(initial_size_bytes, 1);
-    }
-    #elif BASE_OS == BASE_OS_WASM
-    {
-        extern u8 __heap_base;
-
-        static u8 *wasm_heap_pointer = 0;
-        if (wasm_heap_pointer == 0) wasm_heap_pointer = &__heap_base;
-
-        arena.mem = wasm_heap_pointer;
-        // TODO(felix): implementation using memory.grow?
-
-        // TODO(felix): don't hardcode limit. Note this has to match wasm linker flags!
-        ensure((u64)(wasm_heap_pointer - &__heap_base) + initial_size_bytes <= 134217728);
-        wasm_heap_pointer += initial_size_bytes;
-
-        int byte = BUILD_DEBUG ? POISON_BYTE : 0;
-        memset(arena.mem, byte, initial_size_bytes);
-    }
-    #else
-        #error "unsupported OS"
-    #endif
-
-    if (arena.mem == 0) panic("arena_init failure (requested %llu bytes)", initial_size_bytes);
-    arena.capacity = initial_size_bytes;
-    // TODO(felix): poison with debug byte when asan off
-    asan_poison_memory_region(arena.mem, arena.capacity);
-    return arena;
-}
-
-static void *arena_make_(Arena *arena, u64 item_count, u64 item_size, bool zero) {
-    assert(arena != 0);
-    assert(item_size > 0);
-    u64 byte_count = item_count * item_size;
-    if (byte_count == 0) return 0;
-
-    u64 alignment = 2 * sizeof(void *);
-    u64 modulo = arena->offset & (alignment - 1);
-    u64 pad = alignment - modulo;
-    if (byte_count > arena->capacity - arena->offset - pad) panic("allocation failure");
-
-    if (modulo != 0) {
-        if (BUILD_DEBUG) {
-            asan_unpoison_memory_region((u8 *)arena->mem + arena->offset, pad);
-            memset((u8 *)arena->mem + arena->offset, POISON_BYTE, pad);
+        if (data != 0) {
+            u64 arena_end = (u64)arena->memory + arena->offset;
+            u64 data_end = (u64)data + *capacity * item_size;
+            bool is_array_on_this_arena = (u64)arena->memory <= (u64)data && data_end <= arena_end;
+            assert(is_array_on_this_arena);
         }
-        asan_poison_memory_region((u8 *)arena->mem + arena->offset, pad);
-        arena->offset += pad;
+
+        u64 new_capacity = ds_array_grow_capacity(*capacity, minimum);
+        result = ds_array_resize(arena, 0, item_size, 0, new_capacity);
+        if (result == 0) panic("unable to reserve %llu items of %llu bytes", new_capacity, (u64)item_size);
+
+        size_t used_size = size_t_from_u64(count) * item_size;
+        if (data != 0) memcpy(result, data, used_size);
+        *capacity = new_capacity;
     }
-
-    void *mem = (u8 *)arena->mem + arena->offset;
-    arena->last_offset = arena->offset;
-    arena->offset += byte_count;
-
-    asan_unpoison_memory_region(mem, byte_count);
-    asan_poison_memory_region((u8 *)arena->mem + arena->offset, arena->capacity - arena->offset);
-
-    if (zero) memset(mem, 0, byte_count);
-    else if (BUILD_DEBUG) memset(mem, POISON_BYTE, byte_count);
-
-    return mem;
+    return result;
 }
 
-static void arena_deinit(Arena *arena) {
-    asan_poison_memory_region(arena->mem, arena->capacity);
-
-    #if BASE_OS == BASE_OS_WINDOWS
-        HeapFree(GetProcessHeap(), 0, arena->mem);
-    #elif BASE_OS & BASE_OS_ANY_POSIX
-        free(arena->mem);
-    #else
-        panic("unimplemented");
-    #endif
-
-    *arena = (Arena){0};
-}
-
-static void *arena_push(Arena *arena, const void *data, u64 count) {
-    u8 *bytes_on_arena = arena_make(arena, count, u8);
-    memcpy(bytes_on_arena, data, count);
-    return bytes_on_arena;
-}
-
-static u64 hash_djb2(const void *bytes, u64 byte_count) {
-    u64 hash = 5381;
-    for (u64 i = 0; i < byte_count; i += 1) {
-        hash += (hash << 5) + ((const u8 *)bytes)[i];
-    }
-    return hash;
-}
-
-static u64 hash_lookup_msi(u64 hash, u64 exponent, u64 index) {
-    u64 mask = ((u64)1 << exponent) - 1;
-    u64 step = (hash >> (64 - exponent)) | 1;
-    u64 new = (index + step) & mask;
-    return new;
-}
 
 static bool intersect_point_in_rectangle(V2 point, V4 rectangle) {
     bool result = true;
@@ -1491,7 +1651,7 @@ static bool is_power_of_2(u64 x) {
     return (x & (x - 1)) == 0;
 }
 
-static force_inline f32 radians_from_degrees(f32 degrees) { return degrees * PI_F32 / 180.f; }
+static inline f32 radians_from_degrees(f32 degrees) { return degrees * PI_F32 / 180.f; }
 
 static void rgba_double_from_hex(u32 hex, double rgba[4]) {
     double pack = 1.0 / 255.0;
@@ -1504,22 +1664,22 @@ static void rgba_double_from_hex(u32 hex, double rgba[4]) {
 static V4 rgba_float_from_hex(u32 hex) {
     f32 pack = 1.f / 255.f;
     V4 result = {
-        pack * (hex >> 24),
-        pack * ((hex >> 16) & 0xff),
-        pack * ((hex >> 8) & 0xff),
-        pack * (hex & 0xff),
+        .x = pack * (hex >> 24),
+        .y = pack * ((hex >> 16) & 0xff),
+        .z = pack * ((hex >> 8) & 0xff),
+        .w = pack * (hex & 0xff),
     };
     return result;
 }
 
 static u32 rgba_hex_from_float(V4 rgba) {
-    u32 c[4];
+    u32 c[4] = {0};
     for (u64 i = 0; i < 4; i += 1) c[i] = (u32)(v(rgba)[i] * 255.f + 0.5f);
     u32 result = (c[0] << 24) | (c[1] << 16) | (c[2] << 8) | c[3];
     return result;
 }
 
-static force_inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin) {
+static inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin) {
     bool result = fabsf(a - b) <= margin;
     return result;
 }
@@ -1532,17 +1692,17 @@ static inline f32 f32_stable_lerp(f32 a, f32 b, f32 k, f32 delta_time_seconds) {
     return result;
 }
 
-static force_inline f32 f32_lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
+static inline f32 f32_lerp(f32 a, f32 b, f32 amount) { return a + amount * (b - a); }
 
-static force_inline V2 v2(f32 value) { return (V2){ .x = value, .y = value }; }
+static inline V2 v2(f32 value) { return (V2){ .x = value, .y = value }; }
 
-static force_inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.y + b.y }; }
+static inline V2 v2_add(V2 a, V2 b) { return (V2){ .x = a.x + b.x, .y = a.y + b.y }; }
 
-static force_inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
+static inline V2 v2_div(V2 a, V2 b) { return (V2){ .x = a.x / b.x, .y = a.y / b.y }; }
 
 static inline f32 v2_dot(V2 a, V2 b) { return a.x * b.x + a.y * b.y; }
 
-static force_inline bool v2_difference_within_margin(V2 a, V2 b, f32 margin) {
+static inline bool v2_difference_within_margin(V2 a, V2 b, f32 margin) {
     bool result = fabsf(a.x - b.x) <= margin;
     result = result && fabsf(a.y - b.y) <= margin;
     return result;
@@ -1557,11 +1717,11 @@ static inline V2 v2_lerp(V2 a, V2 b, f32 amount) {
     return v2_add(a, add);
 }
 
-static force_inline V2 v2_max(V2 a, V2 b) { return (V2){ .x = MAX(a.x, b.x), .y = MAX(a.y, b.y) }; }
+static inline V2 v2_max(V2 a, V2 b) { return (V2){ .x = MAX(a.x, b.x), .y = MAX(a.y, b.y) }; }
 
-static force_inline V2 v2_min(V2 a, V2 b) { return (V2){ .x = MIN(a.x, b.x), .y = MIN(a.y, b.y) }; }
+static inline V2 v2_min(V2 a, V2 b) { return (V2){ .x = MIN(a.x, b.x), .y = MIN(a.y, b.y) }; }
 
-static force_inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
+static inline V2 v2_mul(V2 a, V2 b) { return (V2){ .x = a.x * b.x, .y = a.y * b.y }; }
 
 static inline V2 v2_norm(V2 v) {
     f32 length = v2_len(v);
@@ -1569,7 +1729,7 @@ static inline V2 v2_norm(V2 v) {
     return (V2){ .x = v.x / length, .y = v.y / length };
 }
 
-static force_inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
+static inline V2 v2_reciprocal(V2 v) { return (V2){ .x = 1.f / v.x, .y = 1.f / v.y }; }
 
 static inline V2 v2_rotate(V2 v, f32 angle_radians) {
     f32 sin_angle = sinf(angle_radians);
@@ -1582,7 +1742,7 @@ static inline V2 v2_round(V2 v) { return (V2){ .x = roundf(v.x), .y = roundf(v.y
 
 static inline V2 v2_round_down(V2 v) { return v2_round(v2_sub(v, (V2){ .x = 0.5f, .y = 0.5f })); }
 
-static force_inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v.y * s }; }
+static inline V2 v2_scale(V2 v, f32 s) { return (V2){ .x = v.x * s, .y = v.y * s }; }
 
 static inline V2 v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds) {
     for (u64 i = 0; i < 2; i += 1) {
@@ -1591,9 +1751,9 @@ static inline V2 v2_stable_lerp(V2 a, V2 b, f32 k, f32 delta_time_seconds) {
     return a;
 }
 
-static force_inline V2 v2_sub(V2 a, V2 b) { return (V2){ .x = a.x - b.x, .y = a.y - b.y }; }
+static inline V2 v2_sub(V2 a, V2 b) { return (V2){ .x = a.x - b.x, .y = a.y - b.y }; }
 
-static force_inline V3 v3_add(V3 a, V3 b) { return (V3){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z }; }
+static inline V3 v3_add(V3 a, V3 b) { return (V3){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z }; }
 
 static inline V3 v3_cross(V3 a, V3 b) {
     return (V3) {
@@ -1605,14 +1765,14 @@ static inline V3 v3_cross(V3 a, V3 b) {
 
 static inline f32 v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-static force_inline bool v3_difference_within_margin(V3 a, V3 b, f32 margin) {
+static inline bool v3_difference_within_margin(V3 a, V3 b, f32 margin) {
     bool result = fabsf(a.x - b.x) <= margin;
     result = result && fabsf(a.y - b.y) <= margin;
     result = result && fabsf(a.z - b.z) <= margin;
     return result;
 }
 
-static force_inline V3 v3_forward_from_view(M4 view) {
+static inline V3 v3_forward_from_view(M4 view) {
     return (V3){ .x = -view.c[0][2], .y = -view.c[1][2], .z = -view.c[2][2] };
 }
 
@@ -1625,7 +1785,7 @@ static inline V3 v3_lerp(V3 a, V3 b, f32 amount) {
     return v3_add(a, add);
 }
 
-static force_inline V3 v3_neg(V3 v) { return (V3){ .x = -v.x, .y = -v.y, .z = -v.z }; }
+static inline V3 v3_neg(V3 v) { return (V3){ .x = -v.x, .y = -v.y, .z = -v.z }; }
 
 static inline V3 v3_norm(V3 v) {
     f32 length = v3_len(v);
@@ -1637,30 +1797,30 @@ static inline V3 v3_norm(V3 v) {
     };
 }
 
-static force_inline V3 v3_right_from_view(M4 view) {
+static inline V3 v3_right_from_view(M4 view) {
     return (V3){ .x = view.c[0][0], .y = view.c[1][0], .z = view.c[2][0] };
 }
 
-static force_inline V3 v3_scale(V3 v, f32 s) { return (V3){ .x = v.x * s, .y = v.y * s, .z = v.z * s }; }
+static inline V3 v3_scale(V3 v, f32 s) { return (V3){ .x = v.x * s, .y = v.y * s, .z = v.z * s }; }
 
-static force_inline V3 v3_sub(V3 a, V3 b) { return (V3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z }; }
+static inline V3 v3_sub(V3 a, V3 b) { return (V3){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z }; }
 
 static inline V3 v3_unproject(V3 pos, M4 view_projection) {
     M4 view_projection_inv = m4_inverse(view_projection);
     Quat q = v4v(pos, 1.f);
     Quat q_trans = m4_mul_v4(view_projection_inv, q);
 
-    V3 q_trans_xyz;
+    V3 q_trans_xyz = {0};
     memcpy(&q_trans_xyz, &q_trans, sizeof q_trans_xyz);
 
     return v3_scale(q_trans_xyz, 1.f / q_trans.w);
 }
 
-static force_inline V3 v3_up_from_view(M4 view) {
+static inline V3 v3_up_from_view(M4 view) {
     return (V3){ .x = view.c[0][1], .y = view.c[1][1], .z = view.c[2][1] };
 }
 
-static force_inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
+static inline V4 v4_add(V4 a, V4 b) { return (V4){ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w }; }
 
 static inline f32 v4_dot(V4 a, V4 b) {
     f32 dot = 0;
@@ -1668,7 +1828,7 @@ static inline f32 v4_dot(V4 a, V4 b) {
     return dot;
 }
 
-static force_inline bool v4_difference_within_margin(V4 a, V4 b, f32 margin) {
+static inline bool v4_difference_within_margin(V4 a, V4 b, f32 margin) {
     bool result = fabsf(a.x - b.x) <= margin;
     result = result && fabsf(a.y - b.y) <= margin;
     result = result && fabsf(a.z - b.z) <= margin;
@@ -1689,7 +1849,7 @@ static inline V4 v4_round(V4 v) {
     return v;
 }
 
-static force_inline V4 v4_scale(V4 v, f32 s) { return (V4){ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s }; }
+static inline V4 v4_scale(V4 v, f32 s) { return (V4){ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s }; }
 
 static inline V4 v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds) {
     for (u64 i = 0; i < 4; i += 1) {
@@ -1698,11 +1858,11 @@ static inline V4 v4_stable_lerp(V4 a, V4 b, f32 k, f32 delta_time_seconds) {
     return a;
 }
 
-static force_inline V4 v4_sub(V4 a, V4 b) { return (V4){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w }; }
+static inline V4 v4_sub(V4 a, V4 b) { return (V4){ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w }; }
 
 static V4 v4v(V3 xyz, f32 w) { return (V4){ .x = xyz.x, .y = xyz.y, .z = xyz.z, .w = w }; }
 
-static force_inline V3 v4_xyz(V4 v) {
+static inline V3 v4_xyz(V4 v) {
     V3 result = { .x = v.x, .y = v.y, .z = v.z };
     return result;
 }
@@ -1732,12 +1892,12 @@ static inline V3 quat_rotate_v3(Quat q, V3 v) {
     Quat q_conjugate = (Quat){ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
     Quat result_as_quat = quat_mul_quat(quat_mul_quat(q, qv), q_conjugate);
 
-    V3 result;
+    V3 result = {0};
     memcpy(&result, &result_as_quat, sizeof result);
     return result;
 }
 
-static force_inline M3 m3_fill_diagonal(f32 value) {
+static inline M3 m3_fill_diagonal(f32 value) {
     M3 result = { .c = { [0][0] = value, [1][1] = value, [2][2] = value } };
     return result;
 }
@@ -1812,7 +1972,7 @@ static inline M3 m3_transpose(M3 m) {
     return result;
 }
 
-static force_inline M4 m4_fill_diagonal(f32 value) {
+static inline M4 m4_fill_diagonal(f32 value) {
     return (M4){ .c = { [0][0] = value, [1][1] = value, [2][2] = value, [3][3] = value } };
 }
 
@@ -1931,7 +2091,7 @@ static inline M4 m4_perspective_projection(f32 fov_vertical_radians, f32 width_o
     } };
 }
 
-static force_inline M4 m4_transpose(M4 m) {
+static inline M4 m4_transpose(M4 m) {
     M4 result = {0};
     for (int i = 0; i < 4; i += 1) for (int j = 0; j < 4; j += 1) {
         result.c[i][j] = m.c[j][i];
@@ -1991,6 +2151,7 @@ static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size) {
 }
 
 static V2 cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size) {
+    assert(font->height > 0);
     // TODO(felix)
     assert(font->height == (int)roundf(font_size));
 
@@ -2016,140 +2177,14 @@ static u32 abgr_from_rgba(u32 rgba) {
     return (a << 24) | (b << 16) | (g << 8) | r;
 }
 
-static void cpu_draw_commands(cpu_draw_Surface surface, const cpu_draw_Font *font, Draw_Command *commands, u64 count) {
-    u32 (*color)(u32) = 0;
+static u32 pixel_from_rgba(u32 rgba) {
+    u32 pixel = 0;
     switch (BASE_OS) {
-        case BASE_OS_WINDOWS: color = argb_from_rgba; break;
-        case BASE_OS_WASM: color = abgr_from_rgba; break;
+        case BASE_OS_WINDOWS: pixel = argb_from_rgba(rgba); break;
+        case BASE_OS_WASM: pixel = abgr_from_rgba(rgba); break;
         default: unreachable;
     }
-
-    cpu_draw_Surface unclipped_surface = surface;
-
-    for (u64 i = 0; i < count; i += 1) {
-        Draw_Command *c = &commands[i];
-
-        surface = unclipped_surface;
-        bool has_clip = !!memcmp(&c->clip, &(V4){0}, sizeof c->clip);
-        if (has_clip) {
-            int x = (int)roundf(c->clip.x);
-            int y = (int)roundf(c->clip.y);
-            int width = (int)roundf(c->clip.z);
-            int height = (int)roundf(c->clip.w);
-            surface = cpu_draw_subsurface(unclipped_surface, x, y, width, height);
-        }
-
-        u32 argb = color(c->color[Draw_Color_SOLID]);
-
-        switch (c->kind) {
-            case Draw_Kind_TEXT: {
-                String s = c->text.string;
-                int left = (int)(c->position.x + 0.5f);
-                int top = (int)(c->position.y + 0.5f);
-                cpu_draw_text(surface, font, left, top, argb, s.data, (int)s.count, 0);
-            } break;
-            case Draw_Kind_RECTANGLE: {
-                i32 left = (i32)c->position.x;
-                i32 top = (i32)c->position.y;
-                i32 width = (i32)c->rectangle.size.x;
-                i32 height = (i32)c->rectangle.size.y;
-                i32 bottom = top + height;
-                i32 right = left + width;
-
-                f32 border_radius_f32 = roundf(c->rectangle.border_radius);
-                i32 border_width = (i32)roundf(c->rectangle.border_width);
-                if (border_width >= 1 || border_radius_f32 >= 1.f) {
-                    i32 border_radius = (i32)border_radius_f32;
-
-                    u32 border_color = color(c->rectangle.border_color);
-
-                    cpu_draw_rounded_rectangle(surface, left, top, right, bottom, argb, border_color, border_radius, border_width);
-                } else {
-                    cpu_draw_rectangle(surface, left, top, right, bottom, argb);
-                }
-            } break;
-            case Draw_Kind_QUADRILATERAL: {
-                int coordinates[2 * Draw_Corner_COUNT] = {0};
-                for (Draw_Corner corner = 0; corner < Draw_Corner_COUNT; corner += 1) {
-                    V2 position = c->quadrilateral.corners[corner];
-                    for (unsigned axis = 0; axis < 2; axis += 1) {
-                        coordinates[(unsigned)corner * 2 + axis] = (int)(v(position)[axis] + 0.5f);
-                    }
-                }
-
-                int *tl = &coordinates[Draw_Corner_TOP_LEFT * 2];
-                int *bl = &coordinates[Draw_Corner_BOTTOM_LEFT * 2];
-                int *br = &coordinates[Draw_Corner_BOTTOM_RIGHT * 2];
-                int *tr = &coordinates[Draw_Corner_TOP_RIGHT * 2];
-
-                bool gradient = false;
-                u32 tl_color = argb;
-                u32 bl_color = argb;
-                u32 br_color = argb;
-                u32 tr_color = argb;
-                if (c->gradient) {
-                    bl_color = color(c->color[Draw_Color_BOTTOM_LEFT]);
-                    br_color = color(c->color[Draw_Color_BOTTOM_RIGHT]);
-                    tr_color = color(c->color[Draw_Color_TOP_RIGHT]);
-
-                    gradient = tl_color != bl_color || bl_color != br_color || br_color != tr_color || tr_color != tl_color;
-                }
-
-                bool is_rectangle = tl[0] == bl[0] && tr[0] == br[0] && tl[1] == tr[1] && bl[1] == br[1];
-                if (gradient) {
-                    cpu_draw_triangle_interpolate(surface, tl[0], tl[1], bl[0], bl[1], br[0], br[1], tl_color, bl_color, br_color);
-                    cpu_draw_triangle_interpolate(surface, tl[0], tl[1], br[0], br[1], tr[0], tr[1], tl_color, br_color, tr_color);
-                } else {
-                    if (is_rectangle) {
-                        cpu_draw_rectangle(surface, tl[0], tl[1], br[0], br[1], argb);
-                    } else {
-                        cpu_draw_triangle(surface, tl[0], tl[1], bl[0], bl[1], br[0], br[1], argb);
-                        cpu_draw_triangle(surface, tl[0], tl[1], br[0], br[1], tr[0], tr[1], argb);
-                    }
-                }
-
-                if (c->quadrilateral.border_width != 0.f) {
-                    u32 border_color = color(c->quadrilateral.border_color);
-                    if (is_rectangle) {
-                        i32 thickness = (i32)roundf(c->quadrilateral.border_width);
-                        cpu_draw_rectangle(surface, tl[0], tl[1], tr[0], tr[1] + thickness, border_color);
-                        cpu_draw_rectangle(surface, bl[0], bl[1] - thickness, br[0], br[1], border_color);
-                        cpu_draw_rectangle(surface, tl[0], tl[1], bl[0] + thickness, bl[1], border_color);
-                        cpu_draw_rectangle(surface, tr[0] - thickness, tr[1], br[0], br[1], border_color);
-                    } else {
-                        // TODO(felix): don't assume border thickness rounds to 1
-                        cpu_draw_line(surface, tl[0], tl[1], tr[0], tr[1], border_color);
-                        cpu_draw_line(surface, tr[0], tr[1], br[0], br[1], border_color);
-                        cpu_draw_line(surface, br[0], br[1], bl[0], bl[1], border_color);
-                        cpu_draw_line(surface, bl[0], bl[1], tl[0], tl[1], border_color);
-                    }
-                }
-            } break;
-            case Draw_Kind_LINE: {
-                assert(c->line.thickness == 1.f); // TODO(felix)
-                int start_x = (int)(c->position.x + 0.5f);
-                int start_y = (int)(c->position.y + 0.5f);
-                int end_x = (int)(c->line.end.x + 0.5f);
-                int end_y = (int)(c->line.end.y + 0.5f);
-                cpu_draw_line(surface, start_x, start_y, end_x, end_y, argb);
-            } break;
-            case Draw_Kind_SPRITE_1BIT: {
-                assert(c->sprite.width / 8 <= CPU_DRAW_SPRITE_MAX_WIDTH_OVER_8);
-                assert(c->sprite.height <= CPU_DRAW_SPRITE_MAX_HEIGHT);
-
-                cpu_draw_Sprite sprite = {
-                    .width = (i8)c->sprite.width,
-                    .height = (i8)c->sprite.height,
-                };
-                memcpy(sprite.bytes, c->sprite.bytes, MIN(sizeof sprite.bytes, sizeof c->sprite.bytes));
-
-                int x = (int)roundf(c->position.x);
-                int y = (int)roundf(c->position.y);
-                cpu_draw_sprite_1bit(surface, x, y, sprite, color(c->color[Draw_Color_SOLID]));
-            } break;
-            default: unreachable;
-        }
-    }
+    return pixel;
 }
 
 #define BDF_ASSERT assert
@@ -2223,6 +2258,9 @@ static i64 int_from_string_base(String s, u64 base) {
 #define STR_ASSERT assert
 #include "base/str.h"
 
+#define UTF_IMPLEMENTATION
+#include "base/utf.h"
+
 #define SMALL_SNPRINTF_IMPLEMENTATION
 #define SMALL_SNPRINTF_ASSERT assert
 #define SMALL_SNPRINTF_UNKNOWN_FORMAT_HANDLER small_snprintf_unknown_format_handler
@@ -2263,7 +2301,7 @@ static u64 cstring_copy(char *buffer, const char *cstring) {
 }
 
 static const char *cstring_from_string(Arena *arena, String string) {
-    char *cstring = arena_make(arena, string.count + 1, char);
+    char *cstring = arena_make(arena, size_t_from_u64(string.count + 1), char);
     for (u64 i = 0; i < string.count; i += 1) cstring[i] = (char)string.data[i];
     cstring[string.count] = '\0';
     return cstring;
@@ -2271,7 +2309,7 @@ static const char *cstring_from_string(Arena *arena, String string) {
 
 static const char *cstring_print(Arena *arena, const char *format, ...) {
     String_Builder builder = {0};
-    reserve(arena, &builder, cstring_length(format));
+    string_builder_reserve_unused(arena, &builder, cstring_length(format));
 
     va_list arguments;
     va_start(arguments, format);
@@ -2292,7 +2330,7 @@ static String string_from_int_base(Arena *arena, i64 _num, u8 base) {
         count += 1;
     } while (num > 0);
 
-    char *string = arena_make(arena, count, char);
+    char *string = arena_make(arena, size_t_from_u64(count), char);
 
     i64 first_digit_index = 0;
     if (num < 0) {
@@ -2331,9 +2369,19 @@ static void string_builder_print(Arena *arena, String_Builder *builder, const ch
     va_end(arguments);
 }
 
+static void string_builder_reserve_unused(Arena *arena, String_Builder *builder, u64 unused_count) {
+    builder->data = arena_array_reserve(arena, builder->data, builder->count, &builder->capacity, builder->count + unused_count);
+}
+
+static void string_builder_push(String_Builder *builder, String string) {
+    assert(builder->count + string.count <= builder->capacity);
+    memcpy(&builder->data[builder->count], string.data, string.count);
+    builder->count += string.count;
+}
+
 static void string_builder_print_(Arena *arena, String_Builder *builder, const char *fmt_c, va_list arguments) {
     u64 size_guess = cstring_length(fmt_c) * 8;
-    reserve_unused(arena, builder, size_guess);
+    string_builder_reserve_unused(arena, builder, size_guess);
 
     char *buffer = &builder->data[builder->count];
     u64 buffer_size = builder->capacity - builder->count;
@@ -2341,12 +2389,12 @@ static void string_builder_print_(Arena *arena, String_Builder *builder, const c
 
     va_list arguments_1;
     va_copy(arguments_1, arguments);
-    int bytes_printed = small_vsnprintf(buffer, buffer_size, fmt_c, arguments_1);
+    int bytes_printed = small_vsnprintf(buffer, size_t_from_u64(buffer_size), fmt_c, arguments_1);
     va_end(arguments_1);
 
     if ((u64)bytes_printed >= buffer_size) {
         u64 needed_unused = (u64)bytes_printed + 1; // for null terminator
-        reserve_unused(arena, builder, needed_unused);
+        string_builder_reserve_unused(arena, builder, needed_unused);
 
         buffer = &builder->data[builder->count];
         buffer_size = builder->capacity - builder->count;
@@ -2356,7 +2404,7 @@ static void string_builder_print_(Arena *arena, String_Builder *builder, const c
 
         va_list arguments_2;
         va_copy(arguments_2, arguments);
-        bytes_printed = small_vsnprintf(buffer, buffer_size, fmt_c, arguments_2);
+        bytes_printed = small_vsnprintf(buffer, size_t_from_u64(buffer_size), fmt_c, arguments_2);
         va_end(arguments_2);
 
         assert((u64)bytes_printed < buffer_size);
@@ -2372,48 +2420,8 @@ static String string_builder_string(String_Builder builder) {
 
 static inline void string_builder_null_terminate(Arena *arena, String_Builder *builder) {
     // Avoid push(0) because we don't want to increase the string length
-    reserve_unused_exactly(arena, builder, 1);
+    string_builder_reserve_unused(arena, builder, 1);
     builder->data[builder->count] = 0;
-}
-
-static void *os_heap_allocate(u64 byte_count) {
-    void *pointer = 0;
-
-    #if BASE_OS == BASE_OS_WINDOWS
-    {
-        enum { heap_zero_memory = 8 }; // https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapalloc
-        pointer = HeapAlloc(GetProcessHeap(), heap_zero_memory, byte_count);
-    }
-    #elif BASE_OS & BASE_OS_ANY_POSIX
-    {
-        pointer = malloc(byte_count);
-    }
-    #elif BASE_OS == BASE_OS_WASM
-    {
-        (void)byte_count;
-        panic("TODO(felix)");
-    }
-    #else
-        #error "unsupported OS"
-    #endif
-
-    ensure(pointer != 0);
-    return pointer;
-}
-
-static void os_heap_free(void *pointer) {
-    #if BASE_OS == BASE_OS_WINDOWS
-        HeapFree(GetProcessHeap(), 0, pointer);
-    #elif BASE_OS & BASE_OS_ANY_POSIX
-        free(pointer);
-    #elif BASE_OS == BASE_OS_WASM
-    {
-        (void)pointer;
-        panic("TODO(felix)");
-    }
-    #else
-        #error "unsupported OS"
-    #endif
 }
 
 #if BASE_OS == BASE_OS_WASM
@@ -2464,11 +2472,12 @@ static void os_heap_free(void *pointer) {
         panic("unimplemented for WASM");
         return 0;
     }
-    static void fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size) {
+    static _Bool fs_absolute_path(const char *path, char *buffer, unsigned long long buffer_size) {
         (void)path;
         (void)buffer;
         (void)buffer_size;
         panic("unimplemented for WASM");
+        return 0;
     }
 #else
     #define FS_IMPLEMENTATION
@@ -2476,18 +2485,40 @@ static void os_heap_free(void *pointer) {
     #include "base/filesystem.h"
 #endif
 
-static String os_read_entire_file(Arena *arena, const char *path, bool *ok) {
-    *ok = false;
-    String result = {0};
-    fs_File file = fs_file_open_and_get_size(path, fs_File_Flag_READ, &result.count);
+extern const char embedded_files[];
 
-    char *data = arena_make(arena, result.count + 1, char);
-    result.count = fs_read_entire_file(file, data, result.count);
-    data[result.count] = 0;
-    *ok = result.count > 0;
+static String base_embedded_files_get(String name) {
+    String result = {0};
+
+    u64 file_count;
+    memcpy(&file_count, embedded_files, sizeof file_count);
+
+    for (u64 i = 0; i < file_count && result.data == 0; i += 1) {
+        Embedded_File_Entry entry;
+        memcpy(&entry, embedded_files + sizeof file_count + i * sizeof entry, sizeof entry);
+
+        String entry_name = string_from_cstring(embedded_files + entry.name_offset);
+        if (string_equals(entry_name, name)) result = (String){ .data = embedded_files + entry.data_offset, .count = entry.data_size };
+    }
+
+    return result;
+}
+
+static String os_read_entire_file(Arena *arena, const char *path, bool *ok) {
+    String result = {0};
+    u64 size = 0;
+    fs_File file = fs_file_open_and_get_size(path, fs_File_Flag_READ, &size);
+    bool read_ok = file.handle != 0;
+
+    if (read_ok && size > 0) {
+        char *data = arena_make(arena, size_t_from_u64(size + 1), char);
+        read_ok = fs_read_entire_file(file, data, size) == size;
+        data[size] = 0;
+        if (read_ok) result = (String){ .data = data, .count = size };
+    }
 
     fs_close(file);
-    result.data = data;
+    *ok = read_ok;
     return result;
 }
 
@@ -2545,8 +2576,23 @@ static void log_internal_with_location_v(const char *file, u64 line, const char 
     #endif
 }
 
-static u32 os_process_run(Arena scratch, const char **arguments, const char *directory, Os_Process_Flags flags) {
+static u16 *os_utf16_from_utf8(Arena *arena, const char *utf8, u64 count) {
+    size_t source_count = size_t_from_u64(count);
+    size_t unit_count = utf16_from_utf8(0, 0, utf8, source_count).destination_units_written;
+    u16 *utf16 = arena_make(arena, unit_count + 1, u16);
+    utf16_from_utf8(utf16, unit_count, utf8, source_count);
+    utf16[unit_count] = 0;
+    return utf16;
+}
+
+static Os_Process_Result os_process_run(Arena *arena, const char **arguments, const char *directory, Os_Process_Flags flags) {
     u32 exit_code = 1;
+
+    bool capture_output = !!(flags & Os_Process_Flag_CAPTURE_OUTPUT);
+    u64 output_capacity = 0;
+    char *output_data = 0;
+    u64 output_count = 0;
+    u64 output_read_size = 4096;
 
     if (flags & Os_Process_Flag_PRINT_COMMAND_BEFORE_RUNNING) {
         if (directory != 0) print("[./%s] ", directory);
@@ -2561,65 +2607,141 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
 
     #if BASE_OS == BASE_OS_WINDOWS
     {
-        const char *application_name = 0;
+        Scratch scratch = scratch_begin(arena);
+        const u16 *application_name = 0;
 
-        u64 chars = 0, arg_count = 0;
-        for (const char **a = arguments; *a != 0; a += 1, arg_count += 1) chars += cstring_length(*a);
-        u64 spaces = arg_count - 1;
-        chars += spaces;
-        chars += 1; // null terminator
+        u64 capacity = 0;
+        for (const char **a = arguments; *a != 0; a += 1) {
+            u64 escaped_length_at_most = 2 * cstring_length(*a);
+            u64 enclosing_quote_count = 2;
+            u64 separator_count = 1;
+            capacity += escaped_length_at_most + enclosing_quote_count + separator_count;
+        }
 
-        char *command_line = arena_make(&scratch, chars, char);
+        char *command_line = arena_make(scratch.arena, capacity, char);
         u64 command_length = 0;
 
         for (const char **a = arguments; *a != 0; a += 1) {
+            const char *argument = *a;
             if (a > arguments) command_line[command_length++] = ' ';
-            command_length += cstring_copy(command_line + command_length, *a);
+
+            bool needs_quotes = argument[0] == 0;
+            for (const char *c = argument; *c != 0; c += 1) needs_quotes |= *c == ' ' || *c == '\t' || *c == '\n' || *c == '\v' || *c == '"';
+
+            if (!needs_quotes) command_length += cstring_copy(command_line + command_length, argument);
+            else {
+                command_line[command_length++] = '"';
+                const char *c = argument;
+                bool at_end = false;
+                while (!at_end) {
+                    u64 backslash_count = 0;
+                    while (*c == '\\') {
+                        backslash_count += 1;
+                        c += 1;
+                    }
+
+                    at_end = *c == 0;
+                    bool quote_follows = *c == '"';
+                    u64 written_backslashes = (at_end || quote_follows) ? 2 * backslash_count + quote_follows : backslash_count;
+                    for (u64 i = 0; i < written_backslashes; i += 1) command_line[command_length++] = '\\';
+
+                    if (!at_end) {
+                        command_line[command_length++] = *c;
+                        c += 1;
+                    }
+                }
+                command_line[command_length++] = '"';
+            }
+        }
+
+        u16 *command_line_utf16 = os_utf16_from_utf8(scratch.arena, command_line, command_length);
+        u16 *directory_utf16 = directory == 0 ? 0 : os_utf16_from_utf8(scratch.arena, directory, cstring_length(directory));
+
+        void *output_read_pipe = 0;
+        void *output_write_pipe = 0;
+        bool pipe_ok = true;
+        if (capture_output) {
+            enum { HANDLE_FLAG_INHERIT = 0x1 };
+            struct _SECURITY_ATTRIBUTES pipe_attributes = { .nLength = sizeof pipe_attributes, .bInheritHandle = true };
+            pipe_ok = CreatePipe(&output_read_pipe, &output_write_pipe, &pipe_attributes, 0);
+            pipe_ok = pipe_ok && SetHandleInformation(output_read_pipe, HANDLE_FLAG_INHERIT, 0);
+            if (!pipe_ok) log_error("unable to create an output pipe for '%s' (error %u)", arguments[0], RtlGetLastWin32Error());
         }
 
         struct _SECURITY_ATTRIBUTES *process_attributes = 0;
         struct _SECURITY_ATTRIBUTES *thread_attributes = 0;
-        int inherit_handles = false;
+        int inherit_handles = capture_output;
         u32 creation_flags = 0;
         void *environment = 0;
-        STARTUPINFOA startup_info = {0};
+        STARTUPINFOW startup_info = { .cb = sizeof startup_info };
         PROCESS_INFORMATION process_info = {0};
 
-        int ok = CreateProcessA(
+        if (capture_output) {
+            enum { STARTF_USESTDHANDLES = 0x100 };
+            RTL_USER_PROCESS_PARAMETERS *parameters = RtlGetCurrentPeb()->ProcessParameters;
+            startup_info.dwFlags = STARTF_USESTDHANDLES;
+            startup_info.hStdInput = parameters->StandardInput;
+            startup_info.hStdOutput = output_write_pipe;
+            startup_info.hStdError = parameters->StandardError;
+        }
+
+        int ok = pipe_ok && CreateProcessW(
             application_name,
-            command_line,
+            command_line_utf16,
             process_attributes,
             thread_attributes,
             inherit_handles,
             creation_flags,
             environment,
-            directory,
+            directory_utf16,
             &startup_info,
             &process_info
         );
+        scratch_end(scratch);
+        if (output_write_pipe != 0) NtClose(output_write_pipe);
 
-        if (!ok) {
-            log_error("unable to start process '%s'; CreateProcessA() returned %u", arguments[0], GetLastError());
-        } else {
-            unsigned long infinite = (unsigned long)-1;
-            WaitForSingleObject(process_info.hProcess, infinite);
+        if (pipe_ok && !ok) {
+            log_error("unable to start process '%s'; CreateProcessW() failed with error %u", arguments[0], RtlGetLastWin32Error());
+        } else if (ok) {
+            for (bool reading = capture_output; reading;) {
+                output_data = arena_array_reserve(arena, output_data, output_count, &output_capacity, output_count + output_read_size);
+                IO_STATUS_BLOCK status_block = {0};
+                unsigned long unused_capacity = (unsigned long)MIN(output_capacity - output_count, UINT32_MAX);
+                long read_status = NtReadFile(output_read_pipe, 0, 0, 0, &status_block, output_data + output_count, unused_capacity, 0, 0);
+                reading = read_status >= 0 && status_block.Information > 0;
+                if (reading) output_count += status_block.Information;
+            }
 
-            unsigned long code = 1;
-            GetExitCodeProcess(process_info.hProcess, &code);
-            exit_code = (u32)code;
+            int wait_status = NtWaitForSingleObject(process_info.hProcess, false, 0);
 
-            CloseHandle(process_info.hProcess);
-            CloseHandle(process_info.hThread);
+            PROCESS_BASIC_INFORMATION information = {0};
+            enum { ProcessBasicInformation = 0 };
+            int query_status = wait_status >= 0 ? NtQueryInformationProcess(process_info.hProcess, ProcessBasicInformation, &information, sizeof information, 0) : wait_status;
+            if (query_status >= 0) exit_code = (u32)information.ExitStatus;
+            else log_error("unable to get the exit code of '%s' (status 0x%x)", arguments[0], (u32)query_status);
+
+            NtClose(process_info.hProcess);
+            NtClose(process_info.hThread);
         }
+        if (output_read_pipe != 0) NtClose(output_read_pipe);
     }
     #elif BASE_OS & BASE_OS_ANY_POSIX
     {
-        (void)scratch;
+        int output_pipe[2] = { -1, -1 };
+        enum { PIPE_READ_END = 0, PIPE_WRITE_END = 1, STANDARD_OUTPUT = 1 };
+        bool pipe_ok = !capture_output || pipe(output_pipe) == 0;
+        if (!pipe_ok) log_error("unable to create an output pipe for '%s' (errno=%d)", arguments[0], errno);
 
-        pid_t pid = fork();
-        if (pid < 0) {
+        pid_t pid = pipe_ok ? fork() : -1;
+        if (pipe_ok && pid < 0) {
             log_error("unable to fork() to start process '%s' (errno=%d)", arguments[0], errno);
         } else if (pid == 0) { // child
+            if (capture_output) {
+                dup2(output_pipe[PIPE_WRITE_END], STANDARD_OUTPUT);
+                close(output_pipe[PIPE_READ_END]);
+                close(output_pipe[PIPE_WRITE_END]);
+            }
+
             bool directory_ok = directory == 0;
             if (directory != 0) {
                 int result = chdir(directory);
@@ -2633,7 +2755,16 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
             }
 
             os_exit(1);
-        } else { // parent
+        } else if (pid > 0) { // parent
+            if (capture_output) close(output_pipe[PIPE_WRITE_END]);
+            for (bool reading = capture_output; reading;) {
+                output_data = arena_array_reserve(arena, output_data, output_count, &output_capacity, output_count + output_read_size);
+                ssize_t read_count = read(output_pipe[PIPE_READ_END], output_data + output_count, output_capacity - output_count);
+                reading = read_count > 0;
+                if (reading) output_count += (u64)read_count;
+            }
+            if (capture_output) close(output_pipe[PIPE_READ_END]);
+
             int status = 0;
             pid_t result = waitpid(pid, &status, 0);
             bool wait_ok = result != -1;
@@ -2647,7 +2778,10 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
     }
     #else
     {
-        (void)scratch;
+        (void)arena;
+        (void)capture_output;
+        (void)output_capacity;
+        (void)output_read_size;
         panic("unimplemented");
     }
     #endif
@@ -2666,7 +2800,8 @@ static u32 os_process_run(Arena scratch, const char **arguments, const char *dir
         print("\n");
     }
 
-    return exit_code;
+    Os_Process_Result result = { .exit_code = exit_code, .output = { .data = output_data, .count = output_count } };
+    return result;
 }
 
 static void os_write_console(const char *bytes, u64 count) {
@@ -2674,37 +2809,67 @@ static void os_write_console(const char *bytes, u64 count) {
     // NOTE(felix): can't use assert in this function because panic() will call os_write_console, so we'll end up with a recursively failing assert and stack overflow. Instead, use `if (!condition) { breakpoint; abort(); }`
     #if BASE_OS == BASE_OS_WINDOWS
     {
-        #if WINDOWS_SUBSYSTEM_WINDOWS
+        #if WINDOWS_SUBSYSTEM == WINDOWS_SUBSYSTEM_WINDOWS
         {
-            (void)bytes;
-            (void)count;
+            // TODO(felix): Make this arena thread-safe once base supports multiple threads.
+            static Arena debug_output_arena = {0};
+            Scratch scratch = scratch_begin(&debug_output_arena);
+            OutputDebugStringW(os_utf16_from_utf8(scratch.arena, bytes, count));
+            scratch_end(scratch);
         }
         #else
         {
+            void *output_handle = RtlGetCurrentPeb()->ProcessParameters->StandardOutput;
+            void *invalid_handle_value = (void *)(long long)-1;
+            if (output_handle == 0 || output_handle == invalid_handle_value) { breakpoint; os_abort(); }
+
+            IO_STATUS_BLOCK device_status_block = {0};
+            FILE_FS_DEVICE_INFORMATION device = {0};
+            enum { FileFsDeviceInformation = 4, FILE_DEVICE_CONSOLE = 0x50 };
+            int device_status = NtQueryVolumeInformationFile(output_handle, &device_status_block, &device, sizeof device, FileFsDeviceInformation);
+            bool is_console = device_status >= 0 && device.DeviceType == FILE_DEVICE_CONSOLE;
+
             if (count > UINT32_MAX) { breakpoint; os_abort(); }
 
-            // https://learn.microsoft.com/en-us/windows/console/getstdhandle
-            unsigned long std_output_handle = (unsigned long)-11;
-            // unsigned long std_input_handle = (unsigned long)-10;
-            // unsigned long std_error_handle = (unsigned long)-12;
+            if (is_console) {
+                // TODO(felix): Make this arena thread-safe once base supports multiple threads.
+                static Arena console_arena = {0};
+                Scratch scratch = scratch_begin(&console_arena);
+                {
+                    u64 unit_count = utf16_from_utf8(0, 0, bytes, count).destination_units_written;
+                    u16 *units = arena_make(scratch.arena, size_t_from_u64(unit_count), u16);
+                    utf16_from_utf8(units, unit_count, bytes, count);
 
-            void *console_handle = GetStdHandle(std_output_handle);
+                    unsigned long console_units_written = 0;
+                    int ok = WriteConsoleW(output_handle, units, (unsigned)unit_count, &console_units_written, 0);
+                    if (!ok || console_units_written != unit_count) { breakpoint; os_abort(); }
+                }
+                scratch_end(scratch);
+            } else {
+                IO_STATUS_BLOCK status_block = {0};
+                int status = NtWriteFile(output_handle, 0, 0, 0, &status_block, bytes, (unsigned)count, 0, 0);
 
-            void *invalid_handle_value = (void *)(long long)-1;
-            if (console_handle == invalid_handle_value) { breakpoint; os_abort(); }
-
-            unsigned long num_chars_written = 0;
-            int ok = WriteFile(console_handle, bytes, (u32)count, &num_chars_written, 0);
-            if (!ok) { breakpoint; os_abort(); }
-            if ((u64)num_chars_written != count) { breakpoint; os_abort(); }
+                enum { STATUS_PENDING = 0x103 };
+                if (status == STATUS_PENDING) {
+                    status = NtWaitForSingleObject(output_handle, false, 0);
+                    if (status >= 0) status = status_block.Status;
+                }
+                if (status < 0 || status_block.Information != count) { breakpoint; os_abort(); }
+            }
         }
         #endif
     }
     #elif BASE_OS & BASE_OS_ANY_POSIX
     {
         int stdout_handle = 1;
-        i64 bytes_written = write(stdout_handle, bytes, count);
-        (void)bytes_written;
+        for (u64 total_written = 0; total_written < count;) {
+            i64 bytes_written = write(stdout_handle, bytes + total_written, count - total_written);
+
+            enum { os_write_console__EINTR = 4 };
+            bool interrupted = bytes_written < 0 && errno == os_write_console__EINTR;
+            if (bytes_written <= 0 && !interrupted) { breakpoint; os_abort(); }
+            if (bytes_written > 0) total_written += (u64)bytes_written;
+        }
     }
     #elif BASE_OS == BASE_OS_WASM
     {
@@ -2725,67 +2890,116 @@ static void print(const char *format, ...) {
 }
 
 static void print_(const char *format, va_list arguments) {
-    static u8 buffer[4096];
-    Arena arena = arena_from_memory(buffer, sizeof buffer);
+    static Arena print_arena;
+    Scratch scratch = scratch_begin(&print_arena);
 
     String_Builder output = {0};
-    reserve(&arena, &output, cstring_length(format));
-    string_builder_print_(&arena, &output, format, arguments);
-    string_builder_null_terminate(&arena, &output);
+    string_builder_reserve_unused(scratch.arena, &output, cstring_length(format));
+    string_builder_print_(scratch.arena, &output, format, arguments);
+    string_builder_null_terminate(scratch.arena, &output);
 
-    #if (BASE_OS == BASE_OS_WINDOWS) && BUILD_DEBUG
-        OutputDebugStringA(output.data);
+    #if (BASE_OS == BASE_OS_WINDOWS) && WINDOWS_SUBSYSTEM == WINDOWS_SUBSYSTEM_CONSOLE && BUILD_DEBUG
+        OutputDebugStringW(os_utf16_from_utf8(scratch.arena, (const char *)output.data, output.count));
     #endif
 
     os_write_console(output.data, output.count);
+    scratch_end(scratch);
+}
+
+static void os_show_fatal_error(const char *file, u64 line, const char *function, const char *format, ...) {
+    #if (BASE_OS == BASE_OS_WINDOWS) && WINDOWS_SUBSYSTEM == WINDOWS_SUBSYSTEM_WINDOWS
+    {
+        static Arena fatal_error_arena = {0};
+        Scratch scratch = scratch_begin(&fatal_error_arena);
+
+        String_Builder message = {0};
+        va_list arguments;
+        va_start(arguments, format);
+        string_builder_print_(scratch.arena, &message, format, arguments);
+        va_end(arguments);
+        string_builder_print(scratch.arena, &message, "\n\n%s(%llu) in %s()", file, line, function);
+
+        const char caption[] = "panic";
+        u16 *caption_utf16 = os_utf16_from_utf8(scratch.arena, caption, sizeof caption - 1);
+        u16 *message_utf16 = os_utf16_from_utf8(scratch.arena, (const char *)message.data, message.count);
+
+        enum { MB_ICONERROR = 0x10, MB_TASKMODAL = 0x2000, MB_SETFOREGROUND = 0x10000 };
+        MessageBoxW(0, message_utf16, caption_utf16, MB_ICONERROR | MB_TASKMODAL | MB_SETFOREGROUND);
+
+        scratch_end(scratch);
+    }
+    #else
+    {
+        (void)file;
+        (void)line;
+        (void)function;
+        (void)format;
+    }
+    #endif
 }
 
 #define CLEX_IMPLEMENTATION
 #define CLEX_ASSERT assert
 #include "base/clex.h"
 
-static const char *base_clex_define(void *user_data, const char *symbol, const char *definition) {
-    assert(user_data != 0);
-    assert(symbol != 0);
-    const char *result = 0;
+static u32 build_macros_find(const Build_Macros *macros, String name) {
+    u32 hash = ds_hash_fnv1a(name.data, size_t_from_u64(name.count));
+    u32 slot = hash;
 
-    Base_Clex_Define *state = user_data;
-    bool should_get = definition == 0;
-
-    const char *symbol_end = clex_identifier_end(symbol);
-    u64 hash = ds_hash_fnv1a(symbol, (size_t)(symbol_end - symbol));
-    u32 index = (u32)hash;
-    const char *name = 0;
-    if (should_get) {
-        do {
-            index = ds_hash_step_index(hash, BASE_CLEX_DEFINE_EXPONENT, index);
-            name = state->names[index];
-        } while(name != 0 && !base_clex_symbols_match(name, symbol));
-
-        if (name != 0) result = state->definitions[index];
-    } else {
-        assert(state->used * 100 < BASE_CLEX_DEFINE_CAPACITY * 70);
-        state->used += 1;
-
-        do {
-            index = ds_hash_step_index(hash, BASE_CLEX_DEFINE_EXPONENT, index);
-            assert(index < BASE_CLEX_DEFINE_CAPACITY);
-            name = state->names[index];
-        } while (name != 0 && !base_clex_symbols_match(name, symbol));
-
-        state->names[index] = symbol;
-        state->definitions[index] = definition;
+    for (bool searching = true; searching;) {
+        slot = ds_hash_step_index(hash, BUILD_MACROS_EXPONENT, slot);
+        String slot_name = macros->slots[slot].name;
+        searching = slot_name.data != 0 && !string_equals(slot_name, name);
     }
 
-    return result;
+    return slot;
 }
 
-static bool base_clex_symbols_match(const char *a, const char *b) {
-    const char *a_end = clex_identifier_end(a);
-    const char *b_end = clex_identifier_end(b);
-    String as = string_from_pointers(a, a_end);
-    String bs = string_from_pointers(b, b_end);
-    return string_equals(as, bs);
+static u32 build_macros_insert(Build_Macros *macros, String name, bool *ok) {
+    enum { MAXIMUM_LOAD_PERCENT = 70 };
+    u32 slot = build_macros_find(macros, name);
+    bool is_new = macros->slots[slot].name.data == 0;
+    bool has_space = !is_new || (macros->used + 1) * 100 <= BUILD_MACROS_CAPACITY * MAXIMUM_LOAD_PERCENT;
+
+    if (has_space && is_new) {
+        macros->slots[slot].name = name;
+        macros->used += 1;
+    }
+    if (!has_space) log_error("more than %d macros; the metaprogram's table is full", BUILD_MACROS_CAPACITY * MAXIMUM_LOAD_PERCENT / 100);
+
+    *ok = has_space;
+    return slot;
+}
+
+#define build_unknown_reason(arena, macros, description, cause) ((macros)->collect_unknown_reasons ? build_unknown_reason_((arena), (macros), (description), (cause)) : BUILD_UNKNOWN_REASON_NOT_COLLECTED)
+enum { BUILD_UNKNOWN_REASON_NOT_COLLECTED = 1 };
+static Build_Unknown_Reason_Id build_unknown_reason_(Arena *arena, Build_Macros *macros, const char *description, Build_Unknown_Reason_Id cause) {
+    Build_Unknown_Reasons *reasons = &macros->reasons;
+    reasons->items = arena_array_reserve(arena, reasons->items, reasons->count, &reasons->capacity, reasons->count + 2);
+
+    bool id_zero_is_reserved = reasons->count == 0;
+    reasons->count += id_zero_is_reserved;
+
+    Build_Unknown_Reason_Id id = (Build_Unknown_Reason_Id)reasons->count;
+    reasons->items[id] = (Build_Unknown_Reason){ .description = description, .cause = cause };
+    reasons->count += 1;
+    return id;
+}
+
+static Build_Macro build_macros_get(Arena *arena, Build_Macros *macros, String name) {
+    u32 slot = build_macros_find(macros, name);
+    bool starts_with_underscore_and_uppercase = name.count >= 2 && name.data[0] == '_' && 'A' <= name.data[1] && name.data[1] <= 'Z';
+    bool is_reserved_name = string_starts_with(name, S("__")) || starts_with_underscore_and_uppercase;
+    bool is_unlisted_reserved_name = macros->slots[slot].name.data == 0 && is_reserved_name;
+
+    Build_Macro macro = macros->slots[slot].macro;
+
+    if (is_unlisted_reserved_name) {
+        macro.state = Build_Macro_State_UNKNOWN;
+        macro.unknown_reason = build_unknown_reason(arena, macros, cstring_print(arena, "`%S` is a reserved identifier", name), 0);
+    }
+
+    return macro;
 }
 
 static String base_string_from_clex_data(clex_Data data) {
@@ -2831,8 +3045,6 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
         "-nologo",
         "-machine:X64",
         "-incremental:no",
-        "-opt:ref", // TODO(felix): move to release flags and add no_ variants to debug flags
-        "-opt:icf",
         "-fixed",
         0,
     },
@@ -2867,71 +3079,28 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
         "-nostdlib",
         "-Wl,--no-entry",
         "-Wl,--allow-undefined", // NOTE(felix): consider --allow-undefined-file for explicit whitelist
-        "-Wl,--export=platform__get_draw_surface_pointer",
-        "-Wl,--export=platform__get_temp_js_string_buffer",
-        "-Wl,--export=platform__on_key_down",
-        "-Wl,--export=platform__on_key_up",
-        "-Wl,--export=platform__on_mouse_down",
-        "-Wl,--export=platform__on_mouse_up",
-        "-Wl,--export=platform__on_scroll",
-        "-Wl,--export=platform__start",
-        "-Wl,--export=platform__update_and_render",
-        "-Wl,--initial-memory=134217728", // 128mb, but TODO(felix): make configurable
         "-Wl,--stack-first",
         "-Wl,-z,stack-size=1048576", // NOTE(felix): 1mb matches windows. I ran into stack overflow on macOS but not on Windows for some reason--on the same project, in the same browser
         0,
     },
 };
 
-// TODO(felix): Seems this can be compiler-specific only. OS-specific versions repeat exactly.
-static const char *build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_COUNT][BASE_OS_COUNT][BUILD_FLAGS_MAX] = {
+static const char *build_compiler_mode_flags[Build_Mode_COUNT][Build_Compiler_COUNT][BUILD_FLAGS_MAX] = {
     [Build_Mode_DEBUG] = {
-        [Build_Compiler_MSVC][BASE_OS_WINDOWS] = { "-MTd", "-Z7", 0 },
-        [Build_Compiler_CLANG][BASE_OS_WINDOWS] = {
+        [Build_Compiler_MSVC] = { "-MTd", "-Z7", 0 },
+        // NOTE(felix): With clang for wasm, ubsan traps with no stack trace, which at the stage in WASM platform development I'm at while writing this, gets in the way of the stack traces for my `panic()`s in C code.
+        // TODO(felix): Make this configurable - the sanitisers are helpful too.
+        [Build_Compiler_CLANG] = {
             "-g3",
             "-fsanitize=undefined",
             "-fsanitize-trap",
-            "-O0",
-            0,
-        },
-        [Build_Compiler_CLANG][BASE_OS_MACOS] = {
-            "-g3",
-            "-fsanitize=undefined",
-            "-fsanitize-trap",
-            "-O0",
-            0,
-        },
-        [Build_Compiler_CLANG][BASE_OS_IOS_DEVICE] = {
-            "-g3",
-            "-fsanitize=undefined",
-            "-fsanitize-trap",
-            "-O0",
-            0,
-        },
-        [Build_Compiler_CLANG][BASE_OS_IOS_SIMULATOR] = {
-            "-g3",
-            "-fsanitize=undefined",
-            "-fsanitize-trap",
-            "-O0",
-            0,
-        },
-        // NOTE(felix): with clang for wasm, ubsan traps with no stack trace, which at the stage in WASM platform development I'm at while writing this, gets in the way of the stack traces for my `panic()`s in C code.
-        // TODO(felix): make this configurable - the sanitisers are helpful too
-        [Build_Compiler_CLANG][BASE_OS_WASM] = {
-            "-fsanitize=undefined",
-            "-fsanitize-trap",
-            "-g3",
             "-O0",
             0,
         },
     },
     [Build_Mode_RELEASE] = {
-        [Build_Compiler_MSVC][BASE_OS_WINDOWS]        = { "-MT", "-O2", 0 },
-        [Build_Compiler_CLANG][BASE_OS_WINDOWS]       = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_MACOS]         = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_IOS_DEVICE]    = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_IOS_SIMULATOR] = { "-O3", 0 },
-        [Build_Compiler_CLANG][BASE_OS_WASM]          = { "-O3", 0 },
+        [Build_Compiler_MSVC]  = { "-MT", "-O2", 0 },
+        [Build_Compiler_CLANG] = { "-O3", 0 },
     },
 };
 
@@ -2986,202 +3155,435 @@ static const char *build_binary_extension[BASE_OS_COUNT] = {
     [BASE_OS_WASM]          = "wasm",
 };
 
-typedef Array(const char *) Array_cstring;
-static void build_push_arguments(Arena *arena, Array_cstring *strings, const char **arguments) {
-    if (arguments == 0) return;
-    for (const char **a = arguments; *a != 0; a += 1) push(arena, strings, *a);
+#define BUILD_ARGUMENTS_MAX 256
+typedef struct {
+    const char *items[BUILD_ARGUMENTS_MAX];
+    u32 count;
+} Build_Arguments;
+
+static void build_push_argument(Build_Arguments *arguments, const char *argument) {
+    assert(arguments->count + 1 < BUILD_ARGUMENTS_MAX);
+    arguments->items[arguments->count] = argument;
+    arguments->count += 1;
 }
 
-static bool build_expect_include(Arena *arena, clex_Lexer *lexer, String *file) {
-    clex_lex(lexer);
-    String token_data = base_string_from_clex_data(lexer->token.data);
-    bool ok = lexer->token.kind == clex_Token_INCLUDE;
-    ok = ok && string_equals(token_data, S("include"));
-    if (!ok) {
-        log_error("expected `#include`");
-        return false;
-    }
-
-    const char *copy = cstring_from_string(arena, base_string_from_clex_data(lexer->token.data2));
-
-    clex_Lexer include = clex_init(0, 0, copy, 0, base_clex_define, 0);
-
-    clex_lex(&include);
-    if (include.token.kind != clex_Token_STRING) {
-        log_error("expected string after `#include`");
-        return false;
-    }
-    *file = base_string_from_clex_data(include.token.data);
-    return true;
+static void build_push_arguments(Build_Arguments *arguments, const char **list) {
+    if (list == 0) return;
+    for (const char **a = list; *a != 0; a += 1) build_push_argument(arguments, *a);
 }
 
-static bool build_eat_token(clex_Lexer *parent, clex_Lexer *lexer, clex_Token_Kind expected, const char *format, ...) {
+typedef struct {
+    const char *code_path, *object_path;
+    const char **extra_flags;
+    bool no_extra_errors;
+} Build_Object;
+
+#define BUILD_OBJECTS_MAX 64
+typedef struct {
+    Build_Object items[BUILD_OBJECTS_MAX];
+    u32 count;
+} Build_Objects;
+
+static void build_objects_push(Build_Objects *objects, Build_Object object) {
+    assert(objects->count < BUILD_OBJECTS_MAX);
+    objects->items[objects->count] = object;
+    objects->count += 1;
+}
+
+enum { BUILD_LOCATION_CAPACITY = 4128 };
+
+static void build_format_location(char *buffer, u64 buffer_size, const clex_Lexer *lexer) {
+    int column = 0;
+    const char *path = 0;
+    const char *path_end = 0;
+    int line = clex_get_current_location(lexer, &column, &path, &path_end);
+
+    enum { PATH_CAPACITY = 4096 };
+    char path_as_given[PATH_CAPACITY] = {0};
+    u64 path_count = MIN((u64)(path_end - path), PATH_CAPACITY - 1);
+    if (path_count > 0) memcpy(path_as_given, path, size_t_from_u64(path_count));
+    char absolute_path[PATH_CAPACITY] = {0};
+    bool has_absolute_path = path_count > 0 && fs_absolute_path(path_as_given, absolute_path, sizeof absolute_path);
+
+    const char *shown_path = path_count > 0 ? path_as_given : "<MACRO>";
+    if (has_absolute_path) shown_path = absolute_path;
+    small_snprintf(buffer, size_t_from_u64(buffer_size), "%s(%d,%d)", shown_path, line, column);
+}
+
+static bool build_eat_token(clex_Lexer *lexer, clex_Token_Kind expected, const char *format, ...) {
     clex_lex(lexer);
     bool ok = lexer->token.kind == expected;
 
     va_list arguments;
     va_start(arguments, format);
     if (!ok) {
+        char location[BUILD_LOCATION_CAPACITY] = {0};
+        build_format_location(location, sizeof location, lexer);
+
+        print("%s: error: ", location);
         print_(format, arguments);
-
-        int column = 0;
-        const char *path = 0, *path_end = 0;
-        int line = 0;
-        if (parent != 0) {
-            clex_Lexer shifted = *parent;
-            shifted.stack[shifted.depth].c = lexer->stack[lexer->depth].c;
-            line = clex_get_current_location(&shifted, &column, &path, &path_end);
-        } else {
-            line = clex_get_current_location(lexer, &column, &path, &path_end);
-        }
-
-        String path_string = string_from_pointers(path, path_end);
-        String token = base_string_from_clex_data(lexer->token.data);
-        print("; got '%S' in %S:%d:%d\n", token, path_string.count > 0 ? path_string : S("<MACRO>"), line, column);
+        print("; got '%S'\n", base_string_from_clex_data(lexer->token.data));
     }
     va_end(arguments);
 
     return ok;
 }
 
-static const char build_wasm_html_file[] = STRINGIFY(
-    <!doctype html><meta charset=utf-8>
+static const char *base_clex_current_location_get_as_string(Arena *arena, const clex_Lexer *lexer) {
+    char location[BUILD_LOCATION_CAPACITY] = {0};
+    build_format_location(location, sizeof location, lexer);
+    return cstring_print(arena, "%s", location);
+}
 
-    <style>
-        html, body {
-            margin: 0;
-            height: 100%;
-            overflow: hidden;
-            background: #808080;
-        }
-        canvas {
-            width: 100vw;
-            height: 100vh;
-            display: block;
-            image-rendering: pixelated;
-            image-rendering: crisp-edges;
-        }
-    </style>
+static void build_log_error(const clex_Lexer *lexer, const char *format, ...) {
+    char location[BUILD_LOCATION_CAPACITY] = {0};
+    build_format_location(location, sizeof location, lexer);
 
-    <canvas id=wasm_canvas width=0 height=0></canvas>
+    print("%s: error: ", location);
+    va_list arguments;
+    va_start(arguments, format);
+    print_(format, arguments);
+    va_end(arguments);
+    print("\n");
+}
 
-    <script>
-        (async () => {
-            const canvas = document.getElementById("wasm_canvas");
+typedef struct {
+    clex_Condition_Value value;
+    Build_Unknown_Reason_Id unknown_reason;
+} Build_Condition;
 
-            const offscreen = document.createElement("canvas");
-            // NOTE(felix): these have to match the max values on the C side!
-            offscreen.width = 1920;
-            offscreen.height = 1200;
-            const offscreen_context = offscreen.getContext("2d");
+static Build_Condition build_evaluate_macro_is_defined(Arena *arena, Build_Macros *macros, String name, bool expect_defined) {
+    Build_Macro macro = build_macros_get(arena, macros, name);
 
-            const imports = { env: {
-                js_file_write: (name_cstring, pointer, count) => {
-                    const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, pointer, count).slice();
+    bool is_defined = macro.state == Build_Macro_State_DEFINED || macro.state == Build_Macro_State_DEFINED_VALUE_UNKNOWN;
+    Build_Condition condition = { .value = is_defined == expect_defined ? clex_Condition_Value_TRUE : clex_Condition_Value_FALSE };
+    if (macro.state == Build_Macro_State_UNKNOWN) condition = (Build_Condition){ .value = clex_Condition_Value_UNKNOWN, .unknown_reason = macro.unknown_reason };
 
-                    const memory = new Uint8Array(wasm.instance.exports.memory.buffer);
-                    let end = name_cstring;
-                    while (memory[end] != 0) end += 1;
-                    const name = new TextDecoder().decode(memory.subarray(name_cstring, end));
+    return condition;
+}
 
-                    console.assert(!name.includes("/") && !name.includes("\\"), "js_file_write: path separators forbidden in name", name);
+static Build_Condition build_evaluate_preprocessor_condition(Arena *arena, const clex_Lexer *file, Build_Macros *macros, clex_Data condition_text, bool *ok) {
+    clex_Condition line = clex_condition_init(condition_text);
+    Build_Unknown_Reason_Id first_unknown_reason = 0;
 
-                    const blob = new Blob([bytes]);
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = name;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                },
-                js_performance_now: () => {
-                    return performance.now();
-                },
-                os_write_console_js: (pointer, count) => {
-                    const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, pointer, count);
-                    const string = new TextDecoder().decode(bytes);
-                    console.log(string);
-                },
-            } };
+    while (clex_condition_step(&line)) {
+        String name = base_string_from_clex_data(line.name);
 
-            // TODO(felix): make .wasm file name changeable in build
-            const wasm = await WebAssembly.instantiateStreaming(fetch("module.wasm"), imports);
-            const exports = wasm.instance.exports;
-
-            exports.platform__start();
-
-            let mouse_x = 0, mouse_y = 0;
-            canvas.addEventListener("mousemove", e => {
-                const rect = canvas.getBoundingClientRect();
-                mouse_x = (e.clientX - rect.left) * devicePixelRatio;
-                mouse_y = (e.clientY - rect.top) * devicePixelRatio;
-            });
-
-            function write_js_string(string) {
-                const bytes = new TextEncoder().encode(string);
-                const buffer = exports.platform__get_temp_js_string_buffer();
-                new Uint8Array(wasm.instance.exports.memory.buffer, buffer, bytes.length).set(bytes);
-                return [buffer, bytes.length];
-            }
-            addEventListener("keydown", e => {
-                const [buffer, length] = write_js_string(e.code);
-                exports.platform__on_key_down(buffer, length);
-            });
-            addEventListener("keyup", e => {
-                const [buffer, length] = write_js_string(e.code);
-                exports.platform__on_key_up(buffer, length);
-            });
-
-            canvas.addEventListener("mousedown", e => exports.platform__on_mouse_down(e.button));
-            canvas.addEventListener("mouseup", e => exports.platform__on_mouse_up(e.button));
-            canvas.addEventListener("wheel", e => exports.platform__on_scroll(e.deltaX, e.deltaY));
-
-            const context = canvas.getContext("2d");
-
-            function frame() {
-                const real_width = Math.round(window.innerWidth * devicePixelRatio);
-                const real_height = Math.round(window.innerHeight * devicePixelRatio);
-                if (canvas.width != real_width || canvas.height != real_height) {
-                    canvas.width = real_width;
-                    canvas.height = real_height;
-                    context.imageSmoothingEnabled = false;
+        switch (line.request) {
+            case clex_Condition_Request_TOKEN_MEMORY: {
+                line.tokens = arena_array_reserve(arena, line.tokens, line.token_count, &line.token_capacity, (u64)line.token_count + 1);
+            } break;
+            case clex_Condition_Request_DEFINED: {
+                Build_Condition definedness = build_evaluate_macro_is_defined(arena, macros, name, true);
+                if (first_unknown_reason == 0) first_unknown_reason = definedness.unknown_reason;
+                clex_condition_answer_value(&line, definedness.value);
+            } break;
+            case clex_Condition_Request_BUILTIN: {
+                // TODO(felix): Support compiler builtins like `__has_builtin(...)` and `__has_feature(...)`.
+                if (first_unknown_reason == 0) first_unknown_reason = build_unknown_reason(arena, macros, cstring_print(arena, "`%S(...)` is a compiler builtin, which the metaprogram does not evaluate", name), 0);
+                clex_condition_answer_value(&line, clex_Condition_Value_UNKNOWN);
+            } break;
+            case clex_Condition_Request_NAME: {
+                Build_Macro macro = build_macros_get(arena, macros, name);
+                switch (macro.state) {
+                    case Build_Macro_State_UNDEFINED: clex_condition_answer_value(&line, clex_Condition_Value_FALSE); break;
+                    case Build_Macro_State_DEFINED: {
+                        clex_Data definition = { .start = macro.definition.data, .end = macro.definition.data + macro.definition.count };
+                        clex_condition_answer_definition(&line, definition);
+                    } break;
+                    case Build_Macro_State_DEFINED_VALUE_UNKNOWN: case Build_Macro_State_UNKNOWN: {
+                        if (first_unknown_reason == 0) first_unknown_reason = macro.unknown_reason;
+                        clex_condition_answer_value(&line, clex_Condition_Value_UNKNOWN);
+                    } break;
+                    default: unreachable;
                 }
+            } break;
+            default: unreachable;
+        }
+    }
 
-                exports.platform__update_and_render(real_width, real_height, mouse_x, mouse_y);
+    clex_Node *nodes = arena_make(arena, size_t_from_u64((u64)line.token_count + 1), clex_Node);
+    clex_Condition_Value value = clex_condition_evaluate(&line, nodes);
 
-                // must match cpu_draw_Surface layout
-                const struct_pointer = exports.platform__get_draw_surface_pointer();
-                const memory = new Uint32Array(wasm.instance.exports.memory.buffer);
-                const pixels = memory[struct_pointer / 4 + 0];
-                const stride = memory[struct_pointer / 4 + 1];
-                const width  = memory[struct_pointer / 4 + 5];
-                const height = memory[struct_pointer / 4 + 6];
+    String condition_string = base_string_from_clex_data(condition_text);
+    String error_text = line.error_text.start != 0 ? base_string_from_clex_data(line.error_text) : S("end of line");
 
-                const source = new Uint8ClampedArray(wasm.instance.exports.memory.buffer, pixels, stride * height * 4);
-                const image = new ImageData(source, stride, height);
-                offscreen_context.putImageData(image, 0, 0);
-                context.drawImage(offscreen, 0, 0, width, height, 0, 0, real_width, real_height);
+    const char *message = 0;
+    switch (line.error) {
+        case clex_Condition_Error_NONE: break;
+        case clex_Condition_Error_EXPANSION_DEPTH: message = cstring_print(arena, "macro expansion is nested too deeply in condition `%S`", condition_string); break;
+        case clex_Condition_Error_DEFINED_OPERAND: message = cstring_print(arena, "expected `defined NAME` or `defined(NAME)` in condition `%S`", condition_string); break;
+        case clex_Condition_Error_BUILTIN_OPERAND: message = cstring_print(arena, "expected `(...)` after compiler builtin in condition `%S`", condition_string); break;
+        case clex_Condition_Error_FUNCTION_LIKE_MACRO: message = cstring_print(arena, "function-like macro `%S` is not supported in condition `%S`", error_text, condition_string); break;
+        case clex_Condition_Error_INVALID_TOKEN: message = cstring_print(arena, "invalid token in condition `%S`", condition_string); break;
+        case clex_Condition_Error_INVALID_EXPRESSION: message = cstring_print(arena, "invalid expression at `%S` in condition `%S`", error_text, condition_string); break;
+        case clex_Condition_Error_EVALUATION: message = cstring_print(arena, "cannot evaluate `%S` in condition `%S`", error_text, condition_string); break;
+        default: unreachable;
+    }
+    if (message != 0) build_log_error(file, "%s", message);
 
-                requestAnimationFrame(frame);
+    Build_Condition condition = { .value = value };
+    if (value == clex_Condition_Value_UNKNOWN) {
+        assert(first_unknown_reason != 0);
+        condition.unknown_reason = build_unknown_reason(arena, macros, cstring_print(arena, "%s: condition `%S` is unknown", base_clex_current_location_get_as_string(arena, file), condition_string), first_unknown_reason);
+    }
+
+    *ok = message == 0;
+    return condition;
+}
+
+// The metaprogram reads either a:
+// known group (group_unknown_reason == 0): the compiler builds it, so the metaprogram acts on everything; or
+// unknown group (group_unknown_reason != 0): the compiler maybe builds it, so the metaprogram reads it, but `META(...)` is an error, `#define` and `#undef` make their macro unknown, and `#error` has no effect.
+// The metaprogram doesn't read a group the compiler skips.
+typedef struct {
+    clex_Conditional chain;
+    Build_Unknown_Reason_Id group_unknown_reason;
+} Build_Conditional;
+
+static bool build_enter_conditional_group(Build_Conditional *conditionals, u32 conditional_depth, Build_Condition condition, bool is_else) {
+    Build_Conditional *conditional = &conditionals[conditional_depth - 1];
+    bool earlier_group_maybe_taken = conditional->chain.state == clex_Conditional_State_MAYBE_TAKEN;
+    bool read_group = clex_conditional_enter(&conditional->chain, condition.value, is_else);
+
+    if (read_group && condition.value == clex_Condition_Value_UNKNOWN) conditional->group_unknown_reason = condition.unknown_reason;
+    if (read_group && condition.value == clex_Condition_Value_TRUE && !earlier_group_maybe_taken) {
+        conditional->group_unknown_reason = conditional_depth >= 2 ? conditionals[conditional_depth - 2].group_unknown_reason : 0;
+    }
+
+    return read_group;
+}
+
+static void build_macros_predefine(Build_Macros *macros, const char *name, Build_Macro_State state, const char *definition, Build_Unknown_Reason_Id unknown_reason) {
+    bool ok = false;
+    u32 slot = build_macros_insert(macros, string_from_cstring(name), &ok);
+    assert(ok);
+
+    bool is_known = state == Build_Macro_State_DEFINED || state == Build_Macro_State_UNDEFINED;
+    assert(is_known == (unknown_reason == 0));
+    assert((state == Build_Macro_State_DEFINED) == (definition != 0));
+
+    macros->slots[slot].macro = (Build_Macro){
+        .state = state,
+        .definition = definition != 0 ? string_from_cstring(definition) : (String){0},
+        .unknown_reason = unknown_reason,
+    };
+}
+
+static Build_Unknown_Reason_Id build_unknown_reason_for_unset_setting(Arena *arena, Build_Macros *macros, const char *setting, const char *directive, const char *meta_location) {
+    return build_unknown_reason(arena, macros, meta_location != 0
+        ? cstring_print(arena, "%s is set only by `META(%s)` at %s, which is itself in an unknown group", setting, directive, meta_location)
+        : cstring_print(arena, "%s is set by `META(%s = ...)`, and the program has none in a known group", setting, directive), 0);
+}
+
+static void build_set_macro_from_meta(const clex_Lexer *lexer, Build_Macros *macros, const char *directive, const char *name, bool is_defined, const char *definition, bool *ok) {
+    bool insert_ok = false;
+    u32 slot = build_macros_insert(macros, string_from_cstring(name), &insert_ok);
+
+    bool is_defined_by_source = insert_ok && macros->slots[slot].is_defined_by_source;
+    if (is_defined_by_source) build_log_error(lexer, "`META(%s)` sets `%s`, but the source defines or undefines `%s` before it", directive, name, name);
+
+    bool set_ok = insert_ok && !is_defined_by_source;
+    if (set_ok) {
+        Build_Macro *macro = &macros->slots[slot].macro;
+        *macro = (Build_Macro){0};
+        if (is_defined) {
+            macro->state = Build_Macro_State_DEFINED;
+            macro->definition = string_from_cstring(definition);
+        }
+    }
+
+    *ok = set_ok;
+}
+
+typedef struct {
+    u8 os_mask;
+    u8 compiler_mask;
+    u8 arch_mask;
+    Build_Macro_State state;
+    const char *name;
+    const char *definition;
+} Build_Platform_Macro;
+
+enum {
+    Build_Platform_ANY_OS = BASE_OS_COUNT - 1,
+    Build_Platform_ANY_ARCH = BASE_ARCH_COUNT - 1,
+    Build_Platform_MSVC = 1 << Build_Compiler_MSVC,
+    Build_Platform_CLANG = 1 << Build_Compiler_CLANG,
+    Build_Platform_ANY_COMPILER = Build_Platform_MSVC | Build_Platform_CLANG,
+};
+
+static const Build_Platform_Macro build_platform_macros[] = {
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "_WIN32", "1" },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, BASE_ARCH_X86_64 | BASE_ARCH_ARM64, Build_Macro_State_DEFINED, "_WIN64", "1" },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED_VALUE_UNKNOWN, "_MSC_VER", 0 },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, BASE_ARCH_X86_64, Build_Macro_State_DEFINED, "_M_X64", "100" },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, BASE_ARCH_X86_64, Build_Macro_State_DEFINED, "_M_AMD64", "100" },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, BASE_ARCH_ARM64, Build_Macro_State_DEFINED, "_M_ARM64", "1" },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, BASE_ARCH_ARM64, Build_Macro_State_UNKNOWN, "_M_ARM64EC", 0 },
+    { BASE_OS_WINDOWS, Build_Platform_ANY_COMPILER, Build_Platform_ANY_ARCH, Build_Macro_State_UNKNOWN, "__STDC__", 0 },
+    { Build_Platform_ANY_OS & ~BASE_OS_WINDOWS, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__STDC__", "1" },
+    { Build_Platform_ANY_OS, Build_Platform_ANY_COMPILER, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__STDC_VERSION__", "201112L" },
+    { Build_Platform_ANY_OS, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__clang__", "1" },
+    { Build_Platform_ANY_OS & ~BASE_OS_WINDOWS, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__GNUC__", "4" },
+    { Build_Platform_ANY_OS, Build_Platform_CLANG, BASE_ARCH_X86_64, Build_Macro_State_DEFINED, "__x86_64__", "1" },
+    { Build_Platform_ANY_OS, Build_Platform_CLANG, BASE_ARCH_ARM64, Build_Macro_State_DEFINED, "__aarch64__", "1" },
+    { BASE_OS_WASM, Build_Platform_CLANG, BASE_ARCH_WASM32, Build_Macro_State_DEFINED, "__wasm__", "1" },
+    { BASE_OS_WASM, Build_Platform_CLANG, BASE_ARCH_WASM32, Build_Macro_State_DEFINED, "__wasm32__", "1" },
+    { BASE_OS_ANY_APPLE, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__APPLE__", "1" },
+    { BASE_OS_ANY_APPLE, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__MACH__", "1" },
+    { BASE_OS_LINUX, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_DEFINED, "__linux__", "1" },
+    { BASE_OS_LINUX, Build_Platform_CLANG, Build_Platform_ANY_ARCH, Build_Macro_State_UNKNOWN, "__gnu_linux__", 0 },
+};
+
+static const char *const build_os_macro_names[BASE_OS_COUNT] = {
+    [BASE_OS_WINDOWS]       = "BASE_OS_WINDOWS",
+    [BASE_OS_MACOS]         = "BASE_OS_MACOS",
+    [BASE_OS_IOS_DEVICE]    = "BASE_OS_IOS_DEVICE",
+    [BASE_OS_IOS_SIMULATOR] = "BASE_OS_IOS_SIMULATOR",
+    [BASE_OS_LINUX]         = "BASE_OS_LINUX",
+    [BASE_OS_WASM]          = "BASE_OS_WASM",
+};
+
+typedef enum {
+    Build_Meta_Setting_UNSET = 0,
+    Build_Meta_Setting_FALSE,
+    Build_Meta_Setting_TRUE,
+} Build_Meta_Setting;
+
+typedef struct {
+    Build_Meta_Setting link_crt;
+    Build_Meta_Setting subsystem_windows;
+} Build_Meta_Settings;
+
+typedef struct {
+    const char *location;
+    String directive;
+    Build_Unknown_Reason_Id unknown_reason;
+} Build_Meta_In_Unknown_Group;
+
+static bool build_flag_changes_preprocessor(String flag) {
+    bool defines = string_starts_with(flag, S("-D")) || string_starts_with(flag, S("/D"));
+    defines = defines || string_starts_with(flag, S("-U")) || string_starts_with(flag, S("/U"));
+    defines = defines || string_starts_with(flag, S("-std")) || string_starts_with(flag, S("/std"));
+    return defines;
+}
+
+static void build_rebuild_and_rerun_self_if_out_of_date(Arena *scratch_arena, const char **arguments, u64 argument_count) {
+    #if BASE_OS == BASE_OS_WINDOWS
+    {
+        Scratch scratch = scratch_begin(scratch_arena);
+
+        char executable_path[4096] = {0};
+        bool executable_path_ok = fs_executable_path(executable_path, sizeof executable_path);
+        String_Cut executable_path_parts = string_cut_last(string_from_cstring(executable_path), '\\');
+        String executable_folder = executable_path_parts.head;
+        String executable_name = executable_path_parts.tail;
+
+        const char *build_source_path = cstring_print(scratch.arena, "%S\\build.c", executable_folder);
+        const char *base_folder_path = cstring_print(scratch.arena, "%S\\src\\base", executable_folder);
+
+        fs_File_Info executable_info = {0};
+        bool executable_info_ok = executable_path_ok && fs_file_info(executable_path, &executable_info);
+
+        // TODO(felix): Check the timestamps of only the files that build.c recursively depends on, once the parser supports this.
+        fs_File_Info build_source_info = {0};
+        bool build_source_ok = executable_info_ok && fs_file_info(build_source_path, &build_source_info);
+        u64 newest_source_time = build_source_info.modification_time;
+        const char *newest_source_path = build_source_path;
+
+        bool base_folder_ok = false;
+        if (build_source_ok) {
+            fs_Folder_Iterator it = fs_folder_iterator(base_folder_path, fs_Folder_Iterator_Flag_RECURSIVE);
+            while (fs_folder_iterate(&it)) {
+                bool is_newer_file = !it.info.is_folder && it.info.modification_time > newest_source_time;
+                if (is_newer_file) {
+                    newest_source_time = it.info.modification_time;
+                    newest_source_path = cstring_print(scratch.arena, "%s", it.info.path);
+                }
             }
-            requestAnimationFrame(frame);
-        })();
-    </script>
-);
+            base_folder_ok = !it.had_error;
+            fs_folder_iterator_end(&it);
+        }
 
-static u32 build_default_everything(Arena scratch, const char *program_name, Build_Options *options) {
+        bool sources_ok = build_source_ok && base_folder_ok;
+        if (!sources_ok) log_error("can't check if '%s' is out of date against '%s' and '%s'", executable_path, build_source_path, base_folder_path);
+
+        bool out_of_date = sources_ok && newest_source_time > executable_info.modification_time;
+        if (!out_of_date){
+            print("info: reusing '%s'\n", executable_path);
+        } else {
+            print("info: rebuilding '%s' because '%s' is newer\n", executable_path, newest_source_path);
+
+            String executable_stem = string_cut_last(executable_name, '.').head;
+            const char *executable_folder_cstring = cstring_from_string(scratch.arena, executable_folder);
+            const char *old_executable_path = cstring_print(scratch.arena, "%S\\%S.old.exe", executable_folder, executable_stem);
+            const char *output_flag = cstring_print(scratch.arena, "-Fe:%S", executable_name);
+
+            bool renamed = fs_rename(executable_path, old_executable_path);
+            if (!renamed) log_error("can't rename '%s' to '%s'", executable_path, old_executable_path);
+
+            const char *compile[] = {
+                "cl", "-nologo", "-FC", "-diagnostics:column", "-std:c11", "-Oi", "build.c", "-Z7", "-MTd", "-DBUILD_DEBUG", "-DWINDOWS_SUBSYSTEM=WINDOWS_SUBSYSTEM_CONSOLE", "-Isrc",
+                "-link", "-subsystem:console", "-incremental:no", "-entry:entrypoint", "Kernel32.lib", "Ntdll.lib", output_flag,
+                0,
+            };
+            Os_Process_Flags compile_flags = Os_Process_Flag_PRINT_COMMAND_BEFORE_RUNNING | Os_Process_Flag_PRINT_EXIT_CODE | Os_Process_Flag_PRINT_EXECUTION_TIME;
+            u32 rebuild_exit_code = renamed ? os_process_run(scratch.arena, compile, executable_folder_cstring, compile_flags).exit_code : 1;
+            bool compiled = renamed && rebuild_exit_code == 0;
+
+            if (renamed && !compiled) {
+                bool restored = fs_rename(old_executable_path, executable_path);
+                if (restored) log_error("rebuilding '%s' failed; restored the previous executable", executable_path);
+                else log_error("rebuilding '%s' failed, and restoring it from '%s' also failed", executable_path, old_executable_path);
+            }
+
+            fs_File_Info rebuilt_info = {0};
+            bool rebuilt_info_ok = compiled && fs_file_info(executable_path, &rebuilt_info);
+            bool rebuilt_is_current = rebuilt_info_ok && rebuilt_info.modification_time >= newest_source_time;
+            if (compiled && !rebuilt_is_current) {
+                log_error("rebuilt '%s' is still older than '%s', which may have a timestamp in the future", executable_path, newest_source_path);
+                rebuild_exit_code = 1;
+            }
+
+            if (rebuilt_is_current) {
+                const char **rerun_arguments = arena_make(scratch.arena, argument_count + 1, const char *);
+                rerun_arguments[0] = executable_path;
+                for (u64 i = 1; i < argument_count; i += 1) rerun_arguments[i] = arguments[i];
+                rebuild_exit_code = os_process_run(scratch.arena, rerun_arguments, 0, 0).exit_code;
+            }
+
+            os_exit(rebuild_exit_code);
+        }
+
+        scratch_end(scratch);
+    }
+    #else
+    {
+        (void)scratch_arena;
+        (void)arguments;
+        (void)argument_count;
+    }
+    #endif
+}
+
+static u32 build_default_everything(Arena *scratch_arena, const char *program_name, const Build_Options *options) {
+    Scratch scratch = scratch_begin(scratch_arena);
+
     u8 target_os = BASE_OS;
     if (options != 0 && options->target_os != 0) target_os = options->target_os;
 
     u32 exit_code = 1;
 
     u64 argument_count = 0;
-    const char **arguments = os_get_arguments(&scratch, &argument_count);
+    const char **arguments = os_get_arguments(scratch.arena, &argument_count);
+    build_rebuild_and_rerun_self_if_out_of_date(scratch.arena, arguments, argument_count);
 
     char path_separator = (BASE_OS & BASE_OS_ANY_POSIX) ? '/' : '\\';
 
-    const char *source_folder = cstring_print(&scratch, "..%csrc%c", path_separator, path_separator);
-    const char *dependency_folder = cstring_print(&scratch, "..%cdeps%c", path_separator, path_separator);
-    const char *c_file_path = cstring_print(&scratch, "%smain.c", source_folder);
+    const char *source_folder = cstring_print(scratch.arena, "..%csrc%c", path_separator, path_separator);
+    const char *dependency_folder = cstring_print(scratch.arena, "..%cdeps%c", path_separator, path_separator);
+    const char *c_file_path = cstring_print(scratch.arena, "%smain.c", source_folder);
 
     static const Build_Compiler build_default_compiler[BASE_OS_COUNT] = {
         [BASE_OS_WINDOWS]       = Build_Compiler_MSVC,
@@ -3192,16 +3594,17 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
     };
     Build_Compiler compiler = build_default_compiler[target_os];
 
-    typedef struct {
-        const char *code_path, *object_path;
-        const char **extra_flags;
-        bool no_extra_errors;
-    } Build_Object;
-    Array(Build_Object) objects = {0};
+    Build_Mode build_mode = Build_Mode_DEBUG;
+    for (u64 i = 0; i < argument_count; i += 1) {
+        if (cstring_equals(arguments[i], "clang")) compiler = Build_Compiler_CLANG;
+        if (cstring_equals(arguments[i], "release")) build_mode = Build_Mode_RELEASE;
+    }
 
-    Array(const char *) compiler_extra_flags = {0};
-    Array(const char *) linker_extra_flags = {0};
-    Array(const char *) link_libraries = {0};
+    Build_Objects objects = {0};
+
+    Build_Arguments compiler_extra_flags = {0};
+    Build_Arguments linker_extra_flags = {0};
+    Build_Arguments link_libraries = {0};
 
     const char *object_extension = build_object_extension[target_os];
 
@@ -3209,14 +3612,11 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
     bool build_folder_ok = fs_exists(build_folder);
     if (!build_folder_ok) {
         build_folder_ok = fs_make_folder(build_folder);
-        if (!build_folder_ok) {
-            log_error("failure creating folder '%s'", build_folder);
-            return 1;
-        }
+        if (!build_folder_ok) log_error("failure creating folder '%s'", build_folder);
     }
 
     bool ok = false;
-    String code = os_read_entire_file(&scratch, &c_file_path[3], &ok);
+    String code = os_read_entire_file(scratch.arena, &c_file_path[3], &ok);
     assert(ok);
 
     String_Builder metaprogram_code = {0};
@@ -3224,460 +3624,592 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
 
     String generate_here_directive = S("generate_here");
 
-    bool meta_link_crt_override = false;
-    bool meta_link_crt_override_value = false;
+    typedef struct {
+        String name;
+        String contents;
+    } Build_Embedded_File;
 
-    bool TODO_REMOVE_THIS = false;
+    Build_Embedded_File *files_to_embed = 0;
+    u64 files_to_embed_count = 0;
+    u64 files_to_embed_capacity = 0;
 
-    Base_Clex_Define *define_state = arena_make(&scratch, 1, Base_Clex_Define);
-    clex_Lexer lexer = clex_init(&c_file_path[3], &c_file_path[cstring_length(c_file_path)], code.data, 0, base_clex_define, define_state);
+    enum { BUILD_CONDITIONAL_DEPTH_MAX = 64, BUILD_PASS_COUNT_MAX = 8 };
+    Build_Conditional conditionals[BUILD_CONDITIONAL_DEPTH_MAX] = {0};
+    u32 conditional_depth = 0;
+    Build_Macros *macros = 0;
+    clex_Lexer lexer = {0};
+
+    Build_Meta_Settings settings_from_earlier_passes = {0};
+    bool collect_unknown_reasons = false;
+    const char *link_libc_meta_location = 0;
+    const char *subsystem_meta_location = 0;
+    u32 pass_count = 0;
     f64 time_at_parse_start = time_relative_timestamp();
-    while (clex_lex(&lexer)) {
-        String preprocess_data2 = base_string_from_clex_data(lexer.token.data2);
-        switch (lexer.token.kind) {
-            case clex_Token_INCLUDE: {
-                if (TODO_REMOVE_THIS) print("#include %S\n", preprocess_data2);
+    bool parse_ok = build_folder_ok;
 
-                String path = preprocess_data2;
+    for (bool parsing = parse_ok; parsing;) {
+        pass_count += 1;
+        assert(pass_count <= BUILD_PASS_COUNT_MAX);
 
-                if (path.data[0] == '<') { /* skip system includes for now */ }
-                else if (string_has(path, S("stb_truetype.h")).ok) {
-                    // TODO(felix): Remove once preprocessor isn't wrongly trying to take #includes inside inactive #if blocks, which stb_truetype.h has
+        compiler_extra_flags = (Build_Arguments){0};
+        linker_extra_flags = (Build_Arguments){0};
+        link_libraries = (Build_Arguments){0};
+        metaprogram_output_file = (String){0};
+        files_to_embed_count = 0;
+        conditional_depth = 0;
+
+        Build_Meta_Settings settings_this_pass = {0};
+        Build_Meta_In_Unknown_Group *metas_in_unknown_groups = 0;
+        u64 meta_in_unknown_group_count = 0;
+        u64 meta_in_unknown_group_capacity = 0;
+        Build_Unknown_Reason_Id link_crt_unset_reason = 0;
+        Build_Unknown_Reason_Id address_sanitiser_unset_reason = 0;
+        Build_Unknown_Reason_Id subsystem_unset_reason = 0;
+
+        macros = arena_make(scratch.arena, 1, Build_Macros);
+        macros->collect_unknown_reasons = collect_unknown_reasons;
+        {
+            u8 target_arch = BASE_ARCH;
+            if (target_os == BASE_OS_WASM) target_arch = BASE_ARCH_WASM32;
+            if (target_os == BASE_OS_IOS_DEVICE) target_arch = BASE_ARCH_ARM64;
+            u8 compiler_bit = (u8)(1 << compiler);
+
+            u64 platform_macro_count = sizeof build_platform_macros / sizeof build_platform_macros[0];
+            for (u64 i = 0; i < platform_macro_count; i += 1) {
+                Build_Platform_Macro macro = build_platform_macros[i];
+                bool applies = (macro.os_mask & target_os) && (macro.compiler_mask & compiler_bit) && (macro.arch_mask & target_arch);
+                if (applies) {
+                    Build_Unknown_Reason_Id unknown_reason = 0;
+                    if (macro.state == Build_Macro_State_DEFINED_VALUE_UNKNOWN) unknown_reason = build_unknown_reason(scratch.arena, macros, cstring_print(scratch.arena, "`%s` is defined, but the metaprogram does not know its value", macro.name), 0);
+                    if (macro.state == Build_Macro_State_UNKNOWN) unknown_reason = build_unknown_reason(scratch.arena, macros, cstring_print(scratch.arena, "the metaprogram does not know if the compiler defines `%s`", macro.name), 0);
+                    build_macros_predefine(macros, macro.name, macro.state, macro.definition, unknown_reason);
                 }
-                else if (path.data[0] == '"') {
-                    if (path.data[path.count - 1] != '"') {
-                        log_error("`#include` path has unterminated `\"`");
-                        return 1;
-                    }
-                    if (path.count <= 2) {
-                        log_error("cannot `#include` empty path `\"\"`");
-                        return 1;
-                    }
-                    path = string_range(path, 1, path.count - 1);
+            }
 
-                    const char *read_path = cstring_print(&scratch, "%s%S", &source_folder[3], path);
-                    String file = os_read_entire_file(&scratch, read_path, &ok);
-                    if (!ok) {
-                        log_error("failed reading '%s'", read_path);
-                        return 1;
-                    }
+            for (u64 i = 0; i < platform_macro_count; i += 1) {
+                const char *name = build_platform_macros[i].name;
+                bool is_listed_for_target = macros->slots[build_macros_find(macros, string_from_cstring(name))].name.data != 0;
+                if (!is_listed_for_target) build_macros_predefine(macros, name, Build_Macro_State_UNDEFINED, 0, 0);
+            }
 
-                    ok = clex_push_file(&lexer, path.data, &path.data[path.count], file.data);
-                    assert(ok);
+            build_macros_predefine(macros, "BASE_OS", Build_Macro_State_DEFINED, build_os_macro_names[target_os], 0);
+            build_macros_predefine(macros, "BUILD_DEBUG", Build_Macro_State_DEFINED, build_mode == Build_Mode_DEBUG ? "1" : "0", 0);
+            if (settings_from_earlier_passes.link_crt != Build_Meta_Setting_UNSET) {
+                build_macros_predefine(macros, "LINK_CRT", Build_Macro_State_DEFINED, settings_from_earlier_passes.link_crt == Build_Meta_Setting_TRUE ? "1" : "0", 0);
+            } else {
+                link_crt_unset_reason = build_unknown_reason_for_unset_setting(scratch.arena, macros, "`LINK_CRT`", "link_libc", link_libc_meta_location);
+                build_macros_predefine(macros, "LINK_CRT", Build_Macro_State_DEFINED_VALUE_UNKNOWN, 0, link_crt_unset_reason);
+            }
+
+            if (target_os == BASE_OS_WINDOWS) {
+                if (settings_from_earlier_passes.subsystem_windows != Build_Meta_Setting_UNSET) {
+                    bool subsystem_is_windows_so_far = settings_from_earlier_passes.subsystem_windows == Build_Meta_Setting_TRUE;
+                    build_macros_predefine(macros, "WINDOWS_SUBSYSTEM", Build_Macro_State_DEFINED, subsystem_is_windows_so_far ? "WINDOWS_SUBSYSTEM_WINDOWS" : "WINDOWS_SUBSYSTEM_CONSOLE", 0);
                 } else {
-                    log_error("expected `<` or `\"` following `#include`; got `%c`", path.data[0]);
-                    return 1;
+                    subsystem_unset_reason = build_unknown_reason_for_unset_setting(scratch.arena, macros, "the Windows subsystem", "subsystem", subsystem_meta_location);
+                    build_macros_predefine(macros, "WINDOWS_SUBSYSTEM", Build_Macro_State_DEFINED_VALUE_UNKNOWN, 0, subsystem_unset_reason);
                 }
-            } break;
-            case clex_Token_IF: {
-                if (TODO_REMOVE_THIS) print("#if %S\n", preprocess_data2);
-                // panic("TODO(felix): #if");
-            } break;
-            case clex_Token_ELIF: {
-                if (TODO_REMOVE_THIS) print("#elif %S\n", preprocess_data2);
-                // panic("TODO(felix): #elif");
-            } break;
-            case clex_Token_ENDIF: {
-                if (TODO_REMOVE_THIS) print("#endif\n");
-                // panic("TODO(felix): #endif");
-            } break;
-            case clex_Token_ERROR_DIRECTIVE: {
-                if (TODO_REMOVE_THIS) print("#error %S\n", preprocess_data2);
-                // panic("TODO(felix): #error");
-            } break;
-            default: break;
+            }
+
+            if (compiler == Build_Compiler_MSVC) {
+                bool address_sanitiser_is_known = build_mode == Build_Mode_RELEASE || settings_from_earlier_passes.link_crt != Build_Meta_Setting_UNSET;
+                bool uses_address_sanitiser = build_mode == Build_Mode_DEBUG && settings_from_earlier_passes.link_crt == Build_Meta_Setting_TRUE;
+                if (address_sanitiser_is_known) {
+                    build_macros_predefine(macros, "__SANITIZE_ADDRESS__", uses_address_sanitiser ? Build_Macro_State_DEFINED : Build_Macro_State_UNDEFINED, uses_address_sanitiser ? "1" : 0, 0);
+                } else {
+                    address_sanitiser_unset_reason = build_unknown_reason_for_unset_setting(scratch.arena, macros, "the address sanitiser", "link_libc", link_libc_meta_location);
+                    build_macros_predefine(macros, "__SANITIZE_ADDRESS__", Build_Macro_State_UNKNOWN, 0, address_sanitiser_unset_reason);
+                }
+            }
         }
 
-        if (TODO_REMOVE_THIS) { // TODO(felix): remove
-            String token_data = base_string_from_clex_data(lexer.token.data);
-            print("%S ", token_data);
-            char d = token_data.data[0];
-            if (d == ';' || d == '{') print("\n");
-        }
+        lexer = clex_init(&c_file_path[3], &c_file_path[cstring_length(c_file_path)], code.data, &code.data[code.count], 0);
+        while (parse_ok && clex_lex(&lexer)) {
+            String preprocess_data2 = base_string_from_clex_data(lexer.token.data2);
+            bool skip_group = false;
+            Build_Unknown_Reason_Id group_unknown_reason = conditional_depth > 0 ? conditionals[conditional_depth - 1].group_unknown_reason : 0;
+            bool group_is_unknown = group_unknown_reason != 0;
 
-        // TODO(felix): Replace with real preprocessing logic.
+            switch (lexer.token.kind) {
+                case clex_Token_DEFINE: case clex_Token_UNDEF: {
+                    bool is_define = lexer.token.kind == clex_Token_DEFINE;
+                    clex_Data name = is_define ? lexer.token.data : clex_directive_name(lexer.token.data2);
+                    parse_ok = name.start != name.end;
+                    if (!parse_ok) build_log_error(&lexer, "expected a name after `#undef`");
 
-        static bool in_active_preprocessor_block = true;
+                    String name_string = base_string_from_clex_data(name);
+                    u32 slot = 0;
+                    if (parse_ok) slot = build_macros_insert(macros, name_string, &parse_ok);
+                    if (parse_ok) macros->slots[slot].is_defined_by_source = true;
 
-        bool if_hack = lexer.token.kind == clex_Token_IF;
-        if_hack = if_hack || lexer.token.kind == clex_Token_ELSE;
-        if_hack = if_hack || lexer.token.kind == clex_Token_ENDIF;
-        if_hack = false;
-
-        if (if_hack) {
-            static bool aware_of_this_static_if_condition = false;
-            String token_data = base_string_from_clex_data(lexer.token.data);
-
-            if (string_equals(token_data, S("if"))) {
-                if (aware_of_this_static_if_condition) {
-                    log_error("nested #if not yet supported in `#if BASE_OS...` block parsed by metaprogram");
-                    return 1;
-                }
-
-                const char *error = "expected `#if BASE_OS == BASE_OS_...`";
-
-                Arena definition_scratch = scratch;
-                const char *copy = cstring_from_string(&definition_scratch, base_string_from_clex_data(lexer.token.data2));
-                clex_Lexer definition = clex_init(0, 0, copy, 0, base_clex_define, 0);
-                while (clex_lex(&definition)) {
-                    token_data = base_string_from_clex_data(definition.token.data);
-                    aware_of_this_static_if_condition = definition.token.kind == clex_Token_IDENTIFIER && string_equals(token_data, S("BASE_OS"));
-
-                    if (aware_of_this_static_if_condition) {
-                        if (!build_eat_token(&lexer, &definition, clex_Token_EQUALITY_CHECK, "error: %s", error)) return 1;
-
-                        if (!build_eat_token(&lexer, &definition, clex_Token_IDENTIFIER, "error: %s", error)) return 1;
-                        token_data = base_string_from_clex_data(definition.token.data);
-
-                        u8 os_to_check = 0;
-                        if (string_equals(token_data, S("BASE_OS_WINDOWS"))) os_to_check = BASE_OS_WINDOWS;
-                        else if (string_equals(token_data, S("BASE_OS_MACOS"))) os_to_check = BASE_OS_MACOS;
-                        else if (string_equals(token_data, S("BASE_OS_IOS_DEVICE"))) os_to_check = BASE_OS_IOS_DEVICE;
-                        else if (string_equals(token_data, S("BASE_OS_IOS_SIMULATOR"))) os_to_check = BASE_OS_IOS_SIMULATOR;
-                        else if (string_equals(token_data, S("BASE_OS_LINUX"))) os_to_check = BASE_OS_LINUX;
-                        else if (string_equals(token_data, S("BASE_OS_WASM"))) os_to_check = BASE_OS_WASM;
-                        else {
-                            log_error("expected `BASE_OS_{WINDOWS or MACOS or LINUX or WASM}`, got `#if BASE_OS == %S`", token_data);
-                            return 1;
-                        }
-
-                        in_active_preprocessor_block = (target_os == os_to_check);
+                    if (parse_ok && group_is_unknown) {
+                        macros->slots[slot].macro = (Build_Macro){ .state = Build_Macro_State_UNKNOWN, .unknown_reason = build_unknown_reason(scratch.arena, macros, cstring_print(scratch.arena, "%s: `#%s %S` is in an unknown group", base_clex_current_location_get_as_string(scratch.arena, &lexer), is_define ? "define" : "undef", name_string), group_unknown_reason) };
+                    } else if (parse_ok) {
+                        macros->slots[slot].macro = is_define ? (Build_Macro){ .state = Build_Macro_State_DEFINED, .definition = preprocess_data2 } : (Build_Macro){ .state = Build_Macro_State_UNDEFINED };
                     }
+                } break;
+                case clex_Token_INCLUDE: {
+                    bool include_ok = false;
+                    clex_Include include = clex_include_operand(lexer.token.data2, &include_ok);
+                    parse_ok = include_ok;
+                    if (!parse_ok) build_log_error(&lexer, "expected `\"path\"` or `<path>` after `#include`; got `%S`", preprocess_data2);
+
+                    if (parse_ok && !include.is_system) {
+                        String path = base_string_from_clex_data(include.path);
+                        const char *read_path = cstring_print(scratch.arena, "%s%S", &source_folder[3], path);
+                        String file = os_read_entire_file(scratch.arena, read_path, &parse_ok);
+                        if (!parse_ok) build_log_error(&lexer, "failed reading '%s'", read_path);
+
+                        if (parse_ok) {
+                            ok = clex_push_file(&lexer, path.data, &path.data[path.count], file.data, &file.data[file.count]);
+                            assert(ok);
+                        }
+                    }
+                } break;
+                case clex_Token_IF: case clex_Token_IFDEF: case clex_Token_IFNDEF: {
+                    Build_Condition condition = { .value = clex_Condition_Value_FALSE };
+                    if (lexer.token.kind == clex_Token_IF) {
+                        condition = build_evaluate_preprocessor_condition(scratch.arena, &lexer, macros, lexer.token.data2, &parse_ok);
+                    } else {
+                        clex_Data name = clex_directive_name(lexer.token.data2);
+                        if (name.start == name.end) {
+                            build_log_error(&lexer, "expected a name after `#ifdef` or `#ifndef`");
+                            parse_ok = false;
+                        }
+                        String name_string = base_string_from_clex_data(name);
+                        if (parse_ok) condition = build_evaluate_macro_is_defined(scratch.arena, macros, name_string, lexer.token.kind == clex_Token_IFDEF);
+                        if (condition.value == clex_Condition_Value_UNKNOWN) {
+                            const char *directive = lexer.token.kind == clex_Token_IFDEF ? "ifdef" : "ifndef";
+                            condition.unknown_reason = build_unknown_reason(scratch.arena, macros, cstring_print(scratch.arena, "%s: `#%s %S` is unknown", base_clex_current_location_get_as_string(scratch.arena, &lexer), directive, name_string), condition.unknown_reason);
+                        }
+                    }
+
+                    if (conditional_depth == BUILD_CONDITIONAL_DEPTH_MAX) {
+                        build_log_error(&lexer, "conditionals are nested too deeply");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) {
+                        Build_Conditional *conditional = &conditionals[conditional_depth];
+                        conditional_depth += 1;
+                        *conditional = (Build_Conditional){0};
+                        skip_group = !build_enter_conditional_group(conditionals, conditional_depth, condition, false);
+                    }
+                } break;
+                case clex_Token_ELIF: case clex_Token_ELSE: {
+                    bool is_else = lexer.token.kind == clex_Token_ELSE;
+                    Build_Conditional *conditional = conditional_depth > 0 ? &conditionals[conditional_depth - 1] : 0;
+
+                    if (conditional == 0) {
+                        build_log_error(&lexer, is_else ? "`#else` without `#if`" : "`#elif` without `#if`");
+                        parse_ok = false;
+                    } else if (conditional->chain.saw_else) {
+                        build_log_error(&lexer, is_else ? "`#else` after `#else`" : "`#elif` after `#else`");
+                        parse_ok = false;
+                    }
+
+                    bool chain_has_taken_group = parse_ok && conditional->chain.state == clex_Conditional_State_TAKEN;
+                    Build_Condition condition = { .value = clex_Condition_Value_TRUE };
+                    if (parse_ok && !chain_has_taken_group && !is_else) {
+                        condition = build_evaluate_preprocessor_condition(scratch.arena, &lexer, macros, lexer.token.data2, &parse_ok);
+                    }
+
+                    if (parse_ok) skip_group = !build_enter_conditional_group(conditionals, conditional_depth, condition, is_else);
+                } break;
+                case clex_Token_ENDIF: {
+                    if (conditional_depth == 0) {
+                        build_log_error(&lexer, "`#endif` without `#if`");
+                        parse_ok = false;
+                    } else conditional_depth -= 1;
+                } break;
+                case clex_Token_ERROR_DIRECTIVE: {
+                    if (!group_is_unknown) {
+                        build_log_error(&lexer, "#error %S", preprocess_data2);
+                        parse_ok = false;
+                    }
+                } break;
+                default: break;
+            }
+
+            if (skip_group && !clex_skip_conditional_group(&lexer)) {
+                build_log_error(&lexer, "missing `#endif`");
+                parse_ok = false;
+            }
+
+            bool token_is_meta = parse_ok && lexer.token.kind == clex_Token_IDENTIFIER && string_equals(base_string_from_clex_data(lexer.token.data), S("META"));
+
+            if (token_is_meta && group_is_unknown) {
+                clex_Lexer directive_lexer = lexer;
+                String directive = {0};
+                bool has_directive = clex_lex(&directive_lexer) && directive_lexer.token.kind == '(' && clex_lex(&directive_lexer) && directive_lexer.token.kind == clex_Token_IDENTIFIER;
+                if (has_directive) directive = base_string_from_clex_data(directive_lexer.token.data);
+
+                metas_in_unknown_groups = arena_array_reserve(scratch.arena, metas_in_unknown_groups, meta_in_unknown_group_count, &meta_in_unknown_group_capacity, meta_in_unknown_group_count + 1);
+                metas_in_unknown_groups[meta_in_unknown_group_count] = (Build_Meta_In_Unknown_Group){ .location = base_clex_current_location_get_as_string(scratch.arena, &lexer), .directive = directive, .unknown_reason = group_unknown_reason };
+                meta_in_unknown_group_count += 1;
+            }
+
+            bool meta_has_arguments = token_is_meta && !group_is_unknown && clex_lex(&lexer) && lexer.token.kind == '(';
+            if (meta_has_arguments) parse_ok = build_eat_token(&lexer, clex_Token_IDENTIFIER, "expected directive at start of `META(...)`");
+
+            if (meta_has_arguments && parse_ok) {
+                String token_data = base_string_from_clex_data(lexer.token.data);
+
+                if (string_equals(token_data, generate_here_directive)) {
+                    parse_ok = metaprogram_output_file.count == 0;
+                    if (!parse_ok) build_log_error(&lexer, "directive `META(%S)` can only be used once", generate_here_directive);
+                    parse_ok = parse_ok && build_eat_token(&lexer, ')', "expected ')' closing META(...) block");
+
+                    if (parse_ok) {
+                        clex_lex(&lexer);
+                        parse_ok = lexer.token.kind == clex_Token_INCLUDE && string_equals(base_string_from_clex_data(lexer.token.data), S("include"));
+                        if (!parse_ok) build_log_error(&lexer, "expected `#include`");
+                    }
+
+                    if (parse_ok) {
+                        bool include_ok = false;
+                        clex_Include include = clex_include_operand(lexer.token.data2, &include_ok);
+                        parse_ok = include_ok && !include.is_system;
+                        if (parse_ok) metaprogram_output_file = base_string_from_clex_data(include.path);
+                        else build_log_error(&lexer, "expected string after `#include`");
+                    }
+                } else if (string_equals(token_data, S("embed"))) {
+                    parse_ok = build_eat_token(&lexer, clex_Token_STRING, "expected path, like this: `META(embed \"path/to/file\")`");
+                    String input_file = base_string_from_clex_data(lexer.token.data);
+                    parse_ok = parse_ok && build_eat_token(&lexer, ')', "expected ')' closing META(...) block");
+
+                    if (parse_ok) {
+                        const char *input_path = cstring_from_string(scratch.arena, input_file);
+                        String contents = os_read_entire_file(scratch.arena, input_path, &parse_ok);
+                        if (!parse_ok) build_log_error(&lexer, "failed reading `META(embed)` input '%s'", input_path);
+
+                        if (parse_ok) {
+                            files_to_embed = arena_array_reserve(scratch.arena, files_to_embed, files_to_embed_count, &files_to_embed_capacity, files_to_embed_count + 1);
+                            files_to_embed[files_to_embed_count] = (Build_Embedded_File){ .name = input_file, .contents = contents };
+                            files_to_embed_count += 1;
+                        }
+                    }
+                } else if (string_equals(token_data, S("subsystem"))) {
+                    parse_ok = settings_this_pass.subsystem_windows == Build_Meta_Setting_UNSET;
+                    if (!parse_ok) build_log_error(&lexer, "you can't specify `subsystem` multiple times");
+
+                    const char *error = "expected `subsystem = console/windows`";
+                    parse_ok = parse_ok && build_eat_token(&lexer, '=', error);
+                    parse_ok = parse_ok && build_eat_token(&lexer, clex_Token_IDENTIFIER, error);
+
+                    if (parse_ok) {
+                        token_data = base_string_from_clex_data(lexer.token.data);
+                        if (string_equals(token_data, S("console"))) {
+                            settings_this_pass.subsystem_windows = Build_Meta_Setting_FALSE;
+                        } else if (string_equals(token_data, S("windows"))) {
+                            settings_this_pass.subsystem_windows = Build_Meta_Setting_TRUE;
+                        } else {
+                            build_log_error(&lexer, "expected `console` or `windows` in `META(subsystem = console/windows)`, got `%S`", token_data);
+                            parse_ok = false;
+                        }
+                    }
+
+                    parse_ok = parse_ok && build_eat_token(&lexer, ')', "expected `)` to close `META(...)` directive");
+
+                    if (parse_ok && target_os == BASE_OS_WINDOWS) {
+                        bool is_windows = settings_this_pass.subsystem_windows == Build_Meta_Setting_TRUE;
+                        build_set_macro_from_meta(&lexer, macros, "subsystem", "WINDOWS_SUBSYSTEM", true, is_windows ? "WINDOWS_SUBSYSTEM_WINDOWS" : "WINDOWS_SUBSYSTEM_CONSOLE", &parse_ok);
+                    }
+                } else if (string_equals(token_data, S("link_libc"))) {
+                    parse_ok = settings_this_pass.link_crt == Build_Meta_Setting_UNSET;
+                    if (!parse_ok) build_log_error(&lexer, "you can't specify `link_libc` multiple times");
+
+                    const char *error = "expected `link_libc = true/false`";
+                    parse_ok = parse_ok && build_eat_token(&lexer, '=', error);
+                    parse_ok = parse_ok && build_eat_token(&lexer, clex_Token_IDENTIFIER, error);
+
+                    if (parse_ok) {
+                        token_data = base_string_from_clex_data(lexer.token.data);
+                        if (string_equals(token_data, S("true"))) {
+                            settings_this_pass.link_crt = Build_Meta_Setting_TRUE;
+                        } else if (string_equals(token_data, S("false"))) {
+                            settings_this_pass.link_crt = Build_Meta_Setting_FALSE;
+                        } else {
+                            build_log_error(&lexer, "expected `true` or `false` in `META(link_libc = true/false)`, got `%S`", token_data);
+                            parse_ok = false;
+                        }
+                    }
+
+                    parse_ok = parse_ok && build_eat_token(&lexer, ')', "expected `)` to close `META(...)` directive");
+
+                    bool links_crt = settings_this_pass.link_crt == Build_Meta_Setting_TRUE;
+                    if (parse_ok && links_crt && target_os == BASE_OS_WASM) {
+                        build_log_error(&lexer, "`META(link_libc = true)` is not possible on wasm, which has no libc");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) build_set_macro_from_meta(&lexer, macros, "link_libc", "LINK_CRT", true, links_crt ? "1" : "0", &parse_ok);
+                    if (parse_ok && compiler == Build_Compiler_MSVC) {
+                        bool uses_address_sanitiser = links_crt && build_mode == Build_Mode_DEBUG;
+                        build_set_macro_from_meta(&lexer, macros, "link_libc", "__SANITIZE_ADDRESS__", uses_address_sanitiser, "1", &parse_ok);
+                    }
+                } else if (string_equals(token_data, S("link"))) {
+                    parse_ok = build_eat_token(&lexer, clex_Token_STRING, "expected `META(link \"Library\")`");
+                    String library = base_string_from_clex_data(lexer.token.data);
+
+                    if (parse_ok && library.count == 0) {
+                        build_log_error(&lexer, "link library name is empty");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) {
+                        const char *library_cstring = cstring_from_string(scratch.arena, library);
+                        bool is_already_linked = false;
+                        for (u64 i = 0; i < link_libraries.count && !is_already_linked; i += 1) {
+                            is_already_linked = cstring_equals_case_insensitive(link_libraries.items[i], library_cstring);
+                        }
+                        if (!is_already_linked) build_push_argument(&link_libraries, library_cstring);
+                    }
+                } else if (string_equals(token_data, S("compile_flag"))) {
+                    parse_ok = build_eat_token(&lexer, clex_Token_STRING, "expected `META(compile_flag \"...\")`");
+                    String flag = base_string_from_clex_data(lexer.token.data);
+
+                    if (parse_ok && flag.count == 0) {
+                        build_log_error(&lexer, "extra compile flag is empty string");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok && build_flag_changes_preprocessor(flag)) {
+                        // TODO(felix): Let compile flags define macros.
+                        build_log_error(&lexer, "compile flag `%S` defines macros or sets the C standard, which `META(...)` does not support yet", flag);
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) build_push_argument(&compiler_extra_flags, cstring_from_string(scratch.arena, flag));
+                } else if (string_equals(token_data, S("link_flag"))) {
+                    parse_ok = build_eat_token(&lexer, clex_Token_STRING, "expected `META(link_flag \"...\")`");
+                    String flag = base_string_from_clex_data(lexer.token.data);
+
+                    if (parse_ok && flag.count == 0) {
+                        build_log_error(&lexer, "extra linker flag is empty string");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) build_push_argument(&linker_extra_flags, cstring_from_string(scratch.arena, flag));
+                } else if (string_equals(token_data, S("compile_and_link_flag"))) {
+                    parse_ok = build_eat_token(&lexer, clex_Token_STRING, "expected `META(compile_and_link_flag \"...\")`");
+                    String flag = base_string_from_clex_data(lexer.token.data);
+
+                    if (parse_ok && flag.count == 0) {
+                        build_log_error(&lexer, "extra compile and link flag is empty string");
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok && build_flag_changes_preprocessor(flag)) {
+                        // TODO(felix): Let compile flags define macros.
+                        build_log_error(&lexer, "compile flag `%S` defines macros or sets the C standard, which `META(...)` does not support yet", flag);
+                        parse_ok = false;
+                    }
+
+                    if (parse_ok) {
+                        const char *as_cstring = cstring_from_string(scratch.arena, flag);
+                        build_push_argument(&linker_extra_flags, as_cstring);
+                        build_push_argument(&compiler_extra_flags, as_cstring);
+                    }
+                } else {
+                    build_log_error(&lexer, "unsupported metaprogram directive '%S'", token_data);
+                    parse_ok = false;
                 }
-
-                continue;
             }
-
-            if (!aware_of_this_static_if_condition) continue;
-
-            if (string_equals(token_data, S("else"))) {
-                in_active_preprocessor_block = !in_active_preprocessor_block;
-            }
-
-            if (string_equals(token_data, S("endif"))) {
-                in_active_preprocessor_block = true;
-                aware_of_this_static_if_condition = false;
-            }
-
-            continue;
+        }
+        bool lexing_failed = parse_ok && lexer.token.kind != clex_Token_END_OK;
+        if (lexing_failed) {
+            const clex_Cursor *cursor = &lexer.stack[lexer.depth];
+            const char *text_end = cursor->c;
+            while (text_end < cursor->end && text_end - cursor->c < 40 && *text_end != '\n' && *text_end != '\r') text_end += 1;
+            String text = string_from_pointers(cursor->c, text_end);
+            build_log_error(&lexer, "%s: `%S`", lexer.error_message, text);
+            parse_ok = false;
         }
 
-        if (!in_active_preprocessor_block) continue;
+        if (parse_ok && conditional_depth != 0) {
+            build_log_error(&lexer, "%u `#if`s are missing their `#endif`", conditional_depth);
+            parse_ok = false;
+        }
 
-        if (lexer.token.kind != clex_Token_IDENTIFIER) continue;
-        String token_data = base_string_from_clex_data(lexer.token.data);
+        if (parse_ok) {
+            assert(settings_from_earlier_passes.link_crt == Build_Meta_Setting_UNSET || settings_this_pass.link_crt == settings_from_earlier_passes.link_crt);
+            assert(settings_from_earlier_passes.subsystem_windows == Build_Meta_Setting_UNSET || settings_this_pass.subsystem_windows == settings_from_earlier_passes.subsystem_windows);
+        }
 
-        if (!string_equals(token_data, S("META"))) continue;
+        bool link_crt_was_set_this_pass = settings_this_pass.link_crt != settings_from_earlier_passes.link_crt;
+        bool subsystem_was_set_this_pass = settings_this_pass.subsystem_windows != settings_from_earlier_passes.subsystem_windows;
+        bool another_pass_can_fix_errors = meta_in_unknown_group_count != 0 && (link_crt_was_set_this_pass || subsystem_was_set_this_pass);
+        parsing = parse_ok && another_pass_can_fix_errors;
 
-        clex_lex(&lexer);
-        if (lexer.token.kind != '(') continue;
-
-        if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected directive at start of `META(...)`")) return 1;
-        token_data = base_string_from_clex_data(lexer.token.data);
-
-        // TODO(felix): remove
-        if (TODO_REMOVE_THIS) print("=========================================================GOT META |%S|\n", token_data);
-
-        if (string_equals(token_data, generate_here_directive)) {
-            if (metaprogram_output_file.count != 0) {
-                log_error("directive `META(%S)` can only be used once", generate_here_directive);
-                return 1;
+        bool has_final_errors = parse_ok && !parsing && meta_in_unknown_group_count != 0;
+        if (has_final_errors && !collect_unknown_reasons) {
+            for (u64 i = 0; i < meta_in_unknown_group_count; i += 1) {
+                const Build_Meta_In_Unknown_Group *meta = &metas_in_unknown_groups[i];
+                if (link_libc_meta_location == 0 && string_equals(meta->directive, S("link_libc"))) link_libc_meta_location = meta->location;
+                if (subsystem_meta_location == 0 && string_equals(meta->directive, S("subsystem"))) subsystem_meta_location = meta->location;
             }
+            collect_unknown_reasons = true;
+            parsing = true;
+        } else if (has_final_errors) {
+            for (u64 i = 0; i < meta_in_unknown_group_count; i += 1) {
+                const Build_Meta_In_Unknown_Group *meta = &metas_in_unknown_groups[i];
+                bool sets_link_crt = string_equals(meta->directive, S("link_libc"));
+                bool sets_subsystem = string_equals(meta->directive, S("subsystem"));
 
-            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing META(...) block")) return 1;
-
-            if (!build_expect_include(&scratch, &lexer, &metaprogram_output_file)) return 1;
-        } else if (string_equals(token_data, S("embed"))) {
-            const char *usage = "`META(embed \"path/to/file\")\\ extern const char array_name[];\\ extern const u64 length_name;`";
-
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected path, like this: %s", usage)) return 1;
-            String input_file = base_string_from_clex_data(lexer.token.data);
-
-            if (!build_eat_token(0, &lexer, ')', "error: expected ')' closing META(...) block")) return 1;
-
-            // TODO(felix): get actual type info once we've got a C parser
-
-            String names[2] = {0};
-            for (u64 i = 0; i < 2; i += 1) {
-                clex_lex(&lexer);
-                String extern_ = base_string_from_clex_data(lexer.token.data);
-                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(extern_, S("extern"))) {
-                    log_error("expected this: %s", usage);
-                    return 1;
+                bool sets_own_condition = false;
+                for (Build_Unknown_Reason_Id reason = meta->unknown_reason; reason != 0; reason = macros->reasons.items[reason].cause) {
+                    bool reason_is_link_crt = reason == link_crt_unset_reason || reason == address_sanitiser_unset_reason;
+                    bool reason_is_subsystem = reason == subsystem_unset_reason;
+                    sets_own_condition = sets_own_condition || (sets_link_crt && reason_is_link_crt) || (sets_subsystem && reason_is_subsystem);
                 }
 
-                clex_lex(&lexer);
-                String const_ = base_string_from_clex_data(lexer.token.data);
-                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(const_, S("const"))) {
-                    log_error("expected this: %s", usage);
-                    return 1;
+                const char *message = "`META(...)` is in an unknown group, so the metaprogram doesn't know if the compiler builds it";
+                if (sets_own_condition) message = cstring_print(scratch.arena, "`META(%S)` sets the condition of its own group; this is an unrecoverable cycle", meta->directive);
+                print("%s: error: %s\n", meta->location, message);
+                for (Build_Unknown_Reason_Id reason = meta->unknown_reason; reason != 0; reason = macros->reasons.items[reason].cause) {
+                    print("    because %s\n", macros->reasons.items[reason].description);
                 }
-
-                clex_lex(&lexer);
-                String type_ = base_string_from_clex_data(lexer.token.data);
-                String expected_type = i == 0 ? S("char") : S("u64");
-                if (lexer.token.kind != clex_Token_IDENTIFIER || !string_equals(type_, expected_type)) {
-                    log_error("expected this: %s", usage);
-                    return 1;
-                }
-
-                if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, "error: expected this: %s", usage)) return 1;
-                names[i] = base_string_from_clex_data(lexer.token.data);
-
-                if (i == 0) {
-                    if (!build_eat_token(0, &lexer, '[', "error: expected this: %s", usage)) return 1;
-                    if (!build_eat_token(0, &lexer, ']', "error: expected this: %s", usage)) return 1;
-                }
-
-                if (!build_eat_token(0, &lexer, ';', "error: expected this: %s", usage)) return 1;
             }
+            parse_ok = false;
+        }
 
-            String variable_name = names[0];
-            String array_length_name = names[1];
+        settings_from_earlier_passes = settings_this_pass;
+    }
 
-            String input = {0};
-            const char *input_path = cstring_from_string(&scratch, input_file);
+    if (parse_ok) {
+        f64 parse_seconds = time_seconds_between_relative_timestamps(time_at_parse_start, time_relative_timestamp());
+        print("Parsing took %.2lf seconds in %u pass%s.\n", parse_seconds, pass_count, pass_count > 1 ? "es" : "");
+    }
 
-            bool embed_via_object = target_os == BASE_OS_WINDOWS || !!(target_os & BASE_OS_ANY_APPLE);
-            if (embed_via_object) {
-                static bool embedded_once_already = false;
-                if (embedded_once_already && embed_via_object) {
-                    log_error("TODO(felix): support embedding multiple files in object files");
-                    return 1;
-                }
-                embedded_once_already = true;
+    if (parse_ok && files_to_embed_count > 0) {
+        object_Bundle_Flags flags = object_Bundle_READ;
+        switch (target_os) {
+            case BASE_OS_WINDOWS: flags |= object_Bundle_COFF; break;
+            // TODO(felix): Handle iOS separately from iOS-simulator.
+            case BASE_OS_IOS_DEVICE: flags |= object_Bundle_MACHO_IOS; break;
+            case BASE_OS_IOS_SIMULATOR: flags |= object_Bundle_MACHO_IOS_SIMULATOR; break;
+            case BASE_OS_MACOS: flags |= object_Bundle_MACHO_MACOS; break;
+            case BASE_OS_WASM: flags |= object_Bundle_WASM; break;
+            default: {
+                log_error("`META(embed)` is not supported for this target");
+                parse_ok = false;
+            } break;
+        }
 
-                fs_File input_file_handle = fs_file_open_and_get_size(input_path, fs_File_Flag_READ, &input.count);
-                if (input.count == 0) {
-                    log_error("unable to open file '%s'", input_path);
-                    return 1;
-                }
+        u64 entries_offset = sizeof(u64);
+        u64 names_offset = entries_offset + files_to_embed_count * sizeof(Embedded_File_Entry);
+        u64 table_size = names_offset;
+        u64 terminator_size = 1;
+        for (u64 i = 0; i < files_to_embed_count; i += 1) table_size += files_to_embed[i].name.count + terminator_size + files_to_embed[i].contents.count + terminator_size;
+        if (table_size > UINT32_MAX) {
+            log_error("embedded files total %llu bytes, but object files support at most %u", table_size, UINT32_MAX);
+            parse_ok = false;
+        }
 
-                // TODO(felix): Handle iOS separately from iOS-simulator.
-                object_Bundle_Flags flags = object_Bundle_READ;
-                switch (target_os) {
-                    case BASE_OS_WINDOWS: flags |= object_Bundle_COFF; break;
-                    case BASE_OS_IOS_DEVICE: flags |= object_Bundle_MACHO_IOS; break;
-                    case BASE_OS_IOS_SIMULATOR: flags |= object_Bundle_MACHO_IOS_SIMULATOR; break;
-                    case BASE_OS_MACOS: flags |= object_Bundle_MACHO_MACOS; break;
-                    default: unreachable;
-                }
+        if (parse_ok) {
+            u8 *table = arena_make(scratch.arena, size_t_from_u64(table_size), u8);
+            memcpy(table, &files_to_embed_count, sizeof files_to_embed_count);
 
-                const char *array_name = variable_name.data;
-                u32 array_name_length = (u32)variable_name.count;
+            u64 cursor = names_offset;
+            for (u64 i = 0; i < files_to_embed_count; i += 1) {
+                Build_Embedded_File *file = &files_to_embed[i];
+                Embedded_File_Entry entry = { .name_offset = cursor };
+                memcpy(table + cursor, file->name.data, file->name.count);
+                cursor += file->name.count;
+                table[cursor] = 0;
+                cursor += terminator_size;
 
-                const char *length_name = array_length_name.data;
-                u32 length_name_length = (u32)array_length_name.count;
+                entry.data_offset = cursor;
+                entry.data_size = file->contents.count;
+                memcpy(table + cursor, file->contents.data, file->contents.count);
+                cursor += file->contents.count;
+                table[cursor] = 0;
+                cursor += terminator_size;
 
-                u64 byte_count;
-                u8 *to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, 0, &byte_count, flags);
-                assert(to_write == 0 && byte_count > 0);
-
-                u8 *bytes = arena_make(&scratch, byte_count, u8);
-                to_write = object_bundle(array_name, array_name_length, length_name, length_name_length, 0, (u32)input.count, bytes, &byte_count, flags);
-                if (to_write == 0) {
-                    log_error("failure generating object file to embed '%S'", input_file);
-                    return 1;
-                }
-
-                u64 read_count = fs_read_entire_file(input_file_handle, (char *)to_write, input.count);
-                assert(read_count == input.count);
-                fs_close(input_file_handle);
-
-                const char *output_name = cstring_print(&scratch, "meta.generated.%s", object_extension);
-                const char *output_in_build_folder = cstring_print(&scratch, "%s/%s", build_folder, output_name);
-                ok = os_write_entire_file(output_in_build_folder, bytes, byte_count);
-                if (!ok) return 1;
-
-                Build_Object object = { .object_path = output_name };
-                push(&scratch, &objects, object);
-            } else {
-                input = os_read_entire_file(&scratch, input_path, &ok);
-                if (!ok) {
-                    log_error("failed reading `META(embed)` input '%s'", input_path);
-                    return 1;
-                }
-
-                String qualifiers = S("static const char ");
-                String assignment = S("[] = {");
-                String closing = S("\n};\n");
-                String example_byte_as_hex = S("0x00,");
-                u64 chars_per_row_exponent = 5;
-                u64 chars_per_row = (u64)1 << chars_per_row_exponent;
-                u64 rows = input.count / chars_per_row + 1;
-
-                String indent = S("\n    ");
-                u64 bytes_for_indentation = rows * indent.count;
-                u64 bytes_total = bytes_for_indentation + rows * (chars_per_row * example_byte_as_hex.count);
-                bytes_total += qualifiers.count + variable_name.count + assignment.count + closing.count;
-
-                String length_qualifiers = S("static const u64 ");
-                String length_assignment = S(" = ");
-                String length_closing = S(";\n");
-                u64 max_digits = sizeof(u64) * 8;
-                bytes_total += length_qualifiers.count + array_length_name.count + length_assignment.count + max_digits + length_closing.count;
-
-                reserve_unused(&scratch, &metaprogram_code, bytes_total);
-                push_slice_assume_capacity(&metaprogram_code, qualifiers);
-                push_slice_assume_capacity(&metaprogram_code, variable_name);
-                push_slice_assume_capacity(&metaprogram_code, assignment);
-
-                u64 column_mask = chars_per_row - 1;
-                const char *chars = "0123456789abcdef";
-                char byte_string[] = "0x!!,";
-                for (u64 i = 0; i < input.count; i += 1) {
-                    u64 column = i & column_mask;
-                    if (column == 0) push_slice_assume_capacity(&metaprogram_code, indent);
-
-                    u8 byte = (u8)input.data[i];
-
-                    // NOTE(felix): this is much faster than string_builder_print in a hot, unoptimised loop. it is equivalent to:
-                    // string_builder_print(&metaprogram_code, "0x%c%c,", chars[byte >> 4], chars[byte & 0x0f]);
-                    byte_string[2] = chars[byte >> 4];
-                    byte_string[3] = chars[byte & 0x0f];
-                    push_many_assume_capacity(&metaprogram_code, byte_string, sizeof byte_string - 1);
-                }
-                push_slice_assume_capacity(&metaprogram_code, closing);
-
-                push_slice_assume_capacity(&metaprogram_code, length_qualifiers);
-                push_slice_assume_capacity(&metaprogram_code, array_length_name);
-                push_slice_assume_capacity(&metaprogram_code, length_assignment);
-                string_builder_print(&scratch, &metaprogram_code, "%llu", input.count);
-                push_slice_assume_capacity(&metaprogram_code, length_closing);
+                memcpy(table + entries_offset + i * sizeof entry, &entry, sizeof entry);
             }
-        } else if (string_equals(token_data, S("link_libc"))) {
-            static bool specified_already = false;
-            if (specified_already) {
-                log_error("you can't specify `link_libc` multiple times");
-                return 1;
-            }
-            specified_already = true;
+            assert(cursor == table_size);
 
-            const char *error = "error: expected `link_libc = true/false`";
-            if (!build_eat_token(0, &lexer, '=', error)) return 1;
+            const char array_name[] = "embedded_files";
+            u64 byte_count = 0;
+            u8 *to_write = object_bundle(array_name, sizeof array_name - 1, table, (u32)table_size, 0, &byte_count, flags);
+            assert(to_write == 0 && byte_count > 0);
 
-            if (!build_eat_token(0, &lexer, clex_Token_IDENTIFIER, error)) return 1;
-            token_data = base_string_from_clex_data(lexer.token.data);
+            u8 *bytes = arena_make(scratch.arena, size_t_from_u64(byte_count), u8);
+            to_write = object_bundle(array_name, sizeof array_name - 1, table, (u32)table_size, bytes, &byte_count, flags);
 
-            meta_link_crt_override = true;
-            if (string_equals(token_data, S("true"))) {
-                meta_link_crt_override_value = true;
-            } else if (string_equals(token_data, S("false"))) {
-                meta_link_crt_override_value = false;
-            } else {
-                log_error("expected `true` or `false` in `META(link_libc = true/false)`, got `%S`", token_data);
-                return 1;
-            }
+            const char *output_name = cstring_print(scratch.arena, "meta.generated.%s", object_extension);
+            const char *output_in_build_folder = cstring_print(scratch.arena, "%s/%s", build_folder, output_name);
+            parse_ok = to_write != 0 && os_write_entire_file(output_in_build_folder, bytes, byte_count);
+            if (!parse_ok) log_error("failure writing the object file for embedded files to '%s'", output_in_build_folder);
 
-            if (!build_eat_token(0, &lexer, ')', "error: expected `)` to close `META(...)` directive")) return 1;
-        } else if (string_equals(token_data, S("link"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(link \"Library\")`")) return 1;
-            String library = base_string_from_clex_data(lexer.token.data);
-            if (library.count == 0) {
-                log_error("link library name is empty");
-                return 1;
-            }
-
-            // TODO(felix): Remove this hack once parser correctly handles #if branches.
-            bool link_this = true;
-            if (target_os & BASE_OS_ANY_APPLE) {
-                if (string_equals(library, S("Kernel32"))) link_this = false;
-                else if (string_equals(library, S("Shell32"))) link_this = false;
-            }
-
-            if (link_this) push(&scratch, &link_libraries, cstring_from_string(&scratch, library));
-        } else if (string_equals(token_data, S("compile_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(compile_flag \"...\")`")) return 1;
-            String flag = base_string_from_clex_data(lexer.token.data);
-            if (flag.count == 0) {
-                log_error("extra compile flag is empty string");
-                return 1;
-            }
-
-            push(&scratch, &compiler_extra_flags, cstring_from_string(&scratch, flag));
-        } else if (string_equals(token_data, S("link_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(link_flag \"...\")`")) return 1;
-            String flag = base_string_from_clex_data(lexer.token.data);
-            if (flag.count == 0) {
-                log_error("extra linker flag is empty string");
-                return 1;
-            }
-
-            push(&scratch, &linker_extra_flags, cstring_from_string(&scratch, flag));
-        } else if (string_equals(token_data, S("compile_and_link_flag"))) {
-            if (!build_eat_token(0, &lexer, clex_Token_STRING, "error: expected `META(compile_and_link_flag \"...\")`")) return 1;
-            String flag = base_string_from_clex_data(lexer.token.data);
-            if (flag.count == 0) {
-                log_error("extra compile and link flag is empty string");
-                return 1;
-            }
-
-            const char *as_cstring = cstring_from_string(&scratch, flag);
-            push(&scratch, &linker_extra_flags, as_cstring);
-            push(&scratch, &compiler_extra_flags, as_cstring);
-        } else {
-            log_error("unsupported metaprogram directive '%S'", token_data);
-            return 1;
+            build_objects_push(&objects, (Build_Object){ .object_path = output_name });
         }
     }
-    if (lexer.token.kind == clex_Token_ERROR) {
-        int column = 0;
-        const char *path = 0, *path_end = 0;
-        int line = clex_get_current_location(&lexer, &column, &path, &path_end);
 
-        String s = string_from_pointers(path, path_end);
-        print("%S(%d,%d): error: parser error\n", s, line, column);
-        // TODO(felix): print absolute path
-        // TODO(felix): print parser message
-        return 1;
-    }
-
-    f64 time_at_parse_end = time_relative_timestamp();
-    f64 parse_seconds = time_seconds_between_relative_timestamps(time_at_parse_start, time_at_parse_end);
-    print("Parsing took %.2lf seconds.\n", parse_seconds);
-
-    if (metaprogram_code.count > 0) {
+    bool metaprogram_output_ok = parse_ok;
+    if (metaprogram_output_ok && metaprogram_code.count > 0) {
         if (metaprogram_output_file.count == 0) {
             log_error("missing `META(%S)` followed by #include to designate codegen destination", generate_here_directive);
-            return 1;
+            metaprogram_output_ok = false;
+        } else {
+            const char *file = cstring_from_string(scratch.arena, metaprogram_output_file);
+            metaprogram_output_ok = os_write_entire_file(file, metaprogram_code.data, metaprogram_code.count);
         }
-
-        const char *file = cstring_from_string(&scratch, metaprogram_output_file);
-        if (!os_write_entire_file(file, metaprogram_code.data, metaprogram_code.count)) return 1;
     }
 
-    Build_Object main_object = { .code_path = c_file_path };
-    push(&scratch, &objects, main_object);
+    build_objects_push(&objects, (Build_Object){ .code_path = c_file_path });
 
-    bool link_crt = false;
-    if (meta_link_crt_override) {
-        link_crt = meta_link_crt_override_value;
-    } else {
-        link_crt = !!(target_os & BASE_OS_ANY_APPLE);
-    }
+    bool link_crt = settings_from_earlier_passes.link_crt == Build_Meta_Setting_TRUE;
+    if (settings_from_earlier_passes.link_crt == Build_Meta_Setting_UNSET) link_crt = !!(target_os & BASE_OS_ANY_APPLE);
+    bool subsystem_is_windows = settings_from_earlier_passes.subsystem_windows != Build_Meta_Setting_FALSE;
 
     // TODO(felix): should be handled by metaprogram
     const char *include_paths[] = {
-        cstring_print(&scratch, "-I%s", dependency_folder),
-        cstring_print(&scratch, "-I%s", source_folder),
-        cstring_print(&scratch, "-I..%c", path_separator),
+        cstring_print(scratch.arena, "-I%s", dependency_folder),
+        cstring_print(scratch.arena, "-I%s", source_folder),
+        cstring_print(scratch.arena, "-I..%c", path_separator),
         0,
     };
 
-    Build_Mode build_mode = Build_Mode_DEBUG;
-    for (u64 i = 0; i < argument_count; i += 1) {
-        if (cstring_equals(arguments[i], "clang")) compiler = Build_Compiler_CLANG;
-        if (cstring_equals(arguments[i], "release")) build_mode = Build_Mode_RELEASE;
-    }
-
     Build_Linker linker = compiler == Build_Compiler_CLANG ? Build_Linker_CLANG : Build_Linker_MSVC;
     bool use_asan = link_crt && build_mode == Build_Mode_DEBUG;
-    if (use_asan && linker == Build_Linker_CLANG && target_os == BASE_OS_WINDOWS) {
-        // NOTE(felix): for some reason with clang I can only get an asan-enabled executable to run if I copy clang_rt.asan_dynamic-x86_64.dll to the build directory.
-        // TODO(felix): implement logic for finding C:\Program Files\LLVM\lib\clang\[VERSION]\lib\windows\[asan dll], so we can do this
-        // OR it's possible this is a clang/msvc version mismatch since there shouldn't be a difference
-        print("info: disabling asan with clang on windows (see base.h, line %llu)\n", __LINE__ - 2);
-        use_asan = false;
+
+    // NOTE(felix): MSVC and LLVM ship incompatible clang_rt.asan_dynamic-x86_64.dll, so the executable must find the one from its own compiler before any on PATH.
+    if (use_asan && target_os == BASE_OS_WINDOWS) {
+        String runtime_folder = {0};
+        u32 query_exit_code = 1;
+        switch (compiler) {
+            case Build_Compiler_CLANG: {
+                const char *query[] = { "clang", "-print-resource-dir", 0 };
+                Os_Process_Result result = os_process_run(scratch.arena, query, 0, Os_Process_Flag_CAPTURE_OUTPUT);
+                query_exit_code = result.exit_code;
+                String resource_folder = result.output;
+                while (resource_folder.count > 0 && ascii_is_whitespace(resource_folder.data[resource_folder.count - 1])) resource_folder.count -= 1;
+                runtime_folder = string_print(scratch.arena, "%S\\lib\\windows", resource_folder);
+            } break;
+            case Build_Compiler_MSVC: {
+                const char *query[] = { "where", "cl", 0 };
+                Os_Process_Result result = os_process_run(scratch.arena, query, 0, Os_Process_Flag_CAPTURE_OUTPUT);
+                query_exit_code = result.exit_code;
+                String compiler_paths = result.output;
+                u64 first_path_length = 0;
+                while (first_path_length < compiler_paths.count && compiler_paths.data[first_path_length] != '\r' && compiler_paths.data[first_path_length] != '\n') first_path_length += 1;
+                String first_compiler_path = string_range(compiler_paths, 0, first_path_length);
+                runtime_folder = string_cut_last(first_compiler_path, '\\').head;
+            } break;
+            default: unreachable;
+        }
+
+        const char *runtime_name = "clang_rt.asan_dynamic-x86_64.dll";
+        const char *runtime_source = cstring_print(scratch.arena, "%S\\%s", runtime_folder, runtime_name);
+        const char *runtime_destination = cstring_print(scratch.arena, "%s\\%s", build_folder, runtime_name);
+
+        bool read_ok = false;
+        String runtime = query_exit_code == 0 ? os_read_entire_file(scratch.arena, runtime_source, &read_ok) : (String){0};
+        bool copy_ok = read_ok && os_write_entire_file(runtime_destination, runtime.data, runtime.count);
+        if (!copy_ok) log_error("unable to copy the address sanitiser runtime from '%s' to '%s'", runtime_source, runtime_destination);
     }
 
     Os_Process_Flags process_flags =
@@ -3685,8 +4217,9 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
         Os_Process_Flag_PRINT_EXIT_CODE |
         Os_Process_Flag_PRINT_EXECUTION_TIME;
 
-    for (u64 i = 0; i < objects.count; i += 1) {
-        Build_Object *object = &objects.data[i];
+    bool compile_ok = metaprogram_output_ok;
+    for (u64 i = 0; compile_ok && i < objects.count; i += 1) {
+        Build_Object *object = &objects.items[i];
 
         bool should_compile = object->code_path != 0;
 
@@ -3697,15 +4230,14 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
                 String basename_with_path = string_cut_last(code_path, '.').head;
                 String basename_no_path = string_cut_last(basename_with_path, path_separator).tail;
 
-                object->object_path = cstring_print(&scratch, "%S.%s", basename_no_path, object_extension);
+                object->object_path = cstring_print(scratch.arena, "%S.%s", basename_no_path, object_extension);
             }
 
-            Array_cstring compile = {0};
+            Build_Arguments compile = {0};
 
-            build_push_arguments(&scratch, &compile, build_compiler_initial_command[compiler]);
+            build_push_arguments(&compile, build_compiler_initial_command[compiler]);
 
-            push(&scratch, &compiler_extra_flags, 0);
-            build_push_arguments(&scratch, &compile, compiler_extra_flags.data);
+            build_push_arguments(&compile, compiler_extra_flags.items);
 
             // TODO(felix): should be handled by reading META() annotations
             if (target_os == BASE_OS_WASM) {
@@ -3716,20 +4248,23 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
                     0,
                 };
 
-                build_push_arguments(&scratch, &compile, clang_wasm_flags);
+                build_push_arguments(&compile, clang_wasm_flags);
             }
 
-            build_push_arguments(&scratch, &compile, include_paths);
-            if (link_crt) push(&scratch, &compile, "-DLINK_CRT=1");
+            build_push_arguments(&compile, include_paths);
+            build_push_argument(&compile, link_crt ? "-DLINK_CRT=1" : "-DLINK_CRT=0");
+            if (target_os == BASE_OS_WINDOWS) {
+                build_push_argument(&compile, subsystem_is_windows ? "-DWINDOWS_SUBSYSTEM=WINDOWS_SUBSYSTEM_WINDOWS" : "-DWINDOWS_SUBSYSTEM=WINDOWS_SUBSYSTEM_CONSOLE");
+            }
 
-            if (!object->no_extra_errors) build_push_arguments(&scratch, &compile, build_compiler_extra_errors[compiler]);
-            build_push_arguments(&scratch, &compile, build_compiler_disabled_errors[compiler]);
+            if (!object->no_extra_errors) build_push_arguments(&compile, build_compiler_extra_errors[compiler]);
+            build_push_arguments(&compile, build_compiler_disabled_errors[compiler]);
 
-            build_push_arguments(&scratch, &compile, build_compiler_mode_flags[build_mode][compiler][target_os]);
-            if (build_mode == Build_Mode_DEBUG) push(&scratch, &compile, "-DBUILD_DEBUG=1");
-            if (use_asan) push(&scratch, &compile, "-fsanitize=address");
+            build_push_arguments(&compile, build_compiler_mode_flags[build_mode][compiler]);
+            build_push_argument(&compile, build_mode == Build_Mode_DEBUG ? "-DBUILD_DEBUG=1" : "-DBUILD_DEBUG=0");
+            if (use_asan) build_push_argument(&compile, "-fsanitize=address");
 
-            build_push_arguments(&scratch, &compile, object->extra_flags);
+            build_push_arguments(&compile, object->extra_flags);
 
             bool delete_pdb_first_because_msvc_incremental_is_broken = (target_os == BASE_OS_WINDOWS && compiler == Build_Compiler_MSVC);
             if (delete_pdb_first_because_msvc_incremental_is_broken) {
@@ -3737,65 +4272,55 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
                 String object_basename = string_cut_last(object_path, '.').head;
                 object_basename = string_cut_last(object_basename, path_separator).tail;
 
-                const char *pdb_file = cstring_print(&scratch, "%S.pdb", object_basename);
+                const char *pdb_file = cstring_print(scratch.arena, "%S.pdb", object_basename);
                 if (fs_exists(pdb_file)) {
                     ok = fs_remove_file(pdb_file);
                     if (!ok) log_internal("warning: failure removing old PDB '%s'", pdb_file);
                 }
             }
 
-            push(&scratch, &compile, object->code_path);
+            build_push_argument(&compile, object->code_path);
 
-            const char *output = cstring_print(&scratch, "%s%s", build_compiler_out[compiler], object->object_path);
-            push(&scratch, &compile, output);
+            const char *output = cstring_print(scratch.arena, "%s%s", build_compiler_out[compiler], object->object_path);
+            build_push_argument(&compile, output);
 
-            push(&scratch, &compile, 0);
-            exit_code = os_process_run(scratch, compile.data, build_folder, process_flags);
-
-            if (exit_code != 0) return exit_code;
+            exit_code = os_process_run(scratch.arena, compile.items, build_folder, process_flags).exit_code;
+            compile_ok = exit_code == 0;
         }
     }
 
-    {
-        Array_cstring link = {0};
+    bool link_attempted = false;
+    if (compile_ok) {
+        Build_Arguments link = {0};
 
-        build_push_arguments(&scratch, &link, build_linker_initial_command[linker][target_os]);
+        build_push_arguments(&link, build_linker_initial_command[linker][target_os]);
 
         if (target_os == BASE_OS_WINDOWS) {
-            if (build_mode == Build_Mode_DEBUG) {
-                if (linker == Build_Linker_MSVC) {
-                    push(&scratch, &link, "-debug");
-                    push(&scratch, &link, "-subsystem:console");
-                    if (link_crt) push(&scratch, &link, "libucrtd.lib");
+            const char *subsystem = subsystem_is_windows ? "windows" : "console";
+            const char *entry = link_crt ? "mainCRTStartup" : "entrypoint";
+
+            if (linker == Build_Linker_MSVC) {
+                build_push_argument(&link, cstring_print(scratch.arena, "-subsystem:%s", subsystem));
+                build_push_argument(&link, cstring_print(scratch.arena, "-entry:%s", entry));
+                if (build_mode == Build_Mode_DEBUG) {
+                    build_push_argument(&link, "-debug");
+                    if (link_crt) build_push_argument(&link, "libucrtd.lib");
                 } else {
-                    push(&scratch, &link, "-g");
+                    build_push_argument(&link, "-opt:ref");
+                    build_push_argument(&link, "-opt:icf");
+                    if (link_crt) build_push_argument(&link, "libucrt.lib");
                 }
             } else {
-                if (linker == Build_Linker_MSVC) {
-                    push(&scratch, &link, "-subsystem:console");
-                    // TODO(felix): subsystem:windows and entry:main don't work currently (silent crash). I'm pretty sure this has to do with the entrypoint being set incorrectly. I'm also not sure about the WINDOWS_SUBSYSTEM_[...] #defines in base_context.h
-                    // push(&link, "-subsystem:windows");
-                    if (link_crt) {
-                        // push(&link, "-entry:main");
-                        push(&scratch, &link, "libucrt.lib");
-                    }
-                }
-            }
-
-            // TODO(felix): handle in metaprogram
-            if (!link_crt) switch (compiler) {
-                case Build_Compiler_MSVC: push(&scratch, &link, "-entry:entrypoint"); break;
-                case Build_Compiler_CLANG: {
-                    push(&scratch, &link, "-Wl,-entry:entrypoint");
-                    push(&scratch, &link, "-Wl,-subsystem:windows");
-                } break;
-                default: unreachable;
+                build_push_argument(&link, cstring_print(scratch.arena, "-Wl,-subsystem:%s", subsystem));
+                build_push_argument(&link, cstring_print(scratch.arena, "-Wl,-entry:%s", entry));
+                if (build_mode == Build_Mode_DEBUG) build_push_argument(&link, "-g");
             }
         }
 
-        if (linker == Build_Linker_CLANG && use_asan) push(&scratch, &link, "-fsanitize=address");
+        if (linker == Build_Linker_CLANG && use_asan) build_push_argument(&link, "-fsanitize=address");
+        if (target_os == BASE_OS_WASM && build_mode == Build_Mode_RELEASE) build_push_argument(&link, "-Wl,--strip-all");
 
-        for (u64 i = 0; i < objects.count; i += 1) push(&scratch, &link, objects.data[i].object_path);
+        for (u64 i = 0; i < objects.count; i += 1) build_push_argument(&link, objects.items[i].object_path);
 
         const char *link_prefix = "";
         const char *link_suffix = "";
@@ -3805,48 +4330,73 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
             default: unreachable;
         }
         for (u64 i = 0; i < link_libraries.count; i += 1) {
-            const char *library = link_libraries.data[i];
-            const char *to_push = cstring_print(&scratch, "%s%s%s", link_prefix, library, link_suffix);
-            push(&scratch, &link, to_push);
+            const char *library = link_libraries.items[i];
+            const char *to_push = cstring_print(scratch.arena, "%s%s%s", link_prefix, library, link_suffix);
+            build_push_argument(&link, to_push);
         }
 
-        push(&scratch, &linker_extra_flags, 0);
-        build_push_arguments(&scratch, &link, linker_extra_flags.data);
+        build_push_arguments(&link, linker_extra_flags.items);
 
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];
 
         const char *output_name = target_os == BASE_OS_WASM ? "module" : program_name;
         const char *output = 0;
+        bool app_folder_ok = true;
         if (target_os & BASE_OS_ANY_APPLE) {
-            const char *app_folder = cstring_print(&scratch, "%s%c%s.app", build_folder, path_separator, output_name);
+            const char *app_folder = cstring_print(scratch.arena, "%s%c%s.app", build_folder, path_separator, output_name);
             if (!fs_exists(app_folder)) {
-                bool app_folder_ok = fs_make_folder(app_folder);
-                if (!app_folder_ok) {
-                    log_error("failure making folder '%s'", app_folder);
-                    return 1;
-                }
+                app_folder_ok = fs_make_folder(app_folder);
+                if (!app_folder_ok) log_error("failure making folder '%s'", app_folder);
             }
-            output = cstring_print(&scratch, "%s%s.app%c%s", syntax, output_name, path_separator, output_name);
+            output = cstring_print(scratch.arena, "%s%s.app%c%s", syntax, output_name, path_separator, output_name);
         }
-        else output = cstring_print(&scratch, "%s%s.%s", syntax, output_name, extension);
-        push(&scratch, &link, output);
+        else output = cstring_print(scratch.arena, "%s%s.%s", syntax, output_name, extension);
+        build_push_argument(&link, output);
 
-        push(&scratch, &link, 0);
-        exit_code = os_process_run(scratch, link.data, build_folder, process_flags);
+        if (app_folder_ok) {
+            exit_code = os_process_run(scratch.arena, link.items, build_folder, process_flags).exit_code;
+            link_attempted = true;
+        } else exit_code = 1;
 
         if (target_os == BASE_OS_WASM && exit_code == 0) {
-            const char *html_output_path = cstring_print(&scratch, "%s%c%s.html", build_folder, path_separator, program_name);
+            const char *glue_path = cstring_print(scratch.arena, "%sbase%cbase_platform_wasm.js", &source_folder[3], path_separator);
+            bool glue_ok = false;
+            String glue = os_read_entire_file(scratch.arena, glue_path, &glue_ok);
+            if (!glue_ok) log_error("failed reading '%s'", glue_path);
 
-            fs_remove_file(html_output_path);
-            exit_code = !os_write_entire_file(html_output_path, build_wasm_html_file, sizeof build_wasm_html_file - 1);
+            bool glue_written = false;
+            const char *glue_output_path = cstring_print(scratch.arena, "%s%cmodule.js", build_folder, path_separator);
+            if (glue_ok) {
+                fs_remove_file(glue_output_path);
+                glue_written = os_write_entire_file(glue_output_path, glue.data, glue.count);
 
-            if (exit_code == 0) print("wrote '%s'\n", html_output_path);
-            else print("unable to write '%s'\n", html_output_path);
+                if (glue_written) print("wrote '%s'\n", glue_output_path);
+                else print("unable to write '%s'\n", glue_output_path);
+            }
+
+            const char *page_path = cstring_print(scratch.arena, "%sbase%cbase_platform_wasm.html", &source_folder[3], path_separator);
+            bool page_ok = false;
+            String page = {0};
+            if (glue_written) {
+                page = os_read_entire_file(scratch.arena, page_path, &page_ok);
+                if (!page_ok) log_error("failed reading '%s'", page_path);
+            }
+
+            bool html_ok = false;
+            const char *html_output_path = cstring_print(scratch.arena, "%s%c%s.html", build_folder, path_separator, program_name);
+            if (page_ok) {
+                fs_remove_file(html_output_path);
+                html_ok = os_write_entire_file(html_output_path, page.data, page.count);
+
+                if (html_ok) print("wrote '%s'\n", html_output_path);
+                else print("unable to write '%s'\n", html_output_path);
+            }
+            exit_code = !html_ok;
         }
     }
 
-    if (target_os & BASE_OS_ANY_IOS) {
+    if (link_attempted && (target_os & BASE_OS_ANY_IOS)) {
         ok = false;
         const char *bundle_identifier = 0;
         if (exit_code == 0) {
@@ -3875,10 +4425,10 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
             );
 
             // TODO(felix): Programmatically get user instead of hardcoding to "felix".
-            bundle_identifier = cstring_print(&scratch, "com.felix.%c%s", program_name[0] | 0x20, &program_name[1]);
-            String plist = string_print(&scratch, plist_format, program_name, program_name, program_name, bundle_identifier);
+            bundle_identifier = cstring_print(scratch.arena, "com.felix.%c%s", program_name[0] | 0x20, &program_name[1]);
+            String plist = string_print(scratch.arena, plist_format, program_name, program_name, program_name, bundle_identifier);
 
-            const char *path = cstring_print(&scratch, "%s%c%s.app%cInfo.plist", build_folder, path_separator, program_name, path_separator);
+            const char *path = cstring_print(scratch.arena, "%s%c%s.app%cInfo.plist", build_folder, path_separator, program_name, path_separator);
 
             ok = os_write_entire_file(path, plist.data, plist.count);
             if (!ok) {
@@ -3908,6 +4458,7 @@ static u32 build_default_everything(Arena scratch, const char *program_name, Bui
         exit_code = ok ? 0 : 1;
     }
 
+    scratch_end(scratch);
     return exit_code;
 }
 
@@ -3917,26 +4468,149 @@ static void app_frame_info_reset_end_of_frame(App_Frame_Info *frame) {
     memset(frame->key_pressed, 0, sizeof frame->key_pressed);
 }
 
-static void draw(Platform *platform, Draw_Command command) {
-    push(platform->frame_arena, &platform->draw_commands, command);
+static void base_platform_reserve_frame_arena(Platform *platform) {
+    bool app_start_didnt_allocate_from_platform_arenas = platform->persistent_arena->memory == 0 && platform->frame_arena->memory == 0;
+    assert(app_start_didnt_allocate_from_platform_arenas);
+
+    u64 frame_arena_reservation = platform->frame_arena_startup_reservation_in_bytes;
+    if (frame_arena_reservation == 0) frame_arena_reservation = ARENA_DEFAULT_RESERVE_SIZE;
+    *platform->frame_arena = arena_reserve(size_t_from_u64(frame_arena_reservation));
 }
 
-static V2 draw_command_bounds(Draw_Command command) {
-    V2 size = {0};
+typedef struct {
+    u64 key;
+    u64 last_used_frame;
+    u32 generation;
+    u32 next_in_bucket;
+    u32 older_slot;
+    u32 newer_slot;
+    bool is_used;
+    bool is_keyed_by_content;
+    bool must_not_be_evicted;
+} GPU_Cache_Entry;
 
-    switch (command.kind) {
-        case Draw_Kind_SPRITE_1BIT: {
-            size.x = (f32)command.sprite.width;
-            size.y = (f32)command.sprite.height;
-        } break;
-        default: unreachable;
+typedef struct {
+    GPU_Cache_Entry *entries;
+    u32 *first_slot_from_bucket;
+    u32 exponent;
+    u32 oldest_slot;
+    u32 newest_slot;
+} GPU_Cache;
+
+static u32 gpu__cache_bucket(const GPU_Cache *cache, u64 key) {
+    return (u32)(key ^ (key >> 32)) & ((1u << cache->exponent) - 1);
+}
+
+static u32 gpu__cache_find(const GPU_Cache *cache, u64 key, bool is_keyed_by_content) {
+    u32 found_slot = 0;
+    u32 slot = cache->first_slot_from_bucket[gpu__cache_bucket(cache, key)];
+    while (slot != 0 && found_slot == 0) {
+        const GPU_Cache_Entry *entry = &cache->entries[slot];
+        if (entry->key == key && entry->is_keyed_by_content == is_keyed_by_content) found_slot = slot;
+        slot = entry->next_in_bucket;
     }
-
-    return size;
+    return found_slot;
 }
 
-static void draw_many(Platform *platform, Draw_Command *commands, u64 count) {
-    push_many(platform->frame_arena, &platform->draw_commands, commands, count);
+static void gpu__cache_link_as_newest(GPU_Cache *cache, u32 slot) {
+    GPU_Cache_Entry *entry = &cache->entries[slot];
+    entry->older_slot = cache->newest_slot;
+    entry->newer_slot = 0;
+    if (cache->newest_slot != 0) cache->entries[cache->newest_slot].newer_slot = slot;
+    else cache->oldest_slot = slot;
+    cache->newest_slot = slot;
+}
+
+static void gpu__cache_unlink(GPU_Cache *cache, u32 slot) {
+    GPU_Cache_Entry *entry = &cache->entries[slot];
+    if (entry->older_slot != 0) cache->entries[entry->older_slot].newer_slot = entry->newer_slot;
+    else cache->oldest_slot = entry->newer_slot;
+    if (entry->newer_slot != 0) cache->entries[entry->newer_slot].older_slot = entry->older_slot;
+    else cache->newest_slot = entry->older_slot;
+}
+
+static u32 gpu__cache_insert(GPU_Cache *cache, u64 key, bool is_keyed_by_content, u64 frame_index) {
+    u32 slot = cache->oldest_slot;
+    GPU_Cache_Entry *entry = &cache->entries[slot];
+    assert(!entry->is_used);
+
+    u32 bucket = gpu__cache_bucket(cache, key);
+    entry->key = key;
+    entry->last_used_frame = frame_index;
+    entry->is_used = true;
+    entry->is_keyed_by_content = is_keyed_by_content;
+    entry->next_in_bucket = cache->first_slot_from_bucket[bucket];
+    cache->first_slot_from_bucket[bucket] = slot;
+    gpu__cache_unlink(cache, slot);
+    gpu__cache_link_as_newest(cache, slot);
+    return slot;
+}
+
+static GPU_Cache gpu__cache_make(Arena *persistent_arena, u32 exponent) {
+    u32 capacity = 1u << exponent;
+    GPU_Cache cache = {
+        .entries = arena_make(persistent_arena, capacity + 1, GPU_Cache_Entry),
+        .first_slot_from_bucket = arena_make(persistent_arena, capacity, u32),
+        .exponent = exponent,
+    };
+    for (u32 slot = 1; slot <= capacity; slot += 1) gpu__cache_link_as_newest(&cache, slot);
+    return cache;
+}
+
+static void gpu__cache_mark_used(GPU_Cache *cache, u32 slot, u64 frame_index) {
+    GPU_Cache_Entry *entry = &cache->entries[slot];
+    if (entry->last_used_frame != frame_index) {
+        gpu__cache_unlink(cache, slot);
+        gpu__cache_link_as_newest(cache, slot);
+        entry->last_used_frame = frame_index;
+    }
+}
+
+static u32 gpu__cache_oldest_evictable_slot(const GPU_Cache *cache) {
+    u32 slot = cache->oldest_slot;
+    while (slot != 0 && (!cache->entries[slot].is_used || cache->entries[slot].must_not_be_evicted)) slot = cache->entries[slot].newer_slot;
+    return slot;
+}
+
+#define GPU_MAX_MESHES_EXPONENT 12
+#define GPU_MAX_SHADERS_EXPONENT 8
+#define GPU_MAX_TEXTURES_EXPONENT 10
+#define GPU_ID_SLOT_BITS 20
+#define GPU_ID_GENERATION_MASK ((1u << (32 - GPU_ID_SLOT_BITS)) - 1)
+_Static_assert(GPU_MAX_MESHES_EXPONENT < GPU_ID_SLOT_BITS && GPU_MAX_SHADERS_EXPONENT < GPU_ID_SLOT_BITS && GPU_MAX_TEXTURES_EXPONENT < GPU_ID_SLOT_BITS, "every cache slot fits in an Id");
+static void gpu__cache_remove(GPU_Cache *cache, u32 slot) {
+    GPU_Cache_Entry *entry = &cache->entries[slot];
+
+    u32 *link = &cache->first_slot_from_bucket[gpu__cache_bucket(cache, entry->key)];
+    while (*link != slot) link = &cache->entries[*link].next_in_bucket;
+    *link = entry->next_in_bucket;
+
+    gpu__cache_unlink(cache, slot);
+    entry->older_slot = 0;
+    entry->newer_slot = cache->oldest_slot;
+    if (cache->oldest_slot != 0) cache->entries[cache->oldest_slot].older_slot = slot;
+    else cache->newest_slot = slot;
+    cache->oldest_slot = slot;
+    entry->is_used = false;
+    entry->generation = (entry->generation + 1) & GPU_ID_GENERATION_MASK;
+}
+
+static u32 gpu__id_from_slot(const GPU_Cache *cache, u32 slot) {
+    return (cache->entries[slot].generation << GPU_ID_SLOT_BITS) | slot;
+}
+
+static u32 gpu__slot_from_id(const GPU_Cache *cache, u32 id, bool *ok) {
+    u32 slot = id & ((1u << GPU_ID_SLOT_BITS) - 1);
+    u32 generation = id >> GPU_ID_SLOT_BITS;
+    u32 capacity = 1u << cache->exponent;
+
+    bool slot_is_in_range = slot != 0 && slot <= capacity;
+    u32 checked_slot = slot_is_in_range ? slot : 0;
+    const GPU_Cache_Entry *entry = &cache->entries[checked_slot];
+    bool is_valid = slot_is_in_range && entry->is_used && entry->generation == generation;
+
+    *ok = is_valid;
+    return is_valid ? slot : 0;
 }
 
 #define UI_ASSERT assert
@@ -3975,125 +4649,8 @@ static void base_ui_create(ui_State *ui, Platform *platform) {
     ui->user_data = platform;
 }
 
-static ui_Box *base_ui_draw_command(Arena *frame_arena, ui_State *ui, ui_Box *parent, Draw_Command command, ui_Flags flags, const ui_Style *style, const char *format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, parent, ui_Flag_DRAW_COMMAND | flags, format, arguments);
-    va_end(arguments);
-
-    assert(style != 0);
-    box->style = *style;
-
-    Draw_Command *copy = arena_make(frame_arena, 1, Draw_Command);
-    *copy = command;
-    box->user_data = copy;
-
-    V2 bounds = draw_command_bounds(command);
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        box->size[axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = v(bounds)[axis] };
-    }
-
-    return box;
-}
-
 static void base_ui_render(ui_State *ui, ui_Box *box) {
-    Platform *platform = ui->user_data;
-    assert(platform != 0);
-
-    if (box->flags & UI_FLAG_ANY_VISIBLE) {
-        V4 clip = {0};
-        if (box->flags & ui_Flag_CLIP_TO_PARENT) {
-            assert(box->parent != 0);
-            memcpy(&clip, &box->parent->rectangle, sizeof clip);
-            f32 border_width = box->parent->style.border_width * (f32)!!(box->parent->flags & ui_Flag_DRAW_BORDER);
-            clip.x += border_width;
-            clip.y += border_width;
-            clip.z -= 2.f * border_width;
-            clip.w -= 2.f * border_width;
-        }
-
-        ui_Style style = box->style;
-        u32 background_color = style.bg_color;
-        u32 border_color = style.border_color;
-        u32 foreground_color = style.fg_color;
-        f32 border_width = style.border_width;
-        f32 border_radius = style.border_radius;
-        V2 shadow_offset = { style.shadow_offset[ui_X], style.shadow_offset[ui_Y] };
-        u32 shadow_color = style.shadow_color;
-
-        bool draw_shadow = !!(box->flags & ui_Flag_DRAW_SHADOW);
-        if (draw_shadow) {
-            Draw_Command command = {
-                .kind = Draw_Kind_RECTANGLE,
-                .rectangle = {
-                    .border_radius = border_radius,
-                    .size = { box->rectangle.size[0], box->rectangle.size[1] },
-                },
-            };
-            command.position = v2_add((V2){ box->rectangle.position[0], box->rectangle.position[1] }, shadow_offset);
-            command.color[Draw_Color_SOLID] = shadow_color;
-
-            command.clip = clip;
-            draw(platform, command);
-        }
-
-        bool draw_rectangle = !!(box->flags & (ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND));
-        if (draw_rectangle) {
-            Draw_Command command = {
-                .kind = Draw_Kind_RECTANGLE,
-                .rectangle = {
-                    .border_width = border_width * (f32)!!(box->flags & ui_Flag_DRAW_BORDER),
-                    .border_radius = border_radius,
-                },
-            };
-            command.position = (V2){ box->rectangle.position[0], box->rectangle.position[1] };
-            command.color[Draw_Color_SOLID] = (u32)!!(box->flags & ui_Flag_DRAW_BACKGROUND) * background_color;
-            command.rectangle.size = (V2){ box->rectangle.size[0], box->rectangle.size[1] };
-            command.rectangle.border_color = border_color;
-
-            command.clip = clip;
-            draw(platform, command);
-        }
-
-        bool draw_text = !!(box->flags & ui_Flag_DRAW_TEXT);
-        if (draw_text) {
-            assert(box->display_string != 0 && box->display_string[0] != 0);
-
-            V2 position = (V2){ box->rectangle.position[0], box->rectangle.position[1] };
-            for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-                f32 add = box->style.padding[axis];
-                v(position)[axis] += add;
-            }
-
-            Draw_Command command = {
-                .kind = Draw_Kind_TEXT,
-                .text = {
-                    .string = { .data = box->display_string, .count = cstring_length(box->display_string) },
-                    .font_size = box->style.font_size,
-                },
-            };
-            command.position = position;
-            command.color[Draw_Color_SOLID] = foreground_color;
-
-            command.clip = clip;
-            draw(platform, command);
-        }
-
-        bool draw_command = !!(box->flags & ui_Flag_DRAW_COMMAND);
-        if (draw_command) {
-            Draw_Command *command = box->user_data;
-
-            V2 command_size = draw_command_bounds(*command);
-
-            V2 leftover = v2_sub((V2){ box->rectangle.size[0], box->rectangle.size[1] }, command_size);
-            V2 pad_for_align = v2_scale(leftover, 0.5f);
-            command->position = v2_add((V2){ box->rectangle.position[0], box->rectangle.position[1] }, pad_for_align);
-
-            command->color[Draw_Color_SOLID] = foreground_color;
-
-            draw(platform, *command);
-        }
-    }
+    panic("TODO(felix): Support the new GPU API: draw the shadow, background, border and text of each visible box, clipped to the inside of its parent's border if ui_Flag_CLIP_TO_PARENT is set.");
 
     for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
         base_ui_render(ui, child);

@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-05-26
+// https://github.com/felix-u 2026-11-07
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(UI_H)
@@ -36,7 +36,6 @@ enum {
     ui_Flag_DRAW_BACKGROUND = 1 <<  1,
     ui_Flag_DRAW_BORDER     = 1 <<  2,
     ui_Flag_DRAW_TEXT       = 1 <<  3,
-    ui_Flag_DRAW_COMMAND    = 1 <<  4,
     ui_Flag_DRAW_SHADOW     = 1 <<  5,
     ui_Flag_HOVERABLE       = 1 <<  7,
     ui_Flag_CLICKABLE       = 1 <<  8,
@@ -48,7 +47,7 @@ enum {
     ui_Flag_CLICKED         = 1 << 12,
     ui_Flag_DRAGGING        = 1 << 13, // persisted across frames
 };
-#define UI_FLAG_ANY_VISIBLE (ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_COMMAND | ui_Flag_DRAW_SHADOW)
+#define UI_FLAG_ANY_VISIBLE (ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_SHADOW)
 #define UI_FLAG_ANY_INTERACTABLE (ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE)
 #define UI_FLAG_ANY_INTERACTION (ui_Flag_HOVERED | ui_Flag_CLICKED | ui_Flag_DRAGGING)
 
@@ -58,12 +57,12 @@ typedef struct {
 } ui_Rectangle;
 
 typedef enum {
-    ui_Size_NIL = 0,
-    ui_Size_PIXELS,
-    ui_Size_TEXT,
-    ui_Size_SUM_OF_CHILDREN,
-    ui_Size_LARGEST_CHILD,
-    ui_Size_OF_PARENT, // TODO(felix): replace with GROW (simpler)
+    ui_Size_Kind_NIL = 0,
+    ui_Size_Kind_PIXELS,
+    ui_Size_Kind_TEXT,
+    ui_Size_Kind_SUM_OF_CHILDREN,
+    ui_Size_Kind_LARGEST_CHILD,
+    ui_Size_Kind_OF_PARENT, // TODO(felix): replace with GROW (simpler)
 
     ui_Size_Kind_COUNT,
 } ui_Size_Kind;
@@ -201,10 +200,10 @@ UI_FUNCTION void     ui_begin(ui_State *ui);
 UI_FUNCTION void     ui_create(ui_State *ui, ui_text_measure_function *text_measure_function);
 UI_FUNCTION void     ui_end(ui_State *ui);
 UI_FUNCTION ui_Box  *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ...);
-UI_FUNCTION ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ui_va_list arguments);
 UI_FUNCTION ui_Box  *ui_push_styled(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, ...);
-UI_FUNCTION ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
+UI_FUNCTION ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ui_va_list arguments);
 UI_FUNCTION ui_Box  *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...);
+UI_FUNCTION ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
 
 
 #endif // UI_H
@@ -266,7 +265,7 @@ static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
     else box->rectangle = (ui_Rectangle){0};
 
     float text_size[2] = {0};
-    _Bool measure = box->size[ui_X].kind == ui_Size_TEXT || box->size[ui_Y].kind == ui_Size_TEXT;
+    _Bool measure = box->size[ui_X].kind == ui_Size_Kind_TEXT || box->size[ui_Y].kind == ui_Size_Kind_TEXT;
     if (measure) {
         UI_ASSERT(box->display_string != 0);
         UI_ASSERT(box->display_string[0] != 0);
@@ -277,18 +276,18 @@ static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
 
     for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
         switch (box->size[axis].kind) {
-            case ui_Size_PIXELS: {
+            case ui_Size_Kind_PIXELS: {
                 box->rectangle.size[axis] = box->size[axis].value;
             } break;
-            case ui_Size_SUM_OF_CHILDREN: case ui_Size_LARGEST_CHILD: {
+            case ui_Size_Kind_SUM_OF_CHILDREN: case ui_Size_Kind_LARGEST_CHILD: {
                 // Not solved here, but let's error-check.
                 UI_ASSERT(box->first_child != 0);
             } break;
-            case ui_Size_OF_PARENT: {
+            case ui_Size_Kind_OF_PARENT: {
                 // Not solved here, but let's error-check.
                 UI_ASSERT(box->parent != 0);
             } break;
-            case ui_Size_TEXT: {
+            case ui_Size_Kind_TEXT: {
                 UI_ASSERT(box->display_string != 0);
                 UI_ASSERT(text_size[ui_X] > 0);
                 UI_ASSERT(text_size[ui_Y] > 0);
@@ -307,11 +306,11 @@ static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
 
 static void ui__layout_dependent_ancestor(ui_State *ui, ui_Box *box) {
     for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_LARGEST_CHILD: /* not solved here */ break;
-        case ui_Size_SUM_OF_CHILDREN: /* not solved here */ break;
-        case ui_Size_OF_PARENT: /* not solved here */ break;
-        case ui_Size_TEXT: /* not solved here */ break;
-        case ui_Size_PIXELS: /* not solved here */ break;
+        case ui_Size_Kind_LARGEST_CHILD: /* not solved here */ break;
+        case ui_Size_Kind_SUM_OF_CHILDREN: /* not solved here */ break;
+        case ui_Size_Kind_OF_PARENT: /* not solved here */ break;
+        case ui_Size_Kind_TEXT: /* not solved here */ break;
+        case ui_Size_Kind_PIXELS: /* not solved here */ break;
         default: UI_ASSERT(0 && "unreachable"); break;
     }
 
@@ -326,8 +325,8 @@ static void ui__layout_dependent_descendant(ui_State *ui, ui_Box *box) {
     }
 
     for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_TEXT: break;
-        case ui_Size_SUM_OF_CHILDREN: {
+        case ui_Size_Kind_TEXT: break;
+        case ui_Size_Kind_SUM_OF_CHILDREN: {
             for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
                 box->rectangle.size[axis] += child->rectangle.size[axis];
 				box->rectangle.size[axis] += box->style.child_gap;
@@ -336,7 +335,7 @@ static void ui__layout_dependent_descendant(ui_State *ui, ui_Box *box) {
             _Bool has_at_least_one_child = box->first_child != 0;
             box->rectangle.size[axis] -= has_at_least_one_child * box->style.child_gap;
         } break;
-        case ui_Size_LARGEST_CHILD: {
+        case ui_Size_Kind_LARGEST_CHILD: {
             float largest = 0;
             for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
                 float size = child->rectangle.size[axis];
@@ -344,9 +343,69 @@ static void ui__layout_dependent_descendant(ui_State *ui, ui_Box *box) {
             }
             box->rectangle.size[axis] += largest;
         } break;
-        case ui_Size_OF_PARENT: /* not solved here */ break;
-        case ui_Size_PIXELS: /* not solved here */ break;
+        case ui_Size_Kind_OF_PARENT: /* not solved here */ break;
+        case ui_Size_Kind_PIXELS: /* not solved here */ break;
         default: UI_ASSERT(0 && "unreachable"); break;
+    }
+}
+
+#define UI__MIN(a, b) ((a) < (b) ? (a) : (b))
+#define UI__MAX(a, b) ((a) > (b) ? (a) : (b))
+#define UI__CLAMP(v, low, high) UI__MIN(UI__MAX((v), (low)), (high))
+
+static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
+    ui_Flags layout_axis = box->flags & ui_Flag_CHILD_AXIS;
+
+    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+        float applies_to_this_axis = (float)(layout_axis == axis);
+
+        float parent_size = box->rectangle.size[axis];
+        parent_size -= 2.f * box->style.padding[axis];
+        float available_size = parent_size;
+
+        float wanted_size = 0;
+        float child_count = 0;
+
+        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+            child_count += applies_to_this_axis;
+
+            switch (child->size[axis].kind) {
+                case ui_Size_Kind_OF_PARENT: {
+                    child->rectangle.size[axis] = parent_size * child->size[axis].value;
+                    wanted_size += applies_to_this_axis * child->rectangle.size[axis];
+                } break;
+                case ui_Size_Kind_SUM_OF_CHILDREN: case ui_Size_Kind_LARGEST_CHILD: case ui_Size_Kind_TEXT: case ui_Size_Kind_PIXELS: {
+                    available_size -= applies_to_this_axis * child->rectangle.size[axis];
+                } break;
+                default: UI_ASSERT(0 && "unreachable"); break;
+            }
+        }
+
+        float total_child_gap = box->style.child_gap * (child_count - 1.f);
+        available_size -= total_child_gap;
+
+        if (wanted_size > available_size) {
+            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) if (child->size[axis].kind == ui_Size_Kind_OF_PARENT) {
+                float average_ratio_available = available_size / wanted_size;
+
+                float ratio_left = child->size[axis].value;
+                if (child->size[axis].value > average_ratio_available) {
+                    float min_ratio_left = 0;
+                    ratio_left = UI__CLAMP(min_ratio_left, average_ratio_available, child->size[axis].value);
+                }
+
+                float wanted = child->rectangle.size[axis];
+                float got = parent_size * ratio_left;
+
+                wanted_size -= wanted;
+                available_size -= got;
+                child->rectangle.size[axis] = got;
+            }
+        }
+    }
+
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        ui__layout_solve_violations(ui, child);
     }
 }
 
@@ -378,66 +437,6 @@ static void ui__layout_relative_positions_and_rectangle(ui_State *ui, ui_Box *bo
 
     for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
         ui__layout_relative_positions_and_rectangle(ui, child);
-    }
-}
-
-#define UI__MIN(a, b) ((a) < (b) ? (a) : (b))
-#define UI__MAX(a, b) ((a) > (b) ? (a) : (b))
-#define UI__CLAMP(v, low, high) UI__MIN(UI__MAX((v), (low)), (high))
-
-static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
-    ui_Flags layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        float applies_to_this_axis = (float)(layout_axis == axis);
-
-        float parent_size = box->rectangle.size[axis];
-        parent_size -= 2.f * box->style.padding[axis];
-        float available_size = parent_size;
-
-        float wanted_size = 0;
-        float child_count = 0;
-
-        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-            child_count += applies_to_this_axis;
-
-            switch (child->size[axis].kind) {
-                case ui_Size_OF_PARENT: {
-                    child->rectangle.size[axis] = parent_size * child->size[axis].value;
-                    wanted_size += applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                case ui_Size_SUM_OF_CHILDREN: case ui_Size_LARGEST_CHILD: case ui_Size_TEXT: case ui_Size_PIXELS: {
-                    available_size -= applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                default: UI_ASSERT(0 && "unreachable"); break;
-            }
-        }
-
-        float total_child_gap = box->style.child_gap * (child_count - 1.f);
-        available_size -= total_child_gap;
-
-        if (wanted_size > available_size) {
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) if (child->size[axis].kind == ui_Size_OF_PARENT) {
-                float average_ratio_available = available_size / wanted_size;
-
-                float ratio_left = child->size[axis].value;
-                if (child->size[axis].value > average_ratio_available) {
-                    float min_ratio_left = 0;
-                    ratio_left = UI__CLAMP(min_ratio_left, average_ratio_available, child->size[axis].value);
-                }
-
-                float wanted = child->rectangle.size[axis];
-                float got = parent_size * ratio_left;
-
-                wanted_size -= wanted;
-                available_size -= got;
-                child->rectangle.size[axis] = got;
-            }
-        }
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_solve_violations(ui, child);
     }
 }
 
@@ -643,7 +642,7 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
         UI_ASSERT(parent == 0);
 
         for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-            box->size[axis].kind = ui_Size_PIXELS;
+            box->size[axis].kind = ui_Size_Kind_PIXELS;
             box->size[axis].value = ui->window_size[axis];
         }
 
@@ -652,8 +651,8 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
 
     if (box != ui->root) {
         ui_Flags child_layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-        box->size[child_layout_axis].kind = ui_Size_SUM_OF_CHILDREN;
-        box->size[!child_layout_axis].kind = ui_Size_LARGEST_CHILD;
+        box->size[child_layout_axis].kind = ui_Size_Kind_SUM_OF_CHILDREN;
+        box->size[!child_layout_axis].kind = ui_Size_Kind_LARGEST_CHILD;
     }
 
     box->display_string = display_string;
@@ -714,12 +713,6 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
     return box;
 }
 
-UI_FUNCTION ui_Box *ui_spacer(ui_State *ui, ui_Box *parent) {
-    ui_Box *box = ui_push(ui, parent, 0, 0, 0);
-    box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-    return box;
-}
-
 // TODO(felix): Simplify! Maybe remove.
 UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...) {
     ui_Box *slider_box = 0;
@@ -738,7 +731,7 @@ UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis
     ui_va_list arguments;
     ui_va_start(arguments, format);
     {
-        char format_buffer[UI_MAX_STRING_LENGTH];
+        char format_buffer[UI_MAX_STRING_LENGTH] = {0};
 
         int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format, arguments);
         UI_ASSERT(written < (int)(sizeof format_buffer));
@@ -766,29 +759,29 @@ UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis
         float first_part_length = (*value - least) * travel / range;
         float last_part_length  = travel - first_part_length;
 
-        slider_box->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.length };
-        slider_box->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
+        slider_box->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.length };
+        slider_box->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
 
         ui_Flags slider_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND;
 
         if (first_part_length >= 1.f) {
             ui_Box *first_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            first_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = first_part_length };
-            first_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
+            first_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = first_part_length };
+            first_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
 
             ui_spacer(ui, first_part);
 
             ui_Box *first = ui_push_styled(ui, first_part, slider_flags, &slider_style, "%s##slider first", formatted);
-            first->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            first->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
+            first->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
+            first->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.thickness };
 
             ui_spacer(ui, first_part);
         }
 
         {
             ui_Box *handle_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_length };
-            handle_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
+            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.handle_length };
+            handle_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
 
             ui_spacer(ui, handle_part);
 
@@ -800,22 +793,22 @@ UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis
                 handle->style.bg_color = style.dragging.bg_color;
                 handle->style.border_color = style.dragging.border_color;
             }
-            handle->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.handle_thickness };
+            handle->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
+            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.handle_thickness };
 
             ui_spacer(ui, handle_part);
         }
 
         if (last_part_length >= 1.f) {
             ui_Box *last_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            last_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = last_part_length };
-            last_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
+            last_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = last_part_length };
+            last_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
 
             ui_spacer(ui, last_part);
 
             ui_Box *last = ui_push_styled(ui, last_part, slider_flags, &slider_style, "%s##slider last", formatted);
-            last->size[slider_axis] = (ui_Size){ .kind = ui_Size_OF_PARENT, .value = 1.f };
-            last->size[!slider_axis] = (ui_Size){ .kind = ui_Size_PIXELS, .value = style.thickness };
+            last->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
+            last->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.thickness };
 
             ui_spacer(ui, last_part);
         }
@@ -824,5 +817,10 @@ UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis
     return slider_box;
 }
 
+UI_FUNCTION ui_Box *ui_spacer(ui_State *ui, ui_Box *parent) {
+    ui_Box *box = ui_push(ui, parent, 0, 0, 0);
+    box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
+    return box;
+}
 
 #endif // UI_IMPLEMENTATION
