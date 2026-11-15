@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-03
+// https://github.com/felix-u 2026-11-15
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(UTF_H)
@@ -41,28 +41,28 @@ UTF_FUNCTION utf_Conversion utf16_from_utf8(unsigned short *destination, size_t 
 
         size_t sequence_length = 1;
         unsigned codepoint = leading;
-        unsigned char second_minimum = 0x80, second_maximum = 0xbf;
+        unsigned char second_min = 0x80, second_max = 0xbf;
         if (0xc2 <= leading && leading <= 0xdf) {
             sequence_length = 2;
             codepoint = leading & 0x1f;
         } else if (0xe0 <= leading && leading <= 0xef) {
             sequence_length = 3;
             codepoint = leading & 0x0f;
-            if (leading == 0xe0) second_minimum = 0xa0;
+            if (leading == 0xe0) second_min = 0xa0;
         } else if (0xf0 <= leading && leading <= 0xf4) {
             sequence_length = 4;
             codepoint = leading & 0x07;
-            if (leading == 0xf0) second_minimum = 0x90;
-            if (leading == 0xf4) second_maximum = 0x8f;
+            if (leading == 0xf0) second_min = 0x90;
+            if (leading == 0xf4) second_max = 0x8f;
         }
 
         _Bool is_valid = leading < 0x80 || sequence_length > 1;
         size_t valid_length = 1;
         while (is_valid && valid_length < sequence_length) {
             size_t index = start + valid_length;
-            unsigned char minimum = valid_length == 1 ? second_minimum : 0x80;
-            unsigned char maximum = valid_length == 1 ? second_maximum : 0xbf;
-            is_valid = index < source_count && minimum <= bytes[index] && bytes[index] <= maximum;
+            unsigned char min = valid_length == 1 ? second_min : 0x80;
+            unsigned char max = valid_length == 1 ? second_max : 0xbf;
+            is_valid = index < source_count && min <= bytes[index] && bytes[index] <= max;
             if (is_valid) {
                 codepoint = (codepoint << 6) | (bytes[index] & 0x3f);
                 valid_length += 1;

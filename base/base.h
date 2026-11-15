@@ -330,8 +330,9 @@ _Static_assert(sizeof(f64) == 8, "");
     unsigned long RtlGetLastWin32Error(void);
 #elif BASE_OS == BASE_OS_WASM
     typedef __SIZE_TYPE__ size_t; _Static_assert(sizeof(size_t) == 4, "Assumes wasm32");
-    #define os_abort() // TODO(felix)
-    #define os_exit(code) // TODO(felix)
+    #define os_abort() __builtin_trap()
+    _Noreturn void os_exit_js(int code);
+    #define os_exit(code) os_exit_js((int)(code))
 #endif // BASE_OS
 
 #if COMPILER_CLANG || COMPILER_GCC // they share some builtins
@@ -425,14 +426,15 @@ static inline size_t size_t_from_u64(u64 value) {
     return (size_t)value;
 }
 
-#define arena_array_reserve(arena, data, count, capacity, minimum) arena_array_reserve_((arena), (data), sizeof *(data), (count), (capacity), (minimum))
-static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 minimum);
+#define arena_array_reserve(arena, data, count, capacity, min) arena_array_reserve_((arena), (data), sizeof *(data), (count), (capacity), (min))
+static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 min);
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define CLAMP_LOW MAX
 #define CLAMP_HIGH MIN
 #define CLAMP(value, low, high) CLAMP_HIGH(CLAMP_LOW((value), (low)), (high))
+#define COUNT_OF(array) (sizeof (array) / sizeof (array)[0])
 
 static inline int memcmp_(const void *a_, const void *b_, u64 byte_count) {
     const u8 *a = a_, *b = b_;
@@ -614,6 +616,8 @@ static const char **os_get_arguments(Arena *, u64 *out_count);
 typedef struct { f32 x, y; } V2;
 typedef struct { f32 x, y, z; } V3;
 typedef struct { f32 x, y, z, w; } V4;
+
+typedef struct { V2 size; f32 ascent; } Text_Measurement;
 typedef V4 Quat;
 
 #define v4_left(v) ((v).x)
@@ -770,6 +774,134 @@ static f32 logf_(f32 x) {
     return log_mantissa + (f32)exponent * ln2;
 }
 
+static f64 pow_(f64 x, f64 e) {
+    union { u64 bits; f64 floating; } infinity = { .bits = 0x7ff0000000000000 }, not_a_number = { .bits = 0x7ff8000000000000 };
+    f64 two_to_53 = 9007199254740992.0;
+    f64 e_magnitude = e < 0 ? -e : e;
+    bool e_is_exact_in_i64 = e_magnitude < two_to_53;
+    bool e_is_integer = !e_is_exact_in_i64 || e - (f64)(i64)e == 0.0;
+    bool e_is_odd = e_is_exact_in_i64 && ((i64)e & 1);
+
+    if (e == 0.0) return 1;
+    if (x == 0.0) return e > 0 ? 0 : infinity.floating;
+    if (x < 0 && !e_is_integer) return not_a_number.floating;
+
+    f64 result = 0;
+    bool result_is_known = false;
+    if (e_is_integer && e_magnitude <= 64) {
+        f64 power = 1, base = x;
+        for (u64 remaining_bits = (u64)e_magnitude; remaining_bits != 0; remaining_bits >>= 1) {
+            if (remaining_bits & 1) power *= base;
+            base *= base;
+        }
+        if (e < 0) power = 1 / power;
+        bool power_is_finite = power - power == 0.0;
+        result = power;
+        result_is_known = power_is_finite && power != 0.0;
+    }
+
+    if (!result_is_known) {
+        union { f64 floating; u64 bits; } mantissa = { .floating = x < 0 ? -x : x };
+        i64 exponent = (i64)((mantissa.bits >> 52) & 0x7ff);
+        if (exponent == 0) {
+            f64 two_to_54 = 18014398509481984.0;
+            mantissa.floating *= two_to_54;
+            exponent = (i64)((mantissa.bits >> 52) & 0x7ff) - 54;
+        }
+        exponent -= 1023;
+        mantissa.bits = (mantissa.bits & 0x000fffffffffffff) | 0x3ff0000000000000;
+        if (mantissa.floating > 1.4142135623730951) {
+            mantissa.floating *= 0.5;
+            exponent += 1;
+        }
+
+        f64 s = (mantissa.floating - 1) / (mantissa.floating + 1);
+        f64 s2 = s * s;
+        f64 atanh_series = 1.0/21;
+        atanh_series = atanh_series * s2 + 1.0/19;
+        atanh_series = atanh_series * s2 + 1.0/17;
+        atanh_series = atanh_series * s2 + 1.0/15;
+        atanh_series = atanh_series * s2 + 1.0/13;
+        atanh_series = atanh_series * s2 + 1.0/11;
+        atanh_series = atanh_series * s2 + 1.0/9;
+        atanh_series = atanh_series * s2 + 1.0/7;
+        atanh_series = atanh_series * s2 + 1.0/5;
+        atanh_series = atanh_series * s2 + 1.0/3;
+        atanh_series = atanh_series * s2 + 1;
+        f64 ln2_high = 6.93147180369123816490e-01, ln2_low = 1.90821492927058770002e-10;
+        f64 ln_x_high = (f64)exponent * ln2_high;
+        f64 ln_x_low = 2 * s * atanh_series + (f64)exponent * ln2_low;
+        f64 y_high = e * ln_x_high;
+        f64 y_low = e * ln_x_low;
+        if (exponent != 0 && e_magnitude < 1e300) {
+            f64 veltkamp_split = 134217729.0;
+            f64 e_scaled = e * veltkamp_split;
+            f64 e_part_high = e_scaled - (e_scaled - e);
+            f64 e_part_low = e - e_part_high;
+            f64 ln_x_scaled = ln_x_high * veltkamp_split;
+            f64 ln_x_part_high = ln_x_scaled - (ln_x_scaled - ln_x_high);
+            f64 ln_x_part_low = ln_x_high - ln_x_part_high;
+            f64 y_high_error = e_part_high * ln_x_part_high - y_high;
+            y_high_error += e_part_high * ln_x_part_low;
+            y_high_error += e_part_low * ln_x_part_high;
+            y_high_error += e_part_low * ln_x_part_low;
+            y_low += y_high_error;
+        }
+
+        f64 y = y_high + y_low;
+        if (y > 709.782712893384) result = infinity.floating;
+        else if (y >= -745.1332191019412) {
+            f64 log2_of_e = 1.4426950408889634;
+            i64 n = (i64)(y * log2_of_e + (y < 0 ? -0.5 : 0.5));
+            f64 r = (y_high - (f64)n * ln2_high) + (y_low - (f64)n * ln2_low);
+
+            f64 exp_r = 1.0/6227020800;
+            exp_r = exp_r * r + 1.0/479001600;
+            exp_r = exp_r * r + 1.0/39916800;
+            exp_r = exp_r * r + 1.0/3628800;
+            exp_r = exp_r * r + 1.0/362880;
+            exp_r = exp_r * r + 1.0/40320;
+            exp_r = exp_r * r + 1.0/5040;
+            exp_r = exp_r * r + 1.0/720;
+            exp_r = exp_r * r + 1.0/120;
+            exp_r = exp_r * r + 1.0/24;
+            exp_r = exp_r * r + 1.0/6;
+            exp_r = exp_r * r + 1.0/2;
+            exp_r = exp_r * r + 1;
+            exp_r = exp_r * r + 1;
+
+            i64 n_first_half = n / 2;
+            union { u64 bits; f64 floating; } scale_first = { .bits = (u64)(n_first_half + 1023) << 52 };
+            union { u64 bits; f64 floating; } scale_second = { .bits = (u64)(n - n_first_half + 1023) << 52 };
+            result = exp_r * scale_first.floating * scale_second.floating;
+        }
+
+        if (x < 0 && e_is_odd) result = -result;
+    }
+    return result;
+}
+
+static f32 atanf_(f32 x) {
+    bool negative = x < 0;
+    if (negative) x = -x;
+
+    bool inverse = x > 1.f;
+    if (inverse) x = 1.f / x;
+
+    f32 x2 = x*x;
+    f32 r = x * (0.9998660f + x2 * (-0.3302995f + x2 * (0.1801410f + x2 * (-0.0851330f + x2 * 0.0208351f))));
+    if (inverse) r = 1.57079632f - r;
+    if (negative) r = -r;
+    return r;
+}
+
+static f32 atan2f_(f32 y, f32 x) {
+    if (x == 0.f) return y >= 0 ? 1.57079632f : -1.57079632f;
+    f32 r = atanf_(y/x);
+    if (x < 0) r += y >= 0 ? 3.14159265f : -3.14159265f;
+    return r;
+}
+
 static f32 tanf_(f32 x) {
     f32 intermediate = x * (2.f / (f32)M_PI) + (x >= 0 ? 0.5f : -0.5f);
     assert((f32)INT64_MIN <= intermediate && intermediate <= (f32)INT64_MAX);
@@ -793,10 +925,10 @@ static f32 tanhf_(f32 x) {
 }
 
 #if COMPILER_CLANG
-    #define frexpf __builtin_frexpf
-    #define sinf   __builtin_sinf
-    #define tanf   __builtin_tanf
     #if LINK_CRT
+        #define frexpf __builtin_frexpf
+        #define sinf  __builtin_sinf
+        #define tanf  __builtin_tanf
         #define acos  __builtin_acos
         #define cos   __builtin_cos
         #define cosf  __builtin_cosf
@@ -811,10 +943,10 @@ static f32 tanhf_(f32 x) {
 #if !LINK_CRT
     #if !COMPILER_CLANG
         #define floor  floor_
-        #define frexpf frexpf_
-        #define sinf   sinf_
-        #define tanf   tanf_
     #endif
+    #define frexpf frexpf_
+    #define sinf   sinf_
+    #define tanf   tanf_
     #define acos   acos_
     #define ceil   ceil_
     #define ceilf  ceilf_
@@ -838,6 +970,10 @@ static f32 tanhf_(f32 x) {
     // NOTE(felix): because I got `warning C4163: 'fabsf': not available as an intrinsic function`
     // NOTE(felix): corecrt_math.h defines fabsf as an inline function casting fabs to f32. Might be good to benchmark that approach versus what I'm doing here
     static inline f32 fabsf(f32 x) { return x < 0 ? -x : x; }
+    #if !LINK_CRT
+        #define atanf  atanf_
+        #define atan2f atan2f_
+    #endif
 #elif COMPILER_CLANG || COMPILER_GCC
     #define INFINITY __builtin_inff()
     #if LINK_CRT
@@ -860,34 +996,18 @@ static f32 tanhf_(f32 x) {
     #define isnan(x) __builtin_isnan(x)
     #define llabs(x) __builtin_llabs(x)
     #if BASE_OS == BASE_OS_WASM
-        static f32 atanf(f32 x) {
-            bool negative = x < 0;
-            if (negative) x = -x;
-
-            bool inverse = x > 1.f;
-            if (inverse) x = 1.f / x;
-
-            f32 x2 = x*x;
-            f32 r = x * (0.9998660f + x2 * (-0.3302995f + x2 * (0.1801410f + x2 * (-0.0851330f + x2 * 0.0208351f))));
-            if (inverse) r = 1.57079632f - r;
-            if (negative) r = -r;
-            return r;
-        }
-
-        static f32 atan2f(f32 y, f32 x) {
-            if (x == 0.f) return y >= 0 ? 1.57079632f : -1.57079632f;
-            f32 r = atanf(y/x);
-            if (x < 0) r += y >= 0 ? 3.14159265f : -3.14159265f;
-            return r;
-        }
-
-        static f32 powf(f32 x, f32 e) {
-            f32 result = expf(e * logf(x));
-            return result;
-        }
+        #define atanf  atanf_
+        #define atan2f atan2f_
+        #define pow pow_
+        #define powf(x, e) ((f32)pow_((f64)(x), (f64)(e)))
     #else
-        #define atanf(x)     __builtin_atanf(x)
-        #define atan2f(y, x) __builtin_atan2f((y), (x))
+        #if LINK_CRT
+            #define atanf(x)     __builtin_atanf(x)
+            #define atan2f(y, x) __builtin_atan2f((y), (x))
+        #else
+            #define atanf  atanf_
+            #define atan2f atan2f_
+        #endif
         #define pow(x, e)    __builtin_pow((x), (e))
         #define powf(x, e)   __builtin_powf((x), (e))
         #define roundf(x)    __builtin_roundf(x)
@@ -910,8 +1030,10 @@ static bool is_power_of_2(u64 x);
 
 static inline f32 radians_from_degrees(f32 degrees);
 
+static V4   oklch_from_rgba(u32 rgba);
 static void rgba_double_from_hex(u32 hex, double rgba[4]);
 static V4   rgba_float_from_hex(u32 hex);
+static u32  rgba_from_oklch(V4 oklch);
 static u32  rgba_hex_from_float(V4 rgba);
 
 static inline bool f32_difference_within_margin(f32 a, f32 b, f32 margin);
@@ -990,7 +1112,7 @@ static inline M4 m4_transpose(M4 m);
 #define CPU_DRAW_FUNCTION static
 #include "base/cpu_draw.h"
 static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size);
-static V2 cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size);
+static Text_Measurement cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size);
 
 // TODO(felix): Move to cpu-rendered platform (or maybe it should always be manually included, and removed from base).
 #define BDF_FUNCTION static
@@ -1140,6 +1262,9 @@ typedef enum {
 
     App_Key_SHIFT,
     App_Key_CONTROL,
+    App_Key_RETURN,
+    App_Key_ESCAPE,
+    App_Key_TAB,
     App_Key_LEFT,
     App_Key_DOWN,
     App_Key_UP,
@@ -1306,9 +1431,9 @@ typedef struct {
     GPU_Index_Format index_format;
 } GPU_Mesh;
 
-// NOTE(felix): Key == 0 identifies the texture by a hash of its content; key != 0 with pixels uploads them under the key; key != 0 without pixels uses what the key already has, or creates an empty texture if given a size.
+// NOTE(felix): The GPU layer creates the texture, with the pixels if given, only when the key isn't cached or the size, format or flags differ from the cached ones. Otherwise it ignores the pixels, so change the key to change the pixels. Omit size to just get what the key references.
 typedef struct {
-    u64 key;
+    u64 key; // never 0
     u32 width;
     u32 height;
     u32 pixels_per_row;
@@ -1378,6 +1503,15 @@ static const u32 gpu_texture_bytes_per_pixel[GPU_Texture_Format_COUNT] = {
     [GPU_Texture_Format_RGBA16F] = 8,
 };
 
+typedef enum {
+    Cursor_Shape_POINTER,
+    Cursor_Shape_HIDDEN,
+    Cursor_Shape_RESIZE_X,
+    Cursor_Shape_RESIZE_Y,
+
+    Cursor_Shape_COUNT,
+} Cursor_Shape;
+
 typedef struct {
     App_Frame_Info frame;
     Arena *persistent_arena;
@@ -1385,26 +1519,20 @@ typedef struct {
     u64 frame_arena_startup_reservation_in_bytes;
     GPU_Frame_Stats gpu_stats_of_last_frame;
 
-    bool hide_cursor;
+    Cursor_Shape cursor_shape;
     bool should_quit;
     const char *window_name;
+    V2 window_min_size_logical;
     u32 clear_color;
+    String font_file; // TODO(felix): Support multiple fonts.
+    GPU_Texture_Id gpu_draw_target; // what base_gpu_draw_rectangle and base_gpu_draw_or_measure_text draw into, 0 for the window
 } Platform;
 
 #if PLATFORM_NONE
     typedef Platform Platform_Implementation;
-    static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
-        (void)platform;
-        (void)text;
-        (void)font_size;
-        panic("PLATFORM=NONE");
-        return (V2){0};
-    }
 #else
     struct Platform_Implementation;
     typedef struct Platform_Implementation Platform_Implementation;
-
-    static V2 platform_measure_text(Platform *platform, String text, f32 font_size);
 
     static void app_start(Platform *);
     static void app_update_and_render(Platform *);
@@ -1420,16 +1548,209 @@ static GPU_Mesh_Id    gpu_mesh_id(Platform *platform, const GPU_Mesh *mesh);
 static GPU_Shader_Id  gpu_shader_id(Platform *platform, const GPU_Shader *shader, bool *ok);
 static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *texture);
 
+static Text_Measurement base_gpu_draw_or_measure_text(Platform *platform, String font_file, String text, V2 position, f32 font_size, f32 wrap_width, u32 color, V4 clip);
+
+typedef enum {
+    Corner_TOP_LEFT,
+    Corner_TOP_RIGHT,
+    Corner_BOTTOM_LEFT,
+    Corner_BOTTOM_RIGHT,
+
+    Corner_COUNT,
+} Corner;
+
+typedef struct {
+    V4 rectangle;
+    V4 rounded_rectangle;
+    f32 rounded_radius;
+} Rectangle_Clip;
+
+typedef struct {
+    V4 rectangle;
+    Rectangle_Clip clip;
+    u32 background_colors[Corner_COUNT];
+    u32 border_color;
+    f32 border_width;
+    f32 corner_radii[Corner_COUNT];
+} Rectangle_Draw;
+
+static void base_gpu_draw_rectangle(Platform *platform, const Rectangle_Draw *rectangle);
+
+#if PLATFORM_NONE
+    static u32 gpu__panic_stub(Platform *platform, ...) { (void)platform; panic("PLATFORM=NONE"); return 0; }
+    #define gpu_function_stub(...) gpu__panic_stub(__VA_ARGS__)
+    #define gpu_clear      gpu_function_stub
+    #define gpu_draw       gpu_function_stub
+    #define gpu_mesh_id    gpu_function_stub
+    #define gpu_shader_id  gpu_function_stub
+    #define gpu_texture_id gpu_function_stub
+#endif
+
 #define UI_FUNCTION static
+#define UI_MAX_BOX_SLOTS_EXPONENT 11
 #define ui_va_list va_list
 #define ui_va_start va_start
 #define ui_va_end va_end
 #include "base/ui.h"
 
-static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame);
-static void    base_ui_create(ui_State *ui, Platform *platform);
-static void    base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]);
-static void    base_ui_render(ui_State *ui, ui_Box *box);
+typedef u8 Base_UI_Draw;
+enum {
+    Base_UI_Draw_NONE = 0,
+    Base_UI_Draw_GRADIENT,
+    Base_UI_Draw_SEPARATOR_ETCHED,
+    Base_UI_Draw_SEGMENT,
+    Base_UI_Draw_CHECKBOX,
+    Base_UI_Draw_POPUP_BUTTON,
+    Base_UI_Draw_STEPPER,
+    Base_UI_Draw_SLIDER,
+    Base_UI_Draw_RADIO_BUTTON,
+    Base_UI_Draw_TAB_VIEW,
+    Base_UI_Draw_LIST_ROWS_STRIPED,
+};
+
+typedef u8 Base_UI_Button_Role;
+enum {
+    Base_UI_Button_Role_NONE,
+    Base_UI_Button_Role_DEFAULT, // linked to return
+    Base_UI_Button_Role_CANCEL, // linked to escape
+};
+
+typedef u8 Base_UI_State;
+enum {
+    Base_UI_State_NORMAL,
+    Base_UI_State_PRESSED,
+    Base_UI_State_DISABLED,
+
+    Base_UI_State_COUNT,
+};
+
+typedef struct {
+    u32 background;
+    u32 text;
+    u32 border;
+} Base_UI_Colors;
+
+typedef struct {
+    ui_Box *button;
+    u32 item;
+    u32 chosen_item;
+    u32 item_count;
+    int axis;
+    i32 next_row;
+    ui_Box *parent_after_rows;
+    ui_Box *button_content_parent;
+    bool is_button_content;
+} Base_UI_Popup;
+
+// TODO(felix): Use the Command key for these on the Mac.
+typedef u8 Base_UI_List_Flags;
+enum {
+    Base_UI_List_Flag_FOCUS_RING       = 1 << 0,
+    Base_UI_List_Flag_ROWS_REORDERABLE = 1 << 1,
+    Base_UI_List_Flag_ROWS_STRIPED     = 1 << 2,
+    Base_UI_List_Flag_SELECTION_FLAT   = 1 << 3,
+    Base_UI_List_Flag_SELECTION_MULTIPLE = 1 << 4,
+
+    BASE_UI_LIST_FLAGS_SOURCE = 0,
+    BASE_UI_LIST_FLAGS_TABLE  = Base_UI_List_Flag_FOCUS_RING | Base_UI_List_Flag_ROWS_STRIPED | Base_UI_List_Flag_SELECTION_FLAT,
+};
+
+typedef struct {
+    u32 cleared_first_row;
+    u32 cleared_row_count;
+    u32 first_row;
+    u32 last_row;
+    bool is_set;
+    bool toggles;
+} Base_UI_List_Selection_Change;
+
+enum { BASE_UI_MAX_ROWS_IN_VIEW = 512, BASE_UI_MAX_LISTS = 16 };
+
+typedef struct {
+    unsigned rows_key_hash;
+    u64 frame_id_of_last_use;
+    u32 row_count;
+    u32 cursor_row;
+    u32 anchor_row;
+    u32 first_row;
+    u32 recorded_row_count;
+    f32 recorded_row_heights[BASE_UI_MAX_ROWS_IN_VIEW];
+} Base_UI_List_State;
+
+typedef struct {
+    ui_Box *frame;
+    ui_Box *box;
+    Base_UI_List_State *state;
+    u32 *selected_row;
+    Base_UI_List_Selection_Change selection_change;
+    i32 arrow_step;
+    i32 row_moved_from;
+    i32 row_moved_to;
+    i32 row_to_reveal;
+    u32 first_row_to_build;
+    u32 end_row_to_build;
+    u32 row_count;
+    Base_UI_List_Flags flags;
+    bool is_focused;
+    bool is_virtual;
+} Base_UI_List;
+
+typedef struct {
+    ui_Box *box;
+    i32 tab_moved_from;
+    i32 tab_moved_to;
+    i32 closed_tab;
+    u32 tab_count;
+    bool add_clicked;
+} Base_UI_Document_Tabs;
+
+typedef u8 Base_UI_Sort;
+enum {
+    Base_UI_Sort_NONE,
+    Base_UI_Sort_ASCENDING,
+    Base_UI_Sort_DESCENDING,
+};
+
+// TODO(felix): Real text input once we have text_input.h.
+static Base_UI_Popup        base_ui_combo_box_begin(ui_State *ui, u32 item_count, int axis, const char *format, ...);
+static Base_UI_List         base_ui_list_begin(ui_State *ui, Base_UI_List_Flags flags, u32 *selected_row, u32 virtual_row_count, i32 row_to_reveal, const char *format, ...);
+static ui_Box              *base_ui_list_row(ui_State *ui, Base_UI_List *list, bool selected, const char *format, ...);
+
+static Base_UI_Popup        base_ui_popup_begin(ui_State *ui, u32 *selected_item, u32 item_count, int axis, const char *format, ...);
+static bool                 base_ui_popup_row(ui_State *ui, Base_UI_Popup *popup);
+static i32                  base_ui_stepper(ui_State *ui, const char *format, ...);
+
+static ui_Box              *base_ui_begin(ui_State *ui, App_Frame_Info *frame, f32 scale);
+static void                 base_ui_bezel_gradient(ui_Box *control);
+static void                 base_ui_bezel_none(ui_Box *control);
+static void                 base_ui_bezel_textured(ui_Box *control);
+static ui_Box              *base_ui_button(ui_State *ui, Base_UI_Button_Role role, const char *format, ...);
+static ui_Box              *base_ui_checkbox(ui_State *ui, bool *checked, const char *format, ...);
+static ui_Box              *base_ui_column_header(ui_State *ui, f32 *width, Base_UI_Sort sort, const char *format, ...);
+static ui_Box              *base_ui_column_headers(ui_State *ui);
+// TODO(felix): Animate the triangle once we have animate.h?
+static ui_Box              *base_ui_disclosure(ui_State *ui, bool *is_open, const char *format, ...);
+// TODO(felix): Choose a row by releasing the right button over it, as on macOS?
+static Base_UI_Popup        base_ui_context_menu_begin(ui_State *ui, bool opens, u32 item_count, const char *format, ...);
+static ui_Box              *base_ui_document_tab(ui_State *ui, Base_UI_Document_Tabs *tabs, bool selected, const char *format, ...);
+static Base_UI_Document_Tabs base_ui_document_tabs_begin(ui_State *ui, const char *format, ...);
+static f32                  base_ui_drag_position(ui_State *ui, ui_Box *box, int axis, f32 position);
+static ui_Box              *base_ui_radio_button(ui_State *ui, bool selected, bool label_below, const char *format, ...);
+static ui_Box              *base_ui_scroll_bar(ui_State *ui, f32 *offset, f32 view_size, f32 content_size, int axis, const char *format, ...);
+static ui_Box              *base_ui_segment(ui_State *ui, bool selected, const char *format, ...);
+static ui_Box              *base_ui_segment_inset(ui_State *ui, bool selected, const char *format, ...);
+static ui_Box              *base_ui_segmented_control(ui_State *ui);
+static ui_Box              *base_ui_separator(ui_State *ui);
+static ui_Box              *base_ui_separator_line(ui_State *ui, u32 color);
+static ui_Box              *base_ui_slider(ui_State *ui, f32 *value, f32 min, f32 max, u32 tick_count, const char *format, ...);
+static ui_Box              *base_ui_split_divider(ui_State *ui, f32 *size, f32 min, f32 max, int axis, const char *format, ...);
+static ui_Box              *base_ui_tab_toolbar(ui_State *ui, bool selected, const char *format, ...);
+static ui_Box              *base_ui_tab_view(ui_State *ui);
+// TODO(felix): Draw text beyond ASCII, like a real ellipse, once we have real text rendering.
+static void                 base_ui_create(ui_State *ui, Platform *platform);
+static u64                  base_ui_gradient_user_data(int axis, u32 end_color);
+static ui_Text_Measurement  base_ui_measure_text(ui_State *ui, const char *string, ui_Style style, f32 wrap_width);
+static void                 base_ui_render(ui_State *ui);
 
 
 #endif // !defined(BASE_H)
@@ -1615,9 +1936,9 @@ static void *base_allocate_from_arena_wrapper(void *context, void *pointer, size
 #define DS_ALLOCATE(context, pointer, old_size, new_size) base_allocate_from_arena_wrapper((context), (pointer), (old_size), (new_size))
 #include "base/data_structures.h"
 
-static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 minimum) {
+static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u64 count, u64 *capacity, u64 min) {
     void *result = data;
-    if (*capacity < minimum) {
+    if (*capacity < min) {
         assert(item_size > 0);
         assert(count <= *capacity);
 
@@ -1628,7 +1949,7 @@ static void *arena_array_reserve_(Arena *arena, void *data, size_t item_size, u6
             assert(is_array_on_this_arena);
         }
 
-        u64 new_capacity = ds_array_grow_capacity(*capacity, minimum);
+        u64 new_capacity = ds_array_grow_capacity(*capacity, min);
         result = ds_array_resize(arena, 0, item_size, 0, new_capacity);
         if (result == 0) panic("unable to reserve %llu items of %llu bytes", new_capacity, (u64)item_size);
 
@@ -1659,6 +1980,60 @@ static void rgba_double_from_hex(u32 hex, double rgba[4]) {
     rgba[1] = pack * ((hex >> 16) & 0xff);
     rgba[2] = pack * ((hex >> 8) & 0xff);
     rgba[3] = pack * (hex & 0xff);
+}
+
+static V4 oklch_from_rgba(u32 rgba) {
+    V4 srgb = rgba_float_from_hex(rgba);
+    f32 encoded[3] = { srgb.x, srgb.y, srgb.z };
+    f32 linear[3] = {0};
+    for (int i = 0; i < 3; i += 1) {
+        f32 channel = encoded[i];
+        linear[i] = channel <= 0.04045f ? channel / 12.92f : expf(2.4f * logf((channel + 0.055f) / 1.055f));
+    }
+
+    f32 lms[3] = {
+        0.4122214708f * linear[0] + 0.5363325363f * linear[1] + 0.0514459929f * linear[2],
+        0.2119034982f * linear[0] + 0.6806995451f * linear[1] + 0.1073969566f * linear[2],
+        0.0883024619f * linear[0] + 0.2817188376f * linear[1] + 0.6299787005f * linear[2],
+    };
+    f32 lms_cube_root[3] = {0};
+    for (int i = 0; i < 3; i += 1) lms_cube_root[i] = lms[i] > 0 ? expf(logf(lms[i]) / 3.f) : 0;
+
+    f32 lightness = 0.2104542553f * lms_cube_root[0] + 0.7936177850f * lms_cube_root[1] - 0.0040720468f * lms_cube_root[2];
+    f32 a = 1.9779984951f * lms_cube_root[0] - 2.4285922050f * lms_cube_root[1] + 0.4505937099f * lms_cube_root[2];
+    f32 b = 0.0259040371f * lms_cube_root[0] + 0.7827717662f * lms_cube_root[1] - 0.8086757660f * lms_cube_root[2];
+    f32 hue = atan2f(b, a) * 180.f / PI_F32;
+    if (hue < 0) hue += 360.f;
+
+    V4 oklch = { .x = lightness, .y = sqrtf(a * a + b * b), .z = hue, .w = srgb.w };
+    return oklch;
+}
+
+static u32 rgba_from_oklch(V4 oklch) {
+    f32 hue = radians_from_degrees(oklch.z);
+    V4 oklab = { .x = oklch.x, .y = oklch.y * cosf(hue), .z = oklch.y * sinf(hue), .w = oklch.w };
+    f32 lms_cube_root[3] = {
+        oklab.x + 0.3963377774f * oklab.y + 0.2158037573f * oklab.z,
+        oklab.x - 0.1055613458f * oklab.y - 0.0638541728f * oklab.z,
+        oklab.x - 0.0894841775f * oklab.y - 1.2914855480f * oklab.z,
+    };
+    f32 lms[3] = {0};
+    for (int i = 0; i < 3; i += 1) lms[i] = lms_cube_root[i] * lms_cube_root[i] * lms_cube_root[i];
+
+    f32 linear[3] = {
+         4.0767416621f * lms[0] - 3.3077115913f * lms[1] + 0.2309699292f * lms[2],
+        -1.2684380046f * lms[0] + 2.6097574011f * lms[1] - 0.3413193965f * lms[2],
+        -0.0041960863f * lms[0] - 0.7034186147f * lms[1] + 1.7076147010f * lms[2],
+    };
+    f32 encoded[3] = {0};
+    for (int i = 0; i < 3; i += 1) {
+        f32 channel = CLAMP(linear[i], 0.f, 1.f);
+        encoded[i] = channel <= 0.0031308f ? 12.92f * channel : 1.055f * expf(logf(channel) / 2.4f) - 0.055f;
+        encoded[i] = CLAMP(encoded[i], 0.f, 1.f);
+    }
+
+    V4 srgb = { .x = encoded[0], .y = encoded[1], .z = encoded[2], .w = CLAMP(oklab.w, 0.f, 1.f) };
+    return rgba_hex_from_float(srgb);
 }
 
 static V4 rgba_float_from_hex(u32 hex) {
@@ -2129,37 +2504,36 @@ static cpu_draw_Font cpu_draw_font_from_bdf(const void *bdf, u64 bdf_size) {
         memcpy(platform_glyph->bytes, bdf_glyph->bytes, sizeof bdf_glyph->bytes);
     }
 
-    // boxed question mark mapped to codepoint 127, for unknown codepoints
-    cpu_draw_Glyph *g = &font.glyphs[127 - 32];
-    *g = font.glyphs['?' - 32];
+    cpu_draw_Glyph *unknown_codepoint_glyph = &font.glyphs[127 - 32];
+    *unknown_codepoint_glyph = font.glyphs['?' - 32];
     for (u64 byte = 0; byte < CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8; byte += 1) {
-        g->bytes[byte] = 0xff;
+        unknown_codepoint_glyph->bytes[byte] = 0xff;
     }
     for (u64 byte = 0; byte < CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8; byte += 1) {
-        g->bytes[(u64)(g->bound_height - 1) * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + byte] = 0xff;
+        unknown_codepoint_glyph->bytes[(u64)(unknown_codepoint_glyph->bound_height - 1) * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + byte] = 0xff;
     }
-    for (u64 row = 0; row < (u64)g->bound_height; row += 1) {
-        g->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8] |= 0x80;
+    for (u64 row = 0; row < (u64)unknown_codepoint_glyph->bound_height; row += 1) {
+        unknown_codepoint_glyph->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8] |= 0x80;
     }
-    for (u64 row = 0; row < (u64)g->bound_height; row += 1) {
-        u64 last_pixel = (u64)g->bound_width - 1;
-        u8 *bits = &g->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + last_pixel / 8];
+    for (u64 row = 0; row < (u64)unknown_codepoint_glyph->bound_height; row += 1) {
+        u64 last_pixel = (u64)unknown_codepoint_glyph->bound_width - 1;
+        u8 *bits = &unknown_codepoint_glyph->bytes[row * CPU_DRAW_GLYPH_MAX_WIDTH_OVER_8 + last_pixel / 8];
         *bits |= 1 << (7 - (last_pixel & 7));
     }
 
     return font;
 }
 
-static V2 cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size) {
+static Text_Measurement cpu_draw_platform_measure_text(const cpu_draw_Font *font, String text, f32 font_size) {
     assert(font->height > 0);
     // TODO(felix)
     assert(font->height == (int)roundf(font_size));
 
     int width = 0;
     cpu_draw_text((cpu_draw_Surface){0}, font, 0, 0, 0, text.data, (int)text.count, &width);
-    V2 result = {
-        .x = (f32)width,
-        .y = (f32)font->ascent,
+    Text_Measurement result = {
+        .size = { .x = (f32)width, .y = (f32)font->ascent },
+        .ascent = (f32)font->ascent,
     };
     return result;
 }
@@ -2320,8 +2694,8 @@ static const char *cstring_print(Arena *arena, const char *format, ...) {
     return builder.data;
 }
 
-// Only bases <= 10
 static String string_from_int_base(Arena *arena, i64 _num, u8 base) {
+    assert(base <= 10);
     i64 num = _num;
 
     u64 count = num < 0 ? 1 : 0;
@@ -2393,7 +2767,7 @@ static void string_builder_print_(Arena *arena, String_Builder *builder, const c
     va_end(arguments_1);
 
     if ((u64)bytes_printed >= buffer_size) {
-        u64 needed_unused = (u64)bytes_printed + 1; // for null terminator
+        u64 needed_unused = (u64)bytes_printed + sizeof((char)'\0');
         string_builder_reserve_unused(arena, builder, needed_unused);
 
         buffer = &builder->data[builder->count];
@@ -2735,7 +3109,7 @@ static Os_Process_Result os_process_run(Arena *arena, const char **arguments, co
         pid_t pid = pipe_ok ? fork() : -1;
         if (pipe_ok && pid < 0) {
             log_error("unable to fork() to start process '%s' (errno=%d)", arguments[0], errno);
-        } else if (pid == 0) { // child
+        } else if (pid == 0) {
             if (capture_output) {
                 dup2(output_pipe[PIPE_WRITE_END], STANDARD_OUTPUT);
                 close(output_pipe[PIPE_READ_END]);
@@ -3057,12 +3431,6 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
     [Build_Linker_CLANG][BASE_OS_MACOS] = {
         "clang",
         // TODO(felix): Move to META(framework "") directive (see what the Odin syntax is).
-        // "-framework", "CoreFoundation",
-        // "-framework", "Metal",
-        // "-framework", "Cocoa",
-        // "-framework", "Metalkit",
-        // "-framework", "Quartz",
-        // "-framework", "AudioToolbox",
         0,
     },
     [Build_Linker_CLANG][BASE_OS_IOS_DEVICE] = {
@@ -3078,7 +3446,7 @@ static const char *build_linker_initial_command[Build_Linker_COUNT][BASE_OS_COUN
         "--target=wasm32",
         "-nostdlib",
         "-Wl,--no-entry",
-        "-Wl,--allow-undefined", // NOTE(felix): consider --allow-undefined-file for explicit whitelist
+        "-Wl,--allow-undefined", // TODO(felix): Consider --allow-undefined-file for an explicit list.
         "-Wl,--stack-first",
         "-Wl,-z,stack-size=1048576", // NOTE(felix): 1mb matches windows. I ran into stack overflow on macOS but not on Windows for some reason--on the same project, in the same browser
         0,
@@ -3332,10 +3700,6 @@ static Build_Condition build_evaluate_preprocessor_condition(Arena *arena, const
     return condition;
 }
 
-// The metaprogram reads either a:
-// known group (group_unknown_reason == 0): the compiler builds it, so the metaprogram acts on everything; or
-// unknown group (group_unknown_reason != 0): the compiler maybe builds it, so the metaprogram reads it, but `META(...)` is an error, `#define` and `#undef` make their macro unknown, and `#error` has no effect.
-// The metaprogram doesn't read a group the compiler skips.
 typedef struct {
     clex_Conditional chain;
     Build_Unknown_Reason_Id group_unknown_reason;
@@ -3674,7 +4038,7 @@ static u32 build_default_everything(Arena *scratch_arena, const char *program_na
             if (target_os == BASE_OS_IOS_DEVICE) target_arch = BASE_ARCH_ARM64;
             u8 compiler_bit = (u8)(1 << compiler);
 
-            u64 platform_macro_count = sizeof build_platform_macros / sizeof build_platform_macros[0];
+            u64 platform_macro_count = COUNT_OF(build_platform_macros);
             for (u64 i = 0; i < platform_macro_count; i += 1) {
                 Build_Platform_Macro macro = build_platform_macros[i];
                 bool applies = (macro.os_mask & target_os) && (macro.compiler_mask & compiler_bit) && (macro.arch_mask & target_arch);
@@ -4340,18 +4704,17 @@ static u32 build_default_everything(Arena *scratch_arena, const char *program_na
         const char *syntax = target_os == BASE_OS_WINDOWS && (linker == Build_Linker_MSVC) ? "-out:" : "-o";
         const char *extension = build_binary_extension[target_os];
 
-        const char *output_name = target_os == BASE_OS_WASM ? "module" : program_name;
         const char *output = 0;
         bool app_folder_ok = true;
         if (target_os & BASE_OS_ANY_APPLE) {
-            const char *app_folder = cstring_print(scratch.arena, "%s%c%s.app", build_folder, path_separator, output_name);
+            const char *app_folder = cstring_print(scratch.arena, "%s%c%s.app", build_folder, path_separator, program_name);
             if (!fs_exists(app_folder)) {
                 app_folder_ok = fs_make_folder(app_folder);
                 if (!app_folder_ok) log_error("failure making folder '%s'", app_folder);
             }
-            output = cstring_print(scratch.arena, "%s%s.app%c%s", syntax, output_name, path_separator, output_name);
+            output = cstring_print(scratch.arena, "%s%s.app%c%s", syntax, program_name, path_separator, program_name);
         }
-        else output = cstring_print(scratch.arena, "%s%s.%s", syntax, output_name, extension);
+        else output = cstring_print(scratch.arena, "%s%s.%s", syntax, program_name, extension);
         build_push_argument(&link, output);
 
         if (app_folder_ok) {
@@ -4366,7 +4729,7 @@ static u32 build_default_everything(Arena *scratch_arena, const char *program_na
             if (!glue_ok) log_error("failed reading '%s'", glue_path);
 
             bool glue_written = false;
-            const char *glue_output_path = cstring_print(scratch.arena, "%s%cmodule.js", build_folder, path_separator);
+            const char *glue_output_path = cstring_print(scratch.arena, "%s%c%s.js", build_folder, path_separator, program_name);
             if (glue_ok) {
                 fs_remove_file(glue_output_path);
                 glue_written = os_write_entire_file(glue_output_path, glue.data, glue.count);
@@ -4619,14 +4982,18 @@ static u32 gpu__slot_from_id(const GPU_Cache *cache, u32 id, bool *ok) {
 #define UI_IMPLEMENTATION
 #include "base/ui.h"
 
-static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame) {
-    ui->window_size[ui_X] = frame->window_size.x - frame->safe_area_inset_left - frame->safe_area_inset_right;
-    ui->window_size[ui_Y] = frame->window_size.y - frame->safe_area_inset_top - frame->safe_area_inset_bottom;
+static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame, f32 scale) {
+    ui->scale = scale;
+    Platform *platform = ui->user_data;
+    platform->cursor_shape = Cursor_Shape_POINTER;
+
+    ui->window_size[ui_X] = (frame->window_size.x - frame->safe_area_inset_left - frame->safe_area_inset_right) / scale;
+    ui->window_size[ui_Y] = (frame->window_size.y - frame->safe_area_inset_top - frame->safe_area_inset_bottom) / scale;
     assert(ui->window_size[ui_X] != 0.f);
     assert(ui->window_size[ui_Y] != 0.f);
 
-    ui->mouse_position[ui_X] = frame->mouse_position.x;
-    ui->mouse_position[ui_Y] = frame->mouse_position.y;
+    ui->mouse_position[ui_X] = frame->mouse_position.x / scale;
+    ui->mouse_position[ui_Y] = frame->mouse_position.y / scale;
 
     _Static_assert(sizeof ui->mouse_clicked == sizeof frame->mouse_clicked, "Base and UI types must be identical.");
     memcpy(ui->mouse_clicked, frame->mouse_clicked, sizeof ui->mouse_clicked);
@@ -4634,14 +5001,1558 @@ static ui_Box *base_ui_begin(ui_State *ui, App_Frame_Info *frame) {
     _Static_assert(sizeof ui->mouse_down == sizeof frame->mouse_down, "Base and UI types must be identical.");
     memcpy(ui->mouse_down, frame->mouse_down, sizeof ui->mouse_down);
 
+    enum { MOUSE_WHEEL_STEP_LOGICAL = 60 };
+    ui->scroll_offset[ui_X] = 0;
+    ui->scroll_offset[ui_Y] = -frame->scroll * (f32)MOUSE_WHEEL_STEP_LOGICAL * frame->dpi_scale / scale;
+
+    _Static_assert(sizeof ui->key_down == sizeof frame->key_down, "Base and UI types must be identical.");
+    memcpy(ui->key_down, frame->key_down, sizeof ui->key_down);
+
     _Static_assert(sizeof ui->key_pressed == sizeof frame->key_pressed, "Base and UI types must be identical.");
     memcpy(ui->key_pressed, frame->key_pressed, sizeof ui->key_pressed);
 
     ui_begin(ui);
-    ui_Box *root = ui_push(ui, 0, ui_Y, 0);
-    root->rectangle.position[ui_X] = frame->safe_area_inset_left;
-    root->rectangle.position[ui_Y] = frame->safe_area_inset_top;
+    ui_Box *root = ui_push(ui, ui_Y, 0);
+    root->rectangle.position[ui_X] = frame->safe_area_inset_left / scale;
+    root->rectangle.position[ui_Y] = frame->safe_area_inset_top / scale;
     return root;
+}
+
+static const ui_Style base_ui__push_button_style = {
+    .font_size = 13.f,
+    .padding = { [ui_Side_LEFT] = 14.f, [ui_Side_TOP] = 2.f, [ui_Side_RIGHT] = 14.f, [ui_Side_BOTTOM] = 2.f },
+    .child_alignment = { [ui_X] = ui_Align_CENTER, [ui_Y] = ui_Align_CENTER },
+    .border_width = 1.f,
+    .border_radius = 4.f,
+};
+
+typedef u8 Base_UI_Push_Button_Look;
+enum {
+    Base_UI_Push_Button_Look_PLAIN,
+    Base_UI_Push_Button_Look_DEFAULT,
+    Base_UI_Push_Button_Look_INSET,
+
+    Base_UI_Push_Button_Look_COUNT,
+};
+
+static const Base_UI_Colors base_ui__push_button_colors[Base_UI_Push_Button_Look_COUNT][Base_UI_State_COUNT] = {
+    [Base_UI_Push_Button_Look_PLAIN] = {
+        [Base_UI_State_NORMAL]  = { .background = 0xffffffff, .text = 0x000000ff, .border = 0x9a9a9aff },
+        [Base_UI_State_PRESSED] = { .background = 0xd4d4d4ff, .text = 0x000000ff, .border = 0x707070ff },
+        [Base_UI_State_DISABLED] = { .background = 0xf6f6f6ff, .text = 0x000000ff, .border = 0xc4c4c4ff },
+    },
+    [Base_UI_Push_Button_Look_DEFAULT] = {
+        [Base_UI_State_NORMAL]  = { .background = 0x74b6f7ff, .text = 0x000000ff, .border = 0x4a8bd6ff },
+        [Base_UI_State_PRESSED] = { .background = 0x3f8ae6ff, .text = 0x000000ff, .border = 0x2c68b4ff },
+        [Base_UI_State_DISABLED] = { .background = 0xf6f6f6ff, .text = 0x000000ff, .border = 0xc4c4c4ff },
+    },
+    [Base_UI_Push_Button_Look_INSET] = {
+        [Base_UI_State_NORMAL]  = { .background = 0xffffffff, .text = 0x000000ff, .border = 0x9a9a9aff },
+        [Base_UI_State_PRESSED] = { .background = 0x8a8a8aff, .text = 0xffffffff, .border = 0x5e5e5eff },
+        [Base_UI_State_DISABLED] = { .background = 0xf6f6f6ff, .text = 0x000000ff, .border = 0xc4c4c4ff },
+    },
+};
+
+static void base_ui__push_button_colors_set(ui_Box *box, Base_UI_Push_Button_Look look, bool pressed_down) {
+    Base_UI_State state = pressed_down ? Base_UI_State_PRESSED : Base_UI_State_NORMAL;
+    if (box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT) state = Base_UI_State_DISABLED;
+    Base_UI_Colors colors = base_ui__push_button_colors[look][state];
+    box->style.bg_color = colors.background;
+    box->style.fg_color = colors.text;
+    box->style.border_color = colors.border;
+}
+
+static const u32 base_ui__bezel_gradient_border_color = 0xa5a5a5ff;
+static const u32 base_ui__bezel_gradient_color = 0xf4f4f4ff;
+static const u32 base_ui__bezel_gradient_pressed_color = 0xd4d4d4ff;
+static const u32 base_ui__bezel_textured_border_color = 0x787878ff;
+static const u32 base_ui__bezel_textured_color = 0xd4d4d4ff;
+static const u32 base_ui__bezel_textured_disabled_color = 0xe4e4e4ff;
+static const u32 base_ui__bezel_textured_pressed_color = 0xb4b4b4ff;
+static const u32 base_ui__column_header_bottom_color = 0xa8d4f4ff;
+static const u32 base_ui__column_header_separator_color = 0xc8c8c8ff;
+static const u32 base_ui__column_header_separator_sorted_color = 0x7c9ed6ff;
+static const u32 base_ui__column_header_top_color = 0xd9ecfaff;
+static const u32 base_ui__column_header_top_pressed_color = 0xc2daf2ff;
+static const u32 base_ui__column_headers_bottom_color = 0xecececff;
+static const u32 base_ui__column_headers_line_color = 0xb5b5b5ff;
+static const u32 base_ui__column_headers_top_color = 0xffffffff;
+static const u32 base_ui__combo_box_divider_color = 0x8a8a8aff;
+static const u32 base_ui__combo_box_field_color = 0xffffffff;
+static const u32 base_ui__control_border_color = 0x8a8a8aff;
+static const u32 base_ui__control_color = 0xffffffff;
+static const u32 base_ui__control_disabled_border_color = 0xc4c4c4ff;
+static const u32 base_ui__control_disabled_color = 0xf6f6f6ff;
+static const u32 base_ui__control_pressed_color = 0xd4d4d4ff;
+static const u32 base_ui__disabled_text_color = 0xa0a0a0ff;
+static const u32 base_ui__disclosure_triangle_color = 0x6e6e6eff;
+static const u32 base_ui__disclosure_triangle_pressed_color = 0x222222ff;
+static const u32 base_ui__document_tab_close_hovered_color = 0x00000026;
+static const u32 base_ui__document_tab_close_text_color = 0x444444ff;
+static const u32 base_ui__document_tab_selected_bottom_color = 0xbfbfbfff;
+static const u32 base_ui__document_tab_selected_text_color = 0x333333ff;
+static const u32 base_ui__document_tab_selected_top_color = 0xccccccff;
+static const u32 base_ui__document_tab_separator_color = 0x8d8d8dff;
+static const u32 base_ui__document_tab_text_color = 0x555555ff;
+static const u32 base_ui__document_tabs_add_text_color = 0x555555ff;
+static const u32 base_ui__document_tabs_add_text_pressed_color = 0x222222ff;
+static const u32 base_ui__document_tabs_bottom_color = 0xa1a1a1ff;
+static const u32 base_ui__document_tabs_top_color = 0xb9b9b9ff;
+static const u32 base_ui__focus_ring_color = 0x3b8ef0ff;
+static const u32 base_ui__list_background_color = 0xffffffff;
+static const u32 base_ui__list_border_color = 0xb8b8b8ff;
+static const u32 base_ui__list_insertion_circle_color = 0xffffffff;
+static const u32 base_ui__list_insertion_color = 0x3875d7ff;
+static const u32 base_ui__list_selection_bottom_colors[2] = { 0x9caac5ff, 0x3c89d0ff };
+static const u32 base_ui__list_selection_flat_colors[2] = { 0xd4d4d4ff, 0x3875d7ff };
+static const u32 base_ui__list_selection_top_colors[2] = { 0xbdc7dcff, 0x6db2e3ff };
+static const u32 base_ui__list_stripe_color = 0xf3f6faff;
+static const u32 base_ui__menu_border_color = 0xb4b4b4ff;
+static const u32 base_ui__menu_color = 0xfafafaff;
+static const u32 base_ui__menu_highlight_color = 0x3d8ef0ff;
+static const u32 base_ui__menu_shadow_color = 0x00000030;
+static const u32 base_ui__radio_button_dot_color = 0x1f1f1fff;
+static const u32 base_ui__scroll_bar_arrow_border_color = 0xa5a5a5ff;
+static const u32 base_ui__scroll_bar_arrow_color = 0xe8e8e8ff;
+static const u32 base_ui__scroll_bar_arrow_pressed_color = 0xc4c4c4ff;
+static const u32 base_ui__scroll_bar_arrow_text_color = 0x333333ff;
+static const u32 base_ui__scroll_bar_thumb_border_color = 0x2f6fbfff;
+static const u32 base_ui__scroll_bar_thumb_bottom_color = 0x96dafeff;
+static const u32 base_ui__scroll_bar_thumb_top_color = 0x4a9ce6ff;
+static const u32 base_ui__scroll_bar_track_bottom_color = 0xf8f8f8ff;
+static const u32 base_ui__scroll_bar_track_top_color = 0xc8c8c8ff;
+static const u32 base_ui__selection_border_color = 0x2c6fc0ff;
+static const u32 base_ui__selection_color = 0x3d8ef0ff;
+static const u32 base_ui__selection_disabled_border_color = 0xa8a8a8ff;
+static const u32 base_ui__selection_disabled_color = 0xc4c4c4ff;
+static const u32 base_ui__selection_pressed_color = 0x2c6fc0ff;
+static const u32 base_ui__selection_text_color = 0xffffffff;
+static const u32 base_ui__separator_dark_color = 0xbdbdbdff;
+static const u32 base_ui__separator_light_color = 0xf9f9f9ff;
+static const u32 base_ui__slider_tick_color = 0x777777ff;
+static const u32 base_ui__slider_tick_disabled_color = 0xc0c0c0ff;
+static const u32 base_ui__slider_track_border_color = 0x8f8f8fff;
+static const u32 base_ui__slider_track_border_disabled_color = 0xd0d0d0ff;
+static const u32 base_ui__slider_track_color = 0xc4c4c4ff;
+static const u32 base_ui__slider_track_disabled_color = 0xe4e4e4ff;
+static const u32 base_ui__split_divider_color = 0xb0b0b0ff;
+static const u32 base_ui__tab_toolbar_border_color = 0xb3b3b3ff;
+static const u32 base_ui__tab_toolbar_color = 0xd6d6d6ff;
+static const u32 base_ui__tab_toolbar_pressed_color = 0xc8c8c8ff;
+static const u32 base_ui__tab_view_border_color = 0xc2c2c2ff;
+static const u32 base_ui__tab_view_color = 0xe3e3e3ff;
+static const u32 base_ui__text_color = 0x000000ff;
+
+static const f32 base_ui__focus_ring_width_in_points = 2.f;
+
+static const f32 base_ui__checkbox_square_size_in_points = 14.f;
+
+static void base_ui_bezel_gradient(ui_Box *control) {
+    bool disabled = !!(control->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    bool pressed_down = !!(control->flags & ui_Flag_HELD_OVER);
+    u32 background = pressed_down ? base_ui__bezel_gradient_pressed_color : base_ui__bezel_gradient_color;
+    if (disabled) background = base_ui__control_disabled_color;
+
+    control->flags |= ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER;
+    control->style.bg_color = background;
+    control->style.border_radius = 0;
+    control->style.padding[ui_Side_LEFT] = control->style.padding[ui_Side_RIGHT] = 6.f;
+    control->style.border_color = base_ui__bezel_gradient_border_color;
+    control->style.border_width = 1.f;
+    control->user_data = Base_UI_Draw_NONE;
+}
+
+static void base_ui_bezel_none(ui_Box *control) {
+    control->flags &= ~(ui_Flags)(ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER);
+    bool is_popup_button = (control->user_data & 0xff) == Base_UI_Draw_POPUP_BUTTON;
+    if (is_popup_button) {
+        control->user_data |= (u64)1 << 9;
+        control->style.padding[ui_Side_LEFT] = 14.f;
+        control->style.padding[ui_Side_RIGHT] = 2.f;
+    }
+}
+
+static void base_ui_bezel_textured(ui_Box *control) {
+    bool disabled = !!(control->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    bool pressed_down = !!(control->flags & ui_Flag_HELD_OVER);
+    bool is_pushed_in_segment = (control->user_data & 0xff) == Base_UI_Draw_SEGMENT && ((control->user_data >> 8) & 1);
+    if (!is_pushed_in_segment) control->style.bg_color = pressed_down ? base_ui__bezel_textured_pressed_color : base_ui__bezel_textured_color;
+    if (disabled) control->style.bg_color = base_ui__bezel_textured_disabled_color;
+
+    control->flags |= ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER;
+    control->style.border_radius = 3.f;
+    control->style.border_color = base_ui__bezel_textured_border_color;
+    control->style.border_width = 1.f;
+    control->user_data |= (u64)1 << 63;
+}
+
+static ui_Box *base_ui_button(ui_State *ui, Base_UI_Button_Role role, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_Flag_DRAW_TEXT | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    // TODO(felix): Maybe pulse the default button, as Aqua did, once we have animate.h.
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *frame = &platform->frame;
+    App_Key role_key = App_Key_NIL;
+    if (role == Base_UI_Button_Role_DEFAULT) role_key = App_Key_RETURN;
+    if (role == Base_UI_Button_Role_CANCEL) role_key = App_Key_ESCAPE;
+    bool disabled = !!(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    bool role_key_is_down = !disabled && role_key != App_Key_NIL && frame->key_down[role_key];
+    bool role_key_is_pressed = !disabled && role_key != App_Key_NIL && frame->key_pressed[role_key];
+    if (role_key_is_pressed) box->flags |= ui_Flag_CLICKED;
+
+    bool pressed_down = (box->flags & ui_Flag_HELD_OVER) || role_key_is_down;
+
+    bool other_box_is_held = ui->held_box != 0 && ui->held_box != box;
+    bool looks_default = role == Base_UI_Button_Role_DEFAULT && !other_box_is_held;
+    box->style = base_ui__push_button_style;
+    base_ui__push_button_colors_set(box, looks_default ? Base_UI_Push_Button_Look_DEFAULT : Base_UI_Push_Button_Look_PLAIN, pressed_down);
+
+    f32 min_width = 68.f;
+    box->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIT, .min = min_width };
+    return box;
+}
+
+static ui_Box *base_ui_checkbox(ui_State *ui, bool *checked, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    if (box->flags & ui_Flag_CLICKED) *checked = !*checked;
+
+    f32 square_and_gap = base_ui__checkbox_square_size_in_points + 6.f;
+    ui_Style style = {
+        .font_size = 13.f,
+        .padding = { [ui_Side_LEFT] = square_and_gap + base_ui__focus_ring_width_in_points, [ui_Side_TOP] = 2.f, [ui_Side_RIGHT] = 4.f, [ui_Side_BOTTOM] = 2.f },
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .fg_color = base_ui__text_color,
+        .border_radius = 4.f,
+    };
+    box->style = style;
+    box->user_data = (u64)Base_UI_Draw_CHECKBOX | ((u64)*checked << 8);
+    return box;
+}
+
+static f32 base_ui__drag_grab_offset;
+
+static f32 base_ui_drag_position(ui_State *ui, ui_Box *box, int axis, f32 position) {
+    f32 mouse = ui->mouse_position[axis];
+    if (box->flags & ui_Flag_PRESSED_LEFT) base_ui__drag_grab_offset = mouse - position;
+    f32 dragged_position = (box->flags & ui_Flag_HELD_LEFT) ? mouse - base_ui__drag_grab_offset : position;
+    return dragged_position;
+}
+
+static ui_Box *base_ui_column_header(ui_State *ui, f32 *width, Base_UI_Sort sort, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *cell = ui_pushv(ui, ui_X | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    bool is_sorted = sort != Base_UI_Sort_NONE;
+    bool pressed_down = !!(cell->flags & ui_Flag_HELD_OVER);
+    ui_Style style = {
+        .font_size = 12.f,
+        .padding = { [ui_Side_LEFT] = 5.f },
+        .child_gap = 2.f,
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .bg_color = pressed_down ? base_ui__column_header_top_pressed_color : base_ui__column_header_top_color,
+        .fg_color = base_ui__text_color,
+    };
+    cell->style = style;
+    cell->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = *width };
+    cell->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    if (is_sorted || pressed_down) {
+        cell->flags |= ui_Flag_DRAW_BACKGROUND;
+        cell->user_data = base_ui_gradient_user_data(ui_Y, base_ui__column_header_bottom_color);
+    }
+
+    ui_Box *previous_parent = ui_set_parent(ui, cell);
+    ui_Box *text = ui_push(ui, ui_Flag_DRAW_TEXT | ui_Flag_TRUNCATE_TEXT | ui_Flag_CLIP_TO_PARENT, "%s###", cell->display_string);
+    text->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    text->style.font_size = cell->style.font_size;
+    // TODO(felix): Draw the sort arrow as a triangle once we have svg.h.
+    if (is_sorted) {
+        ui_Box *arrow = ui_push(ui, ui_Flag_DRAW_TEXT, sort == Base_UI_Sort_ASCENDING ? "^###" : "v###");
+        arrow->style.font_size = 9.f;
+        arrow->style.padding[ui_Side_RIGHT] = 4.f;
+    }
+    ui_Box *separator = ui_push(ui, ui_Flag_DRAW_BACKGROUND, 0);
+    separator->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 1.f };
+    separator->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    separator->style.bg_color = is_sorted ? base_ui__column_header_separator_sorted_color : base_ui__column_header_separator_color;
+
+    f32 handle_width = 6.f;
+    ui_Box *handle = ui_push(ui, ui_Flag_FLOATING | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE, "##base ui column resize %u", cell->key_hash);
+    handle->float_offset_from_parent_top_left[ui_X] = *width - 0.5f * handle_width;
+    handle->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = handle_width };
+    handle->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = MAX(cell->rectangle.size[ui_Y], 1.f) };
+    f32 cell_left = cell->rectangle.position[ui_X];
+    f32 right_edge = base_ui_drag_position(ui, handle, ui_X, cell_left + *width);
+    if (handle->flags & ui_Flag_HELD_LEFT) *width = MAX(right_edge - cell_left, 16.f);
+    Platform *platform = ui->user_data;
+    if (handle->flags & (ui_Flag_HOVERED | ui_Flag_HELD_LEFT)) platform->cursor_shape = Cursor_Shape_RESIZE_X;
+    ui_set_parent(ui, previous_parent);
+    return cell;
+}
+
+static ui_Box *base_ui_column_headers(ui_State *ui) {
+    ui_Box *strip = ui_push(ui, ui_Y | ui_Flag_SCROLL_X | ui_Flag_CLIP_TO_PARENT, 0);
+    strip->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    ui_Box *previous_parent = ui_set_parent(ui, strip);
+    ui_Box *row = ui_push(ui, ui_X | ui_Flag_DRAW_BACKGROUND, 0);
+    row->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    row->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 16.f };
+    row->style.bg_color = base_ui__column_headers_top_color;
+    row->user_data = base_ui_gradient_user_data(ui_Y, base_ui__column_headers_bottom_color);
+    ui_Box *line = ui_push(ui, ui_Flag_DRAW_BACKGROUND, 0);
+    line->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    line->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 1.f };
+    line->style.bg_color = base_ui__column_headers_line_color;
+    ui_set_parent(ui, previous_parent);
+    return row;
+}
+
+typedef struct {
+    ui_Box *container;
+    i32 item;
+    f32 press_position;
+    f32 grab_offset;
+    i32 insertion_index;
+    f32 insertion_position;
+    bool is_dragging;
+    bool has_snapshot;
+} Base_UI_Reorder;
+
+static Base_UI_Reorder base_ui__reorder;
+
+// NOTE(felix): The dragged item is drawn once into a snapshot when its drag starts, and the snapshot follows the mouse along the axis, see-through. So the image stays when a row scrolls out of a virtualised list.
+// TODO(felix): Consider a system that doesn't require this "snapshotting".
+typedef struct {
+    ui_Box *box_to_snapshot;
+    int axis;
+    f32 snapshot_position;
+    f32 position;
+    bool is_shown;
+} Base_UI_Drag_Image;
+
+static Base_UI_Drag_Image base_ui__drag_image;
+
+static bool base_ui__box_is_inside(ui_Box *box, ui_Box *ancestor) {
+    enum { MAX_DEPTH = 256 };
+    bool is_inside = false;
+    int depth = 0;
+    for (ui_Box *b = box; b != 0 && !is_inside && depth < MAX_DEPTH; b = b->parent) {
+        is_inside = b == ancestor;
+        depth += 1;
+    }
+    return is_inside;
+}
+
+typedef struct {
+    i32 moved_from;
+    i32 moved_to;
+} Base_UI_Reorder_Move;
+
+static Base_UI_Reorder_Move base_ui__reorder_container(ui_State *ui, ui_Box *container, int axis, bool is_reorderable) {
+    Platform *platform = ui->user_data;
+    App_Frame_Info *app_frame = &platform->frame;
+    int cross_axis = !axis;
+    Base_UI_Reorder *reorder = &base_ui__reorder;
+    Base_UI_Drag_Image *image = &base_ui__drag_image;
+    Base_UI_Reorder_Move move = { .moved_from = -1, .moved_to = -1 };
+    if (reorder->container == container) {
+        f32 mouse = ui->mouse_position[axis];
+        bool mouse_is_down = app_frame->mouse_down[App_Mouse_Button_LEFT];
+        bool moved_far_enough = fabsf(mouse - reorder->press_position) > 3.f;
+        if (mouse_is_down && moved_far_enough && is_reorderable) reorder->is_dragging = true;
+
+        if (reorder->is_dragging) {
+            f32 view_start = container->rectangle.position[axis];
+            f32 view_size = container->rectangle.size[axis];
+            if (ui__scrolls_on_axis(container, axis)) {
+                f32 edge = 16.f;
+                f32 scroll_distance = 400.f * app_frame->seconds_since_last_frame;
+                if (mouse < view_start + edge) container->scroll_offset[axis] -= scroll_distance;
+                if (mouse > view_start + view_size - edge) container->scroll_offset[axis] += scroll_distance;
+            }
+
+            image->is_shown = true;
+            image->axis = axis;
+            image->position = mouse - reorder->grab_offset;
+
+            // TODO(felix): Draw the insertion mark's circle as a ring once we have svg.h.
+            ui_Box *parent = ui_set_parent(ui, container);
+            f32 mark_position = reorder->insertion_position - view_start;
+            f32 circle_size = 7.f;
+            f32 line_thickness = 2.f;
+            ui_Box *line = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND, 0);
+            line->float_offset_from_parent_top_left[cross_axis] = circle_size;
+            line->float_offset_from_parent_top_left[axis] = mark_position - 0.5f * line_thickness;
+            line->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = MAX(container->rectangle.size[cross_axis] - circle_size, 0) };
+            line->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = line_thickness };
+            line->style.bg_color = base_ui__list_insertion_color;
+            ui_Box *circle = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER, 0);
+            circle->float_offset_from_parent_top_left[cross_axis] = 1.f;
+            circle->float_offset_from_parent_top_left[axis] = mark_position - 0.5f * circle_size;
+            circle->size[ui_X] = circle->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = circle_size };
+            circle->style.bg_color = base_ui__list_insertion_circle_color;
+            circle->style.border_color = base_ui__list_insertion_color;
+            circle->style.border_width = line_thickness;
+            circle->style.border_radius = 0.5f * circle_size;
+            ui_set_parent(ui, parent);
+        }
+
+        bool cancels = app_frame->key_pressed[App_Key_ESCAPE];
+        if (!mouse_is_down || cancels) {
+            i32 new_index = reorder->insertion_index > reorder->item ? reorder->insertion_index - 1 : reorder->insertion_index;
+            bool moves_item = reorder->is_dragging && !cancels && new_index != reorder->item;
+            if (moves_item) {
+                move.moved_from = reorder->item;
+                move.moved_to = new_index;
+            }
+            *reorder = (Base_UI_Reorder){0};
+            image->is_shown = false;
+        }
+    }
+    return move;
+}
+
+static void base_ui__reorder_item(ui_State *ui, ui_Box *container, int axis, u32 index, u32 first_index, ui_Box *item) {
+    Base_UI_Reorder *reorder = &base_ui__reorder;
+    f32 mouse = ui->mouse_position[axis];
+    f32 item_start = item->rectangle.position[axis];
+    f32 item_size = item->rectangle.size[axis];
+    if (item->flags & ui_Flag_PRESSED_LEFT) {
+        Base_UI_Reorder pressed = { .container = container, .item = (i32)index, .press_position = mouse, .grab_offset = mouse - item_start };
+        *reorder = pressed;
+    }
+    bool is_in_dragging_container = reorder->container == container && reorder->is_dragging;
+    if (is_in_dragging_container) {
+        if (index == first_index) {
+            reorder->insertion_index = (i32)index;
+            reorder->insertion_position = item_start;
+        }
+        if (mouse > item_start + 0.5f * item_size) {
+            reorder->insertion_index = (i32)index + 1;
+            reorder->insertion_position = item_start + item_size;
+        }
+    }
+    bool takes_snapshot = is_in_dragging_container && reorder->item == (i32)index && !reorder->has_snapshot;
+    if (takes_snapshot) {
+        base_ui__drag_image.box_to_snapshot = item;
+        reorder->has_snapshot = true;
+    }
+}
+
+static Base_UI_List_State base_ui__list_states[BASE_UI_MAX_LISTS];
+
+static Base_UI_List_Selection_Change base_ui__list_cursor_moved(Base_UI_List_State *state, u32 row, bool toggles, bool extends) {
+    u32 previous_cursor_row = state->cursor_row;
+    state->cursor_row = row;
+    if (!extends) state->anchor_row = row;
+    Base_UI_List_Selection_Change change = { .first_row = MIN(state->anchor_row, row), .last_row = MAX(state->anchor_row, row), .is_set = true, .toggles = toggles };
+    if (extends) {
+        change.cleared_first_row = MIN(state->anchor_row, previous_cursor_row);
+        change.cleared_row_count = MAX(state->anchor_row, previous_cursor_row) - change.cleared_first_row + 1;
+    } else if (!toggles) change.cleared_row_count = UINT32_MAX;
+    return change;
+}
+
+static f32 base_ui__list_row_height(Base_UI_List_State *state, u32 row, f32 average_height) {
+    bool is_recorded = row >= state->first_row && row - state->first_row < state->recorded_row_count;
+    f32 height = is_recorded ? state->recorded_row_heights[row - state->first_row] : 0;
+    return height > 0 ? height : average_height;
+}
+
+typedef struct {
+    u32 first_row;
+    f32 offset;
+} Base_UI_List_Position;
+
+static Base_UI_List_Position base_ui__list_position_settled(Base_UI_List_State *state, Base_UI_List_Position position, u32 row_count, f32 average_height, f32 view_height) {
+    Base_UI_List_Position settled = position;
+    settled.first_row = MIN(settled.first_row, row_count - 1);
+    while (settled.offset < 0 && settled.first_row > 0) {
+        settled.first_row -= 1;
+        settled.offset += base_ui__list_row_height(state, settled.first_row, average_height);
+    }
+    settled.offset = MAX(settled.offset, 0);
+    while (settled.first_row + 1 < row_count && settled.offset >= base_ui__list_row_height(state, settled.first_row, average_height)) {
+        settled.offset -= base_ui__list_row_height(state, settled.first_row, average_height);
+        settled.first_row += 1;
+    }
+
+    f32 filled = -settled.offset;
+    for (u32 row = settled.first_row; row < row_count && filled < view_height; row += 1) filled += base_ui__list_row_height(state, row, average_height);
+    if (filled < view_height) {
+        settled.offset -= view_height - filled;
+        while (settled.offset < 0 && settled.first_row > 0) {
+            settled.first_row -= 1;
+            settled.offset += base_ui__list_row_height(state, settled.first_row, average_height);
+        }
+        settled.offset = MAX(settled.offset, 0);
+    }
+    return settled;
+}
+
+typedef struct {
+    ui_Box *button;
+    ui_Box *menu_box;
+    u64 frame_id_of_last_draw;
+    u64 frame_id_of_open;
+    f32 menu_position[ui_Axis_COUNT];
+    f32 previous_mouse_position[ui_Axis_COUNT];
+    i32 highlighted_item;
+    bool is_tracking_opening_press;
+    bool mouse_was_down;
+    f32 seconds_on_scroll_arrow;
+    f32 seconds_until_next_scroll;
+} Base_UI_Popup_Menu;
+
+static Base_UI_Popup_Menu base_ui__popup_menu = { .highlighted_item = -1 };
+
+static Base_UI_List base_ui_list_begin(ui_State *ui, Base_UI_List_Flags flags, u32 *selected_row, u32 virtual_row_count, i32 row_to_reveal, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *frame = ui_pushv(ui, ui_X | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *app_frame = &platform->frame;
+
+    ui_Box *parent = ui_set_parent(ui, frame);
+    // TODO(felix): A horizontal scroll bar, and column headers that scroll across with the rows.
+    ui_Box *rows = ui_push(ui, ui_Y | ui_Flag_HOVERABLE | ui_Flag_FOCUSABLE | ui_Flag_SCROLL_X | ui_Flag_SCROLL_Y | ui_Flag_CLIP_TO_PARENT, "##base ui list rows %u", frame->key_hash);
+    rows->size[ui_X] = rows->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+
+    f32 view_height = rows->rectangle.size[ui_Y];
+    Base_UI_List_State *state = 0;
+    {
+        Base_UI_List_State *least_recently_used = &base_ui__list_states[0];
+        for (int i = 0; i < BASE_UI_MAX_LISTS; i += 1) {
+            Base_UI_List_State *candidate = &base_ui__list_states[i];
+            if (candidate->rows_key_hash == rows->key_hash) state = candidate;
+            if (candidate->frame_id_of_last_use < least_recently_used->frame_id_of_last_use) least_recently_used = candidate;
+        }
+        if (state == 0) {
+            state = least_recently_used;
+            Base_UI_List_State fresh = { .rows_key_hash = rows->key_hash };
+            *state = fresh;
+        }
+        state->frame_id_of_last_use = ui->frame_id;
+    }
+    bool is_virtual = virtual_row_count > 0;
+    u32 row_count = is_virtual ? virtual_row_count : state->row_count;
+    state->row_count = 0;
+
+    Base_UI_List_Selection_Change selection_change = {0};
+    bool keyboard_is_on_list = !!(rows->flags & ui_Flag_FOCUSED);
+    bool selects_multiple = !!(flags & Base_UI_List_Flag_SELECTION_MULTIPLE);
+    bool menu_is_open = base_ui__popup_menu.button != 0 && base_ui__popup_menu.frame_id_of_last_draw + 1 == ui->frame_id;
+    i32 arrow_step = menu_is_open ? 0 : (i32)app_frame->key_pressed[App_Key_DOWN] - (i32)app_frame->key_pressed[App_Key_UP];
+    if (selects_multiple && keyboard_is_on_list && row_count > 0) {
+        bool shift_is_down = app_frame->key_down[App_Key_SHIFT];
+        if (arrow_step != 0) {
+            u32 row = (u32)CLAMP((i32)state->cursor_row + arrow_step, 0, (i32)row_count - 1);
+            selection_change = base_ui__list_cursor_moved(state, row, false, shift_is_down);
+            row_to_reveal = (i32)row;
+        }
+        bool selects_all = app_frame->key_down[App_Key_CONTROL] && app_frame->key_pressed['A'];
+        if (selects_all) {
+            Base_UI_List_Selection_Change change = { .first_row = 0, .last_row = row_count - 1, .is_set = true };
+            selection_change = change;
+        }
+    }
+
+    bool moves_single_selection = selected_row != 0 && keyboard_is_on_list && row_count > 0 && arrow_step != 0;
+    if (moves_single_selection) {
+        *selected_row = (u32)CLAMP((i32)*selected_row + arrow_step, 0, (i32)row_count - 1);
+        row_to_reveal = (i32)*selected_row;
+    }
+
+    u32 first_row_to_build = 0;
+    u32 end_row_to_build = 0;
+    if (is_virtual) {
+
+        f32 recorded_total = 0;
+        u32 recorded_known = 0;
+        for (u32 i = 0; i < state->recorded_row_count; i += 1) {
+            if (state->recorded_row_heights[i] > 0) {
+                recorded_total += state->recorded_row_heights[i];
+                recorded_known += 1;
+            }
+        }
+        f32 average_height = recorded_known > 0 ? recorded_total / (f32)recorded_known : 20.f;
+        f32 view = view_height > 0 ? view_height : 400.f;
+
+        Base_UI_List_Position position = { .first_row = state->first_row, .offset = rows->scroll_offset[ui_Y] };
+        position = base_ui__list_position_settled(state, position, virtual_row_count, average_height, view);
+
+        bool reveals_row = row_to_reveal >= 0 && (u32)row_to_reveal < virtual_row_count;
+        if (reveals_row) {
+            u32 reveal = (u32)row_to_reveal;
+            u32 rows_in_view = (u32)(view / average_height) + 2;
+            bool is_above_view = reveal < position.first_row || (reveal == position.first_row && position.offset > 0);
+            bool is_far_below_view = reveal > position.first_row + rows_in_view;
+            if (is_above_view || is_far_below_view) {
+                position.first_row = reveal;
+                position.offset = 0;
+            } else {
+                f32 reveal_bottom = -position.offset;
+                for (u32 row = position.first_row; row <= reveal; row += 1) reveal_bottom += base_ui__list_row_height(state, row, average_height);
+                if (reveal_bottom > view) position.offset += reveal_bottom - view;
+            }
+            position = base_ui__list_position_settled(state, position, virtual_row_count, average_height, view);
+        }
+
+        f32 estimated_content_height = (f32)virtual_row_count * average_height;
+        if (estimated_content_height > view + 0.5f) {
+            f32 estimated_offset = (f32)position.first_row * average_height + position.offset;
+            ui_Box *bar = base_ui_scroll_bar(ui, &estimated_offset, view, estimated_content_height, ui_Y, "##base ui list scroll bar %u", frame->key_hash);
+            if (bar->flags & ui_Flag_CLICKED) {
+                position.first_row = (u32)MIN(floorf(estimated_offset / average_height), (f32)(virtual_row_count - 1));
+                position.offset = estimated_offset - (f32)position.first_row * average_height;
+                position = base_ui__list_position_settled(state, position, virtual_row_count, average_height, view);
+            }
+        }
+
+        first_row_to_build = position.first_row;
+        end_row_to_build = position.first_row;
+        f32 filled = -position.offset;
+        while (end_row_to_build < virtual_row_count && filled < view && end_row_to_build - first_row_to_build < BASE_UI_MAX_ROWS_IN_VIEW) {
+            filled += base_ui__list_row_height(state, end_row_to_build, average_height);
+            end_row_to_build += 1;
+        }
+
+        state->first_row = position.first_row;
+        rows->scroll_offset[ui_Y] = position.offset;
+    } else {
+        bool content_overflows = rows->content_size[ui_Y] > view_height + 0.5f;
+        if (content_overflows) base_ui_scroll_bar(ui, &rows->scroll_offset[ui_Y], view_height, rows->content_size[ui_Y], ui_Y, "##base ui list scroll bar %u", frame->key_hash);
+    }
+    state->recorded_row_count = 0;
+    if (flags & Base_UI_List_Flag_ROWS_STRIPED) rows->user_data = (u64)Base_UI_Draw_LIST_ROWS_STRIPED | ((u64)(first_row_to_build & 1) << 8);
+
+    bool mouse_went_down = ui->mouse_clicked[ui_Mouse_Button_LEFT] || ui->mouse_clicked[ui_Mouse_Button_RIGHT];
+    bool press_is_inside_list = mouse_went_down && base_ui__box_is_inside(ui->box_under_mouse, frame);
+    if (press_is_inside_list) {
+        ui->focused_box = rows;
+        rows->flags |= ui_Flag_FOCUSED;
+    }
+    bool is_focused = !!(rows->flags & ui_Flag_FOCUSED);
+    rows->flags &= ~(ui_Flags)ui_Flag_FOCUSED;
+    if (is_focused && (flags & Base_UI_List_Flag_FOCUS_RING)) frame->flags |= ui_Flag_FOCUSED;
+
+    ui_Style style = { .bg_color = base_ui__list_background_color, .border_color = base_ui__list_border_color, .border_width = 1.f };
+    frame->style = style;
+    frame->size[ui_X] = frame->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    if (frame->flags & ui_Flag_FOCUSED) frame->style.border_width = base_ui__focus_ring_width_in_points;
+
+    Base_UI_Reorder_Move move = base_ui__reorder_container(ui, rows, ui_Y, !!(flags & Base_UI_List_Flag_ROWS_REORDERABLE));
+    ui_set_parent(ui, parent);
+
+    Base_UI_List list = {
+        .frame = frame,
+        .box = rows,
+        .state = state,
+        .selected_row = selected_row,
+        .selection_change = selection_change,
+        .arrow_step = is_focused ? arrow_step : 0,
+        .row_moved_from = move.moved_from,
+        .row_moved_to = move.moved_to,
+        .row_to_reveal = row_to_reveal,
+        .first_row_to_build = first_row_to_build,
+        .end_row_to_build = end_row_to_build,
+        .row_count = first_row_to_build,
+        .flags = flags,
+        .is_focused = is_focused,
+        .is_virtual = is_virtual,
+    };
+    return list;
+}
+
+static ui_Box *base_ui_disclosure(ui_State *ui, bool *is_open, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_X | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+    if (box->flags & ui_Flag_CLICKED) *is_open = !*is_open;
+
+    bool pressed_down = !!(box->flags & ui_Flag_HELD_OVER);
+    ui_Style style = {
+        .font_size = 12.f,
+        .padding = { [ui_Side_LEFT] = 2.f, [ui_Side_TOP] = 1.f, [ui_Side_RIGHT] = 4.f, [ui_Side_BOTTOM] = 1.f },
+        .child_gap = 5.f,
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .fg_color = base_ui__text_color,
+        .border_radius = 3.f,
+    };
+    box->style = style;
+
+    // TODO(felix): Draw the triangle from svg.h.
+    ui_Box *previous_parent = ui_set_parent(ui, box);
+    ui_Box *triangle = ui_push(ui, ui_Flag_DRAW_TEXT, *is_open ? "v###" : ">###");
+    triangle->style.font_size = 10.f;
+    triangle->style.fg_color = pressed_down ? base_ui__disclosure_triangle_pressed_color : base_ui__disclosure_triangle_color;
+    triangle->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 10.f };
+    ui_Box *title = ui_push(ui, ui_Flag_DRAW_TEXT, "%s###", box->display_string);
+    title->style.font_size = box->style.font_size;
+    ui_set_parent(ui, previous_parent);
+    return box;
+}
+
+static ui_Box *base_ui_document_tab(ui_State *ui, Base_UI_Document_Tabs *tabs, bool selected, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *tab = ui_pushv(ui, ui_X | ui_Flag_DRAW_TEXT | ui_Flag_TRUNCATE_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+    u32 index = tabs->tab_count;
+    tabs->tab_count += 1;
+
+    ui_Style style = {
+        .font_size = 12.f,
+        .padding = { [ui_Side_LEFT] = 20.f, [ui_Side_RIGHT] = 20.f },
+        .child_alignment = { [ui_X] = ui_Align_CENTER, [ui_Y] = ui_Align_CENTER },
+        .bg_color = base_ui__document_tab_selected_top_color,
+        .fg_color = selected ? base_ui__document_tab_selected_text_color : base_ui__document_tab_text_color,
+    };
+    tab->style = style;
+    tab->size[ui_X] = tab->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    if (selected) {
+        tab->flags |= ui_Flag_DRAW_BACKGROUND;
+        tab->user_data = base_ui_gradient_user_data(ui_Y, base_ui__document_tab_selected_bottom_color);
+    }
+
+    ui_Box *previous_parent = ui_set_parent(ui, tab);
+    f32 tab_height = MAX(tab->rectangle.size[ui_Y], 1.f);
+    ui_Box *separator = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND, 0);
+    separator->float_offset_from_parent_top_left[ui_X] = MAX(tab->rectangle.size[ui_X] - 1.f, 0);
+    separator->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 1.f };
+    separator->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = tab_height };
+    separator->style.bg_color = base_ui__document_tab_separator_color;
+
+    // TODO(felix): Draw the close button's cross from svg.h.
+    f32 close_size = 14.f;
+    ui_Box *close = ui_push(ui, ui_Flag_FLOATING | ui_Flag_HOVERABLE, "x##base ui document tab close %u", tab->key_hash);
+    bool shows_close = (tab->flags & ui_Flag_HOVERED) || (close->flags & ui_Flag_HOVERED);
+    if (shows_close) close->flags |= ui_Flag_CLICKABLE | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_BACKGROUND;
+    close->float_offset_from_parent_top_left[ui_X] = 5.f;
+    close->float_offset_from_parent_top_left[ui_Y] = 0.5f * (tab_height - close_size);
+    close->size[ui_X] = close->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = close_size };
+    close->style.font_size = 11.f;
+    close->style.child_alignment[ui_X] = close->style.child_alignment[ui_Y] = ui_Align_CENTER;
+    close->style.border_radius = 0.5f * close_size;
+    close->style.bg_color = (close->flags & ui_Flag_HOVERED) ? base_ui__document_tab_close_hovered_color : 0;
+    close->style.fg_color = base_ui__document_tab_close_text_color;
+    if (shows_close && (close->flags & ui_Flag_CLICKED)) tabs->closed_tab = (i32)index;
+    ui_set_parent(ui, previous_parent);
+
+    base_ui__reorder_item(ui, tabs->box, ui_X, index, 0, tab);
+    return tab;
+}
+
+static Base_UI_Document_Tabs base_ui_document_tabs_begin(ui_State *ui, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *bar = ui_pushv(ui, ui_X | ui_Flag_DRAW_BACKGROUND | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+    f32 add_width = 24.f;
+    ui_Style style = { .padding = { [ui_Side_RIGHT] = 24.f }, .bg_color = base_ui__document_tabs_top_color };
+    bar->style = style;
+    bar->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    bar->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 20.f };
+    bar->user_data = base_ui_gradient_user_data(ui_Y, base_ui__document_tabs_bottom_color);
+
+    ui_Box *previous_parent = ui_set_parent(ui, bar);
+    // TODO(felix): Draw the add button's plus from svg.h.
+    ui_Box *add = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE, "+##base ui document tabs add %u", bar->key_hash);
+    add->float_offset_from_parent_top_left[ui_X] = MAX(bar->rectangle.size[ui_X] - add_width, 0);
+    add->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = add_width };
+    add->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 20.f };
+    add->style.font_size = 15.f;
+    add->style.child_alignment[ui_X] = add->style.child_alignment[ui_Y] = ui_Align_CENTER;
+    bool add_is_pressed_down = !!(add->flags & ui_Flag_HELD_OVER);
+    add->style.fg_color = add_is_pressed_down ? base_ui__document_tabs_add_text_pressed_color : base_ui__document_tabs_add_text_color;
+    Base_UI_Reorder_Move move = base_ui__reorder_container(ui, bar, ui_X, true);
+    ui_set_parent(ui, previous_parent);
+
+    Base_UI_Document_Tabs tabs = {
+        .box = bar,
+        .tab_moved_from = move.moved_from,
+        .tab_moved_to = move.moved_to,
+        .closed_tab = -1,
+        .add_clicked = !!(add->flags & ui_Flag_CLICKED),
+    };
+    return tabs;
+}
+
+static ui_Box *base_ui_list_row(ui_State *ui, Base_UI_List *list, bool selected, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_X | ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+    u32 row_index = list->row_count;
+    list->row_count += 1;
+    if (list->selected_row != 0 && (box->flags & ui_Flag_PRESSED_LEFT)) *list->selected_row = row_index;
+
+    bool selection_is_flat = !!(list->flags & Base_UI_List_Flag_SELECTION_FLAT);
+    bool is_striped = (list->flags & Base_UI_List_Flag_ROWS_STRIPED) && (row_index & 1);
+    u32 top_color = 0;
+    u32 bottom_color = 0;
+    if (is_striped) top_color = bottom_color = base_ui__list_stripe_color;
+    if (selected) {
+        top_color = selection_is_flat ? base_ui__list_selection_flat_colors[list->is_focused] : base_ui__list_selection_top_colors[list->is_focused];
+        bottom_color = selection_is_flat ? top_color : base_ui__list_selection_bottom_colors[list->is_focused];
+    }
+    bool selection_keeps_black_text = selection_is_flat && !list->is_focused;
+    u32 text_color = selected && !selection_keeps_black_text ? base_ui__selection_text_color : base_ui__text_color;
+
+    ui_Style style = {
+        .font_size = 13.f,
+        .padding = { [ui_Side_LEFT] = 8.f, [ui_Side_TOP] = 3.f, [ui_Side_RIGHT] = 8.f, [ui_Side_BOTTOM] = 3.f },
+        .child_gap = 6.f,
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .bg_color = top_color,
+        .fg_color = text_color,
+    };
+    if (selection_is_flat) style.padding[ui_Side_LEFT] = style.padding[ui_Side_TOP] = style.padding[ui_Side_BOTTOM] = style.child_gap = 0;
+    box->style = style;
+    box->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    if ((top_color & 0xff) != 0) {
+        box->flags |= ui_Flag_DRAW_BACKGROUND;
+        box->user_data = base_ui_gradient_user_data(ui_Y, bottom_color);
+    }
+
+    f32 row_top = box->rectangle.position[ui_Y];
+    f32 row_height = box->rectangle.size[ui_Y];
+    Base_UI_List_State *state = list->state;
+    state->row_count = row_index + 1;
+    if (list->is_virtual && state->recorded_row_count < BASE_UI_MAX_ROWS_IN_VIEW) {
+        state->recorded_row_heights[state->recorded_row_count] = row_height;
+        state->recorded_row_count += 1;
+    }
+    bool reveals_row = !list->is_virtual && (i32)row_index == list->row_to_reveal && row_height > 0;
+    if (reveals_row) {
+        f32 top_in_view = row_top - list->box->rectangle.position[ui_Y];
+        f32 bottom_in_view = top_in_view + row_height;
+        f32 view_height = list->box->rectangle.size[ui_Y];
+        if (top_in_view < 0) list->box->scroll_offset[ui_Y] += top_in_view;
+        if (bottom_in_view > view_height) list->box->scroll_offset[ui_Y] += bottom_in_view - view_height;
+    }
+
+    bool changes_selection = (list->flags & Base_UI_List_Flag_SELECTION_MULTIPLE) && (box->flags & ui_Flag_PRESSED_LEFT);
+    if (changes_selection) {
+        Platform *platform = ui->user_data;
+        bool toggles = platform->frame.key_down[App_Key_CONTROL];
+        bool extends = platform->frame.key_down[App_Key_SHIFT] && !toggles;
+        list->selection_change = base_ui__list_cursor_moved(state, row_index, toggles, extends);
+    }
+
+    base_ui__reorder_item(ui, list->box, ui_Y, row_index, list->first_row_to_build, box);
+    return box;
+}
+
+static ui_Style base_ui__menu_row_style(int axis) {
+    ui_Style style = {
+        .font_size = 13.f,
+        .child_gap = 6.f,
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .fg_color = base_ui__text_color,
+    };
+    int cross_axis = !axis;
+    style.padding[axis] = style.padding[ui_Axis_COUNT + axis] = 1.f;
+    style.padding[cross_axis] = style.padding[ui_Axis_COUNT + cross_axis] = 20.f;
+    return style;
+}
+
+static Base_UI_Popup base_ui__popup_beginv(ui_State *ui, u32 *selected_item, u32 item_count, int axis, bool is_context_menu, bool opens_context_menu, const char *format, va_list arguments) {
+    bool is_pull_down = selected_item == 0;
+    assert(item_count > 0);
+    assert(is_pull_down || *selected_item < item_count);
+
+    ui_Box *parent = ui->current_parent;
+    ui_Flags button_flags = ui_X | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT;
+    if (is_context_menu) button_flags = ui_Flag_FLOATING;
+    ui_Box *button = ui_pushv(ui, button_flags, format, arguments);
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *frame = &platform->frame;
+    Base_UI_Popup_Menu *menu = &base_ui__popup_menu;
+    int cross_axis = !axis;
+
+    bool disabled = !!(button->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    bool clicked = !!(button->flags & ui_Flag_CLICKED);
+    bool pressed = is_context_menu ? opens_context_menu : !!(button->flags & ui_Flag_PRESSED_LEFT);
+    button->flags &= ~(ui_Flags)ui_Flag_CLICKED;
+
+    bool menu_was_shown_last_frame = menu->button == button && menu->frame_id_of_last_draw + 1 == ui->frame_id;
+    if (menu->button == button && !menu_was_shown_last_frame) menu->button = 0;
+    bool is_open = menu_was_shown_last_frame;
+
+    ui_Style button_style = base_ui__push_button_style;
+    button_style.padding[ui_Side_LEFT] = 10.f;
+    button_style.padding[ui_Side_RIGHT] = 26.f;
+    button_style.child_gap = 6.f;
+    button_style.child_alignment[ui_X] = ui_Align_START;
+    ui_Style menu_style = {
+        .padding = { [ui_Side_TOP] = 4.f, [ui_Side_BOTTOM] = 4.f },
+        .bg_color = base_ui__menu_color,
+        .border_color = base_ui__menu_border_color,
+        .shadow_color = base_ui__menu_shadow_color,
+        .border_width = 1.f,
+        .border_radius = 5.f,
+        .shadow_offset = { [ui_X] = 2.f, [ui_Y] = 2.f },
+    };
+    ui_Style row_style = base_ui__menu_row_style(axis);
+
+    f32 button_content_start[ui_Axis_COUNT] = {0};
+    for (int a = 0; a < ui_Axis_COUNT; a += 1) button_content_start[a] = button->rectangle.position[a] + button_style.padding[a];
+
+    u32 chosen_item = 0;
+    bool opens_with_mouse = !is_open && !disabled && pressed;
+    bool opens_with_keyboard = !is_open && !disabled && clicked && !pressed;
+    if (opens_with_mouse || opens_with_keyboard) {
+        f32 estimated_row_size = button->rectangle.size[axis] - ui__padding_on_both_sides(button_style, axis) + ui__padding_on_both_sides(row_style, axis);
+        menu->button = button;
+        menu->frame_id_of_open = ui->frame_id;
+        menu->highlighted_item = is_pull_down ? -1 : (i32)*selected_item;
+        menu->is_tracking_opening_press = frame->mouse_down[App_Mouse_Button_LEFT];
+        menu->mouse_was_down = frame->mouse_down[App_Mouse_Button_LEFT];
+        menu->seconds_on_scroll_arrow = 0;
+        menu->seconds_until_next_scroll = 0;
+        for (int a = 0; a < ui_Axis_COUNT; a += 1) menu->previous_mouse_position[a] = ui->mouse_position[a];
+        if (is_context_menu) {
+            for (int a = 0; a < ui_Axis_COUNT; a += 1) menu->menu_position[a] = ui->mouse_position[a];
+        } else if (is_pull_down) {
+            menu->menu_position[axis] = button->rectangle.position[axis] + button->rectangle.size[axis];
+            menu->menu_position[cross_axis] = button->rectangle.position[cross_axis];
+        } else {
+            menu->menu_position[axis] = button_content_start[axis] - menu_style.padding[axis] - (f32)*selected_item * estimated_row_size - row_style.padding[axis];
+            menu->menu_position[cross_axis] = button_content_start[cross_axis] - menu_style.padding[cross_axis] - row_style.padding[cross_axis];
+        }
+        is_open = true;
+    }
+
+    if (is_open) {
+        ui_Box *first_row = menu_was_shown_last_frame ? menu->menu_box->first_child : 0;
+        bool corrects_position = !is_pull_down && ui->frame_id == menu->frame_id_of_open + 1;
+        i32 row_under_mouse = -1;
+        i32 row_index = 0;
+        for (ui_Box *row = first_row; row != 0; row = row->next_sibling) {
+            bool contains_mouse = true;
+            for (int a = 0; a < ui_Axis_COUNT; a += 1) {
+                f32 m = ui->mouse_position[a];
+                contains_mouse = contains_mouse && row->rectangle.position[a] <= m && m < row->rectangle.position[a] + row->rectangle.size[a];
+                if (corrects_position && row_index == (i32)*selected_item) menu->menu_position[a] += button_content_start[a] - (row->rectangle.position[a] + row_style.padding[a]);
+            }
+            if (contains_mouse) row_under_mouse = row_index;
+            row_index += 1;
+        }
+
+        f32 window_start = ui->root->rectangle.position[axis];
+        f32 window_end = window_start + ui->window_size[axis];
+        f32 menu_size = menu_was_shown_last_frame ? menu->menu_box->rectangle.size[axis] : 0;
+        f32 menu_cross_size = menu_was_shown_last_frame ? menu->menu_box->rectangle.size[cross_axis] : 0;
+        f32 scroll_arrow_size = MAX((menu_size - ui__padding_on_both_sides(menu_style, axis)) / (f32)item_count, 1.f);
+        f32 mouse = ui->mouse_position[axis];
+        f32 mouse_cross = ui->mouse_position[cross_axis];
+        bool mouse_is_across_menu = menu->menu_position[cross_axis] <= mouse_cross && mouse_cross < menu->menu_position[cross_axis] + menu_cross_size;
+        bool has_scroll_arrow[2] = {
+            menu_was_shown_last_frame && menu->menu_position[axis] < window_start,
+            menu_was_shown_last_frame && menu->menu_position[axis] + menu_size > window_end,
+        };
+        bool mouse_is_on_scroll_arrow[2] = {
+            has_scroll_arrow[0] && mouse_is_across_menu && mouse < window_start + scroll_arrow_size,
+            has_scroll_arrow[1] && mouse_is_across_menu && mouse >= window_end - scroll_arrow_size,
+        };
+        bool mouse_is_on_a_scroll_arrow = mouse_is_on_scroll_arrow[0] || mouse_is_on_scroll_arrow[1];
+
+        if (mouse_is_on_a_scroll_arrow) {
+            menu->seconds_on_scroll_arrow += frame->seconds_since_last_frame;
+            menu->seconds_until_next_scroll -= frame->seconds_since_last_frame;
+            if (menu->seconds_until_next_scroll <= 0) {
+                f32 seconds_per_row = MAX(0.02f, 0.08f / (1 + menu->seconds_on_scroll_arrow));
+                menu->seconds_until_next_scroll += seconds_per_row;
+                if (mouse_is_on_scroll_arrow[0]) menu->menu_position[axis] = MIN(menu->menu_position[axis] + scroll_arrow_size, window_start);
+                else menu->menu_position[axis] = MAX(menu->menu_position[axis] - scroll_arrow_size, window_end - menu_size);
+            }
+        } else {
+            menu->seconds_on_scroll_arrow = 0;
+            menu->seconds_until_next_scroll = 0;
+        }
+
+        bool mouse_is_inside_window = window_start <= mouse && mouse < window_end;
+        i32 item_under_mouse = (!mouse_is_on_a_scroll_arrow && mouse_is_inside_window) ? row_under_mouse : -1;
+
+        bool mouse_moved = fabsf(ui->mouse_position[ui_X] - menu->previous_mouse_position[ui_X]) > 0 || fabsf(ui->mouse_position[ui_Y] - menu->previous_mouse_position[ui_Y]) > 0;
+        if (mouse_moved) menu->highlighted_item = item_under_mouse;
+        for (int a = 0; a < ui_Axis_COUNT; a += 1) menu->previous_mouse_position[a] = ui->mouse_position[a];
+
+        App_Key key_to_previous = axis == ui_Y ? App_Key_UP : App_Key_LEFT;
+        App_Key key_to_next = axis == ui_Y ? App_Key_DOWN : App_Key_RIGHT;
+        i32 highlight_step = (i32)frame->key_pressed[key_to_next] - (i32)frame->key_pressed[key_to_previous];
+        i32 end_item_in_step_direction = highlight_step > 0 ? 0 : (i32)item_count - 1;
+        i32 first_highlight = is_pull_down ? end_item_in_step_direction : (i32)*selected_item;
+        if (highlight_step != 0) menu->highlighted_item = menu->highlighted_item < 0 ? first_highlight : CLAMP(menu->highlighted_item + highlight_step, 0, (i32)item_count - 1);
+
+        i32 item_to_select = -1;
+        bool should_close = false;
+        if ((frame->key_pressed[App_Key_RETURN] || frame->key_pressed[' ']) && !opens_with_keyboard) {
+            item_to_select = menu->highlighted_item;
+            should_close = true;
+        }
+        if (frame->key_pressed[App_Key_ESCAPE]) should_close = true;
+
+        bool mouse_is_down = frame->mouse_down[App_Mouse_Button_LEFT];
+        bool mouse_went_up = menu->mouse_was_down && !mouse_is_down;
+        bool mouse_went_down = frame->mouse_clicked[App_Mouse_Button_LEFT] && !opens_with_mouse;
+        menu->mouse_was_down = mouse_is_down;
+        if (mouse_went_down) {
+            menu->is_tracking_opening_press = false;
+            if (item_under_mouse < 0 && !mouse_is_on_a_scroll_arrow) should_close = true;
+        }
+        if (mouse_went_up) {
+            f32 drag_threshold = 3.f;
+            bool moved_since_press = false;
+            for (int a = 0; a < ui_Axis_COUNT; a += 1) moved_since_press = moved_since_press || fabsf(ui->mouse_position[a] - ui->mouse_position_at_press[a]) > drag_threshold;
+            bool release_acts = moved_since_press || (!menu->is_tracking_opening_press && item_under_mouse >= 0);
+            if (release_acts) {
+                item_to_select = item_under_mouse;
+                should_close = true;
+            }
+            menu->is_tracking_opening_press = false;
+        }
+
+        if (item_to_select >= 0) {
+            chosen_item = (u32)item_to_select;
+            bool changes_value = is_pull_down || chosen_item != *selected_item;
+            if (changes_value) button->flags |= ui_Flag_CLICKED;
+            if (!is_pull_down) *selected_item = chosen_item;
+        }
+        if (should_close) {
+            menu->button = 0;
+            is_open = false;
+        }
+
+        if (is_open) {
+            menu->frame_id_of_last_draw = ui->frame_id;
+            f32 root_position[ui_Axis_COUNT] = { ui->root->rectangle.position[ui_X], ui->root->rectangle.position[ui_Y] };
+            ui_set_parent(ui, ui->root);
+
+            ui_Box *input_blocker = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DISABLED_BUT_SWALLOWS_INPUT, 0);
+            input_blocker->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = ui->window_size[ui_X] };
+            input_blocker->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = ui->window_size[ui_Y] };
+
+            ui_Box *menu_box = ui_push_styled(ui, (ui_Flags)axis | ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_SHADOW, &menu_style, "##base ui pop-up menu");
+            for (int a = 0; a < ui_Axis_COUNT; a += 1) menu_box->float_offset_from_parent_top_left[a] = menu->menu_position[a] - root_position[a];
+            bool opens_this_frame = ui->frame_id == menu->frame_id_of_open;
+            if (opens_this_frame) menu_box->style.transparency = 1.f;
+            f32 button_cross_end = button->rectangle.position[cross_axis] + button->rectangle.size[cross_axis];
+            f32 min_cross_size = is_context_menu ? 0 : MAX(button_cross_end - menu->menu_position[cross_axis], 0);
+            menu_box->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIT, .min = min_cross_size };
+            menu->menu_box = menu_box;
+
+            // TODO(felix): Draw the scroll arrows as triangles once we have svg.h.
+            f32 scroll_arrow_start[2] = { window_start, window_end - scroll_arrow_size };
+            const char *scroll_arrow_glyphs[2][ui_Axis_COUNT] = { { "<###", "^###" }, { ">###", "v###" } };
+            for (int end = 0; end < 2; end += 1) {
+                if (has_scroll_arrow[end]) {
+                    ui_Style arrow_style = row_style;
+                    arrow_style.bg_color = menu_style.bg_color;
+                    arrow_style.child_alignment[ui_X] = ui_Align_CENTER;
+                    ui_Box *arrow = ui_push_styled(ui, ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_TEXT, &arrow_style, scroll_arrow_glyphs[end][axis]);
+                    arrow->float_offset_from_parent_top_left[axis] = scroll_arrow_start[end] - root_position[axis];
+                    arrow->float_offset_from_parent_top_left[cross_axis] = menu->menu_position[cross_axis] - root_position[cross_axis];
+                    arrow->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = scroll_arrow_size };
+                    arrow->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = menu_cross_size };
+                }
+            }
+            ui_set_parent(ui, parent);
+        }
+    }
+
+    bool menu_shows = is_open && ui->frame_id != menu->frame_id_of_open;
+    if (menu_shows) button->flags |= ui_Flag_HELD_OVER;
+    if (!is_context_menu) {
+        button->style = button_style;
+        base_ui__push_button_colors_set(button, Base_UI_Push_Button_Look_PLAIN, !!(button->flags & ui_Flag_HELD_OVER));
+        button->user_data = (u64)Base_UI_Draw_POPUP_BUTTON | ((u64)is_pull_down << 8);
+    }
+
+    Base_UI_Popup popup = {
+        .button = button,
+        .item = is_pull_down ? 0 : *selected_item,
+        .chosen_item = chosen_item,
+        .item_count = is_open ? item_count : 0,
+        .axis = axis,
+        .next_row = is_context_menu ? 0 : -1,
+        .parent_after_rows = parent,
+        .button_content_parent = button,
+    };
+    return popup;
+}
+
+static Base_UI_Popup base_ui_context_menu_begin(ui_State *ui, bool opens, u32 item_count, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    Base_UI_Popup popup = base_ui__popup_beginv(ui, 0, item_count, ui_Y, true, opens, format, arguments);
+    va_end(arguments);
+    return popup;
+}
+
+static Base_UI_Popup base_ui_combo_box_begin(ui_State *ui, u32 item_count, int axis, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    Base_UI_Popup popup = base_ui__popup_beginv(ui, 0, item_count, axis, false, false, format, arguments);
+    va_end(arguments);
+
+    ui_Box *button = popup.button;
+    f32 border = button->style.border_width;
+    button->style.padding[ui_Side_LEFT] = button->style.padding[ui_Side_TOP] = button->style.padding[ui_Side_BOTTOM] = border;
+    button->style.padding[ui_Side_RIGHT] = 18.f;
+    button->style.child_gap = 0;
+
+    ui_Box *previous_parent = ui_set_parent(ui, button);
+    ui_Box *field = ui_push(ui, ui_X | ui_Flag_DRAW_BACKGROUND | ui_Flag_CLIP_TO_PARENT, 0);
+    field->size[ui_X] = field->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    field->style.bg_color = base_ui__combo_box_field_color;
+    field->style.padding[ui_Side_LEFT] = 3.f;
+    field->style.child_gap = 4.f;
+    field->style.child_alignment[ui_Y] = ui_Align_CENTER;
+    ui_Box *divider = ui_push(ui, ui_Flag_DRAW_BACKGROUND, 0);
+    divider->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 1.f };
+    divider->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    divider->style.bg_color = base_ui__combo_box_divider_color;
+    ui_set_parent(ui, previous_parent);
+
+    popup.button_content_parent = field;
+    return popup;
+}
+
+static Base_UI_Popup base_ui_popup_begin(ui_State *ui, u32 *selected_item, u32 item_count, int axis, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    Base_UI_Popup popup = base_ui__popup_beginv(ui, selected_item, item_count, axis, false, false, format, arguments);
+    va_end(arguments);
+    return popup;
+}
+
+static bool base_ui_popup_row(ui_State *ui, Base_UI_Popup *popup) {
+    Base_UI_Popup_Menu *menu = &base_ui__popup_menu;
+    ui_set_parent(ui, popup->parent_after_rows);
+
+    bool is_button_content = popup->next_row < 0;
+    bool is_menu_row = !is_button_content && (u32)popup->next_row < popup->item_count;
+    popup->is_button_content = is_button_content;
+    if (is_button_content) ui_set_parent(ui, popup->button_content_parent);
+    if (is_menu_row) {
+        u32 item = (u32)popup->next_row;
+        bool highlighted = (i32)item == menu->highlighted_item;
+        ui_Style row_style = base_ui__menu_row_style(popup->axis);
+        if (highlighted) {
+            row_style.bg_color = base_ui__menu_highlight_color;
+            row_style.fg_color = base_ui__selection_text_color;
+        }
+        ui_set_parent(ui, menu->menu_box);
+        ui_Box *row = ui_push_styled(ui, ui_X | (highlighted ? ui_Flag_DRAW_BACKGROUND : 0), &row_style, "##base ui pop-up row %u", item);
+        row->size[!popup->axis] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+        ui_set_parent(ui, row);
+        popup->item = item;
+    }
+
+    popup->next_row += 1;
+    return is_button_content || is_menu_row;
+}
+
+static ui_Box *base_ui_tab_toolbar(ui_State *ui, bool selected, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_Y | ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    bool pressed_down = !!(box->flags & ui_Flag_HELD_OVER);
+    ui_Style style = {
+        .font_size = 12.f,
+        .padding = { [ui_Side_LEFT] = 8.f, [ui_Side_TOP] = 4.f, [ui_Side_RIGHT] = 8.f, [ui_Side_BOTTOM] = 3.f },
+        .child_gap = 2.f,
+        .child_alignment = { [ui_X] = ui_Align_CENTER },
+        .bg_color = pressed_down ? base_ui__tab_toolbar_pressed_color : base_ui__tab_toolbar_color,
+        .fg_color = base_ui__text_color,
+        .border_color = base_ui__tab_toolbar_border_color,
+        .border_width = 1.f,
+        .border_radius = 4.f,
+    };
+    box->style = style;
+    if (selected || pressed_down) box->flags |= ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER;
+    return box;
+}
+
+static ui_Box *base_ui_tab_view(ui_State *ui) {
+    ui_Style style = {
+        .padding = { [ui_Side_TOP] = 1.f },
+        .child_alignment = { [ui_X] = ui_Align_CENTER },
+        .bg_color = base_ui__tab_view_color,
+        .border_color = base_ui__tab_view_border_color,
+        .border_width = 1.f,
+        .border_radius = 4.f,
+    };
+    ui_Box *box = ui_push_styled(ui, ui_Y | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_CLIP_TO_PARENT, &style, 0);
+    box->user_data = Base_UI_Draw_TAB_VIEW;
+    return box;
+}
+
+static ui_Box *base_ui__segmentv(ui_State *ui, bool selected, bool is_inset, const char *format, va_list arguments) {
+    ui_Box *box = ui_pushv(ui, ui_Flag_DRAW_TEXT | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+
+    bool disabled = !!(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    bool looks_pushed_in = selected || (box->flags & ui_Flag_HELD_OVER);
+    bool is_pushed_in = is_inset && looks_pushed_in && !disabled;
+    box->style = base_ui__push_button_style;
+    box->style.padding[ui_Side_LEFT] = box->style.padding[ui_Side_RIGHT] = 10.f;
+    base_ui__push_button_colors_set(box, is_inset ? Base_UI_Push_Button_Look_INSET : Base_UI_Push_Button_Look_PLAIN, looks_pushed_in);
+    box->user_data = (u64)Base_UI_Draw_SEGMENT | ((u64)is_pushed_in << 8);
+    return box;
+}
+
+static ui_Box *base_ui_segment(ui_State *ui, bool selected, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = base_ui__segmentv(ui, selected, false, format, arguments);
+    va_end(arguments);
+    return box;
+}
+
+static ui_Box *base_ui_segment_inset(ui_State *ui, bool selected, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = base_ui__segmentv(ui, selected, true, format, arguments);
+    va_end(arguments);
+    return box;
+}
+
+static ui_Box *base_ui_segmented_control(ui_State *ui) {
+    ui_Box *box = ui_push(ui, ui_X, 0);
+    box->style.child_gap = -base_ui__push_button_style.border_width;
+    return box;
+}
+
+typedef struct {
+    ui_Box *from;
+    ui_Box *target;
+    i32 direction;
+    u64 frame_id;
+} Base_UI_Radio_Move;
+
+static Base_UI_Radio_Move base_ui__radio_move;
+
+static const f32 base_ui__radio_button_size_in_points = 16.f;
+
+static ui_Box *base_ui_radio_button(ui_State *ui, bool selected, bool label_below, const char *format, ...) {
+    ui_Flags flags = ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT;
+    if (selected) flags |= ui_Flag_FOCUSABLE;
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, flags, format, arguments);
+    va_end(arguments);
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *frame = &platform->frame;
+    Base_UI_Radio_Move *move = &base_ui__radio_move;
+
+    bool move_is_stale = move->direction != 0 && move->frame_id + 1 < ui->frame_id;
+    if (move_is_stale) move->direction = 0;
+    bool previous_is_radio_button = box->previous_sibling != 0 && (box->previous_sibling->user_data & 0xff) == Base_UI_Draw_RADIO_BUTTON;
+    bool is_next_target = move->direction > 0 && previous_is_radio_button && box->previous_sibling == move->from;
+    bool is_previous_target = move->direction < 0 && box == move->target;
+    if (is_next_target || is_previous_target) {
+        box->flags |= ui_Flag_CLICKED | ui_Flag_FOCUSED;
+        ui->focused_box = box;
+        move->direction = 0;
+    }
+
+    bool focused = !!(box->flags & ui_Flag_FOCUSED);
+    bool arrow_to_previous = frame->key_pressed[App_Key_LEFT] || frame->key_pressed[App_Key_UP];
+    bool arrow_to_next = frame->key_pressed[App_Key_RIGHT] || frame->key_pressed[App_Key_DOWN];
+    if (focused && selected && (arrow_to_previous || arrow_to_next)) {
+        move->from = box;
+        move->direction = arrow_to_next ? 1 : -1;
+        move->target = arrow_to_previous && previous_is_radio_button ? box->previous_sibling : 0;
+        move->frame_id = ui->frame_id;
+        if (arrow_to_previous && !previous_is_radio_button) move->direction = 0;
+    }
+
+
+    f32 circle_and_gap = base_ui__radio_button_size_in_points + (label_below ? 4.f : 6.f);
+    ui_Style style = {
+        .font_size = 13.f,
+        .padding = { [ui_Side_LEFT] = 2.f, [ui_Side_TOP] = 1.f, [ui_Side_RIGHT] = 2.f, [ui_Side_BOTTOM] = 1.f },
+        .child_alignment = { [ui_Y] = ui_Align_CENTER },
+        .fg_color = base_ui__text_color,
+    };
+    if (label_below) {
+        style.padding[ui_Side_TOP] = circle_and_gap;
+        style.child_alignment[ui_X] = ui_Align_CENTER;
+    } else style.padding[ui_Side_LEFT] = circle_and_gap;
+    box->style = style;
+    box->user_data = (u64)Base_UI_Draw_RADIO_BUTTON | ((u64)selected << 8) | ((u64)label_below << 9);
+    return box;
+}
+
+typedef struct {
+    ui_Box *box;
+    f32 grab_offset;
+} Base_UI_Slider_Drag;
+
+static Base_UI_Slider_Drag base_ui__slider_drag;
+
+static const f32 base_ui__slider_knob_size_in_points = 20.f;
+static const f32 base_ui__slider_tick_area_height_in_points = 8.f;
+
+static ui_Box *base_ui_slider(ui_State *ui, f32 *value, f32 min, f32 max, u32 tick_count, const char *format, ...) {
+    assert(max > min);
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    // TODO(felix): Draw the knob as a pointed shape when there are tick marks, once we have svg.h.
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *frame = &platform->frame;
+    Base_UI_Slider_Drag *drag = &base_ui__slider_drag;
+
+    f32 knob_size = base_ui__slider_knob_size_in_points;
+    f32 travel = MAX(box->rectangle.size[ui_X] - knob_size, 1.f);
+    f32 travel_left = box->rectangle.position[ui_X] + 0.5f * knob_size;
+    f32 range = max - min;
+    f32 old_value = *value;
+    f32 fraction = CLAMP((*value - min) / range, 0.f, 1.f);
+    f32 mouse_x = ui->mouse_position[ui_X];
+
+    if (box->flags & ui_Flag_PRESSED_LEFT) {
+        f32 knob_centre = travel_left + fraction * travel;
+        bool press_is_on_knob = fabsf(mouse_x - knob_centre) <= 0.5f * knob_size;
+        drag->box = box;
+        drag->grab_offset = press_is_on_knob ? mouse_x - knob_centre : 0;
+    }
+    bool is_dragging = (box->flags & ui_Flag_HELD_LEFT) && drag->box == box;
+    if (is_dragging) {
+        f32 knob_centre = mouse_x - drag->grab_offset;
+        fraction = CLAMP((knob_centre - travel_left) / travel, 0.f, 1.f);
+        *value = min + fraction * range;
+    }
+    if ((box->flags & ui_Flag_RELEASED_LEFT) && drag->box == box) drag->box = 0;
+
+    bool focused = !!(box->flags & ui_Flag_FOCUSED);
+    if (focused) {
+        f32 step = range / 20.f;
+        if (frame->key_pressed[App_Key_LEFT] || frame->key_pressed[App_Key_DOWN]) *value = MAX(*value - step, min);
+        if (frame->key_pressed[App_Key_RIGHT] || frame->key_pressed[App_Key_UP]) *value = MIN(*value + step, max);
+    }
+
+    box->flags &= ~(ui_Flags)ui_Flag_CLICKED;
+    if (fabsf(*value - old_value) > 0) box->flags |= ui_Flag_CLICKED;
+
+    fraction = CLAMP((*value - min) / range, 0.f, 1.f);
+    u16 knob_position = (u16)(fraction * 65535.f + 0.5f);
+    f32 tick_area = tick_count >= 2 ? base_ui__slider_tick_area_height_in_points : 0;
+    box->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 200.f };
+    box->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = (base_ui__slider_knob_size_in_points + tick_area) };
+    box->user_data = (u64)Base_UI_Draw_SLIDER | ((u64)knob_position << 8) | ((u64)(tick_count & 0xff) << 24);
+    return box;
+}
+
+typedef struct {
+    ui_Box *box;
+    i32 direction;
+    f32 seconds_until_repeat;
+} Base_UI_Hold;
+
+static Base_UI_Hold base_ui__hold;
+
+typedef struct {
+    i32 steps;
+    bool is_pressed_down;
+} Base_UI_Hold_Steps;
+
+static Base_UI_Hold_Steps base_ui__hold_steps(ui_State *ui, ui_Box *box, i32 direction_under_mouse) {
+    Platform *platform = ui->user_data;
+    Base_UI_Hold *hold = &base_ui__hold;
+    i32 steps = 0;
+    if (box->flags & ui_Flag_PRESSED_LEFT) {
+        hold->box = box;
+        hold->direction = direction_under_mouse;
+        hold->seconds_until_repeat = 0.5f;
+        steps += direction_under_mouse;
+    }
+    bool is_holding = (box->flags & ui_Flag_HELD_LEFT) && hold->box == box;
+    bool mouse_is_on_held_part = is_holding && (box->flags & ui_Flag_HOVERED) && direction_under_mouse == hold->direction;
+    if (mouse_is_on_held_part && !(box->flags & ui_Flag_PRESSED_LEFT)) {
+        hold->seconds_until_repeat -= platform->frame.seconds_since_last_frame;
+        if (hold->seconds_until_repeat <= 0) {
+            steps += hold->direction;
+            hold->seconds_until_repeat += 0.1f;
+        }
+    }
+    if ((box->flags & ui_Flag_RELEASED_LEFT) && hold->box == box) hold->box = 0;
+    Base_UI_Hold_Steps result = { .steps = steps, .is_pressed_down = mouse_is_on_held_part };
+    return result;
+}
+
+static ui_Box *base_ui_split_divider(ui_State *ui, f32 *size, f32 min, f32 max, int axis, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *line = ui_pushv(ui, ui_Flag_DRAW_BACKGROUND, format, arguments);
+    va_end(arguments);
+    int cross_axis = !axis;
+    line->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 1.f };
+    line->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    line->style.bg_color = base_ui__split_divider_color;
+
+    f32 handle_size = 7.f;
+    ui_Box *previous_parent = ui_set_parent(ui, line);
+    ui_Box *handle = ui_push(ui, ui_Flag_FLOATING | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE, "##base ui split divider handle %u", line->key_hash);
+    handle->float_offset_from_parent_top_left[axis] = -0.5f * (handle_size - 1.f);
+    handle->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = handle_size };
+    handle->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = MAX(line->rectangle.size[cross_axis], 1.f) };
+    ui_set_parent(ui, previous_parent);
+
+    static f32 size_at_press;
+    if (handle->flags & ui_Flag_PRESSED_LEFT) size_at_press = *size;
+    if (handle->flags & ui_Flag_HELD_LEFT) *size = CLAMP(size_at_press + ui->mouse_position[axis] - ui->mouse_position_at_press[axis], min, max);
+    Platform *platform = ui->user_data;
+    if (handle->flags & (ui_Flag_HOVERED | ui_Flag_HELD_LEFT)) platform->cursor_shape = (Cursor_Shape)(Cursor_Shape_RESIZE_X + axis);
+    return line;
+}
+
+static ui_Box *base_ui_scroll_bar(ui_State *ui, f32 *offset_pointer, f32 view_size, f32 content_size, int axis, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *bar = ui_pushv(ui, (ui_Flags)axis | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    int cross_axis = !axis;
+    f32 thickness = 15.f;
+    f32 line = 16.f;
+    bar->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = thickness };
+    bar->size[axis] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+
+    f32 view = view_size;
+    f32 content = content_size;
+    f32 max_offset = MAX(content - view, 0);
+    bool can_scroll = max_offset > 0 && !(bar->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    f32 starting_offset = CLAMP(*offset_pointer, 0.f, max_offset);
+    f32 offset = starting_offset;
+
+    ui_Box *previous_parent = ui_set_parent(ui, bar);
+    ui_Box *track = ui_push(ui, ui_Flag_DRAW_BACKGROUND | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE, "##base ui scroll bar track %u", bar->key_hash);
+    track->size[axis] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    track->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    track->style.bg_color = base_ui__scroll_bar_track_top_color;
+    track->user_data = base_ui_gradient_user_data(cross_axis, base_ui__scroll_bar_track_bottom_color);
+
+    f32 track_start = track->rectangle.position[axis];
+    f32 track_length = track->rectangle.size[axis];
+    f32 thumb_length = content > 0 ? MAX(track_length * view / content, 18.f) : track_length;
+    thumb_length = MIN(thumb_length, track_length);
+    f32 thumb_travel = MAX(track_length - thumb_length, 0);
+    f32 thumb_start = track_start + (max_offset > 0 ? thumb_travel * offset / max_offset : 0);
+    f32 mouse = ui->mouse_position[axis];
+
+    if (can_scroll) {
+        i32 direction_to_mouse = mouse < thumb_start ? -1 : 1;
+        Base_UI_Hold_Steps pages = base_ui__hold_steps(ui, track, direction_to_mouse);
+        offset += (f32)pages.steps * MAX(view - line, line);
+
+        ui_set_parent(ui, track);
+        ui_Box *thumb = ui_push(ui, ui_Flag_FLOATING | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_CLIP_TO_PARENT, "##base ui scroll bar thumb %u", bar->key_hash);
+        thumb->float_offset_from_parent_top_left[axis] = thumb_start - track_start;
+        thumb->float_offset_from_parent_top_left[cross_axis] = 1.f;
+        thumb->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = thumb_length };
+        thumb->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = thickness - 2.f };
+        thumb->style.bg_color = base_ui__scroll_bar_thumb_top_color;
+        thumb->style.border_color = base_ui__scroll_bar_thumb_border_color;
+        thumb->style.border_width = 1.f;
+        thumb->style.border_radius = 0.5f * (thickness - 2.f);
+        thumb->user_data = base_ui_gradient_user_data(cross_axis, base_ui__scroll_bar_thumb_bottom_color);
+
+        f32 dragged_thumb_start = base_ui_drag_position(ui, thumb, axis, thumb_start);
+        if ((thumb->flags & ui_Flag_HELD_LEFT) && thumb_travel > 0) offset = (dragged_thumb_start - track_start) / thumb_travel * max_offset;
+        ui_set_parent(ui, bar);
+    }
+
+    const char *arrow_glyphs[2][ui_Axis_COUNT] = { { "<###", "^###" }, { ">###", "v###" } };
+    for (int end = 0; end < 2; end += 1) {
+        ui_Box *arrow = ui_push(ui, ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE, "%s##base ui scroll bar arrow %u %d", arrow_glyphs[end][axis], bar->key_hash, end);
+        arrow->size[axis] = arrow->size[cross_axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = thickness };
+        arrow->style.font_size = 9.f;
+        arrow->style.child_alignment[ui_X] = arrow->style.child_alignment[ui_Y] = ui_Align_CENTER;
+        arrow->style.border_color = base_ui__scroll_bar_arrow_border_color;
+        arrow->style.border_width = 1.f;
+        arrow->style.fg_color = can_scroll ? base_ui__scroll_bar_arrow_text_color : base_ui__disabled_text_color;
+        i32 direction = end == 0 ? -1 : 1;
+        Base_UI_Hold_Steps steps = can_scroll ? base_ui__hold_steps(ui, arrow, direction) : (Base_UI_Hold_Steps){0};
+        arrow->style.bg_color = steps.is_pressed_down ? base_ui__scroll_bar_arrow_pressed_color : base_ui__scroll_bar_arrow_color;
+        offset += (f32)steps.steps * line;
+    }
+    ui_set_parent(ui, previous_parent);
+
+    offset = CLAMP(offset, 0.f, max_offset);
+    if (fabsf(offset - starting_offset) > 0) bar->flags |= ui_Flag_CLICKED;
+    *offset_pointer = offset;
+    return bar;
+}
+
+static i32 base_ui_stepper(ui_State *ui, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ui_Box *box = ui_pushv(ui, ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE | ui_Flag_CLIP_TO_PARENT, format, arguments);
+    va_end(arguments);
+
+    Platform *platform = ui->user_data;
+    App_Frame_Info *frame = &platform->frame;
+
+    f32 middle = box->rectangle.position[ui_Y] + 0.5f * box->rectangle.size[ui_Y];
+    i32 arrow_under_mouse = ui->mouse_position[ui_Y] < middle ? 1 : -1;
+    Base_UI_Hold_Steps hold_steps = base_ui__hold_steps(ui, box, arrow_under_mouse);
+    i32 steps = hold_steps.steps;
+    bool mouse_is_on_held_arrow = hold_steps.is_pressed_down;
+
+    bool focused = !!(box->flags & ui_Flag_FOCUSED);
+    if (focused && frame->key_pressed[App_Key_UP]) steps += 1;
+    if (focused && frame->key_pressed[App_Key_DOWN]) steps -= 1;
+
+    bool disabled = !!(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    box->style = base_ui__push_button_style;
+    base_ui__push_button_colors_set(box, Base_UI_Push_Button_Look_PLAIN, false);
+    box->size[ui_X] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 15.f };
+    box->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = 24.f };
+    bool up_is_pressed = mouse_is_on_held_arrow && arrow_under_mouse > 0;
+    bool down_is_pressed = mouse_is_on_held_arrow && arrow_under_mouse < 0;
+    box->user_data = (u64)Base_UI_Draw_STEPPER | ((u64)up_is_pressed << 8) | ((u64)down_is_pressed << 9);
+    return disabled ? 0 : steps;
+}
+
+
+static ui_Box *base_ui_separator(ui_State *ui) {
+    int along_parent = (int)(ui->current_parent->flags & ui_Flag_CHILD_AXIS);
+    ui_Box *box = base_ui_separator_line(ui, base_ui__separator_dark_color);
+    box->size[along_parent].value *= 2.f;
+    box->user_data = (u64)Base_UI_Draw_SEPARATOR_ETCHED | ((u64)base_ui__separator_light_color << 32);
+    return box;
+}
+
+static ui_Box *base_ui_separator_line(ui_State *ui, u32 color) {
+    int along_parent = (int)(ui->current_parent->flags & ui_Flag_CHILD_AXIS);
+    ui_Box *box = ui_push(ui, ui_Flag_DRAW_BACKGROUND | ui_Flag_CLIP_TO_PARENT, 0);
+    box->style.bg_color = color;
+    box->size[along_parent] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = MAX(1.f, roundf(ui->scale)) / ui->scale };
+    box->size[!along_parent] = (ui_Size){ .kind = ui_Size_Kind_GROW };
+    return box;
 }
 
 static void base_ui_create(ui_State *ui, Platform *platform) {
@@ -4649,19 +6560,868 @@ static void base_ui_create(ui_State *ui, Platform *platform) {
     ui->user_data = platform;
 }
 
-static void base_ui_render(ui_State *ui, ui_Box *box) {
-    panic("TODO(felix): Support the new GPU API: draw the shadow, background, border and text of each visible box, clipped to the inside of its parent's border if ui_Flag_CLIP_TO_PARENT is set.");
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#define STBTT_ifloor(x) ((int)floor(x))
+#define STBTT_iceil(x) ((int)ceil(x))
+#define STBTT_sqrt sqrt
+#define STBTT_pow pow
+#define STBTT_fmod fmod
+#define STBTT_acos acos
+#define STBTT_cos cos
+#define STBTT_fabs fabs
+#define STBTT_malloc(x, u) arena_make_((u), 1, (x), true)
+#define STBTT_free(x, u) ((void)(x), (void)(u))
+#define STBTT_assert assert
+#define STBTT_strlen cstring_length
+#define STBTT_memcpy memcpy
+#define STBTT_memset memset
+#if COMPILER_CLANG
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wsign-conversion"
+    #pragma clang diagnostic ignored "-Wswitch-default"
+    #pragma clang diagnostic ignored "-Wfloat-equal"
+    #pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"
+#endif
+#define NULL 0
+#include "base/third_party/stb_truetype.h"
+#undef NULL
+#if COMPILER_CLANG
+    #pragma clang diagnostic pop
+#endif
 
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        base_ui_render(ui, child);
+static Text_Measurement base_gpu_draw_or_measure_text(Platform *platform, String font_file, String text, V2 position, f32 font_size, f32 wrap_width, u32 color, V4 clip) {
+    bool should_draw = color != 0;
+    assert(font_size > 0);
+
+    static const f32 atlas_font_sizes[] = { 9.f, 10.f, 11.f, 12.f, 13.f, 15.f, 18.f, 20.f, 22.f, 24.f, 26.f, 30.f };
+    enum {
+        ATLAS_SIZE = 1024,
+        ATLAS_FIRST_CHARACTER = 32,
+        ATLAS_CHARACTER_COUNT = 95,
+        ATLAS_FONT_SIZE_COUNT = COUNT_OF(atlas_font_sizes),
+    };
+
+    typedef struct {
+        const char *file_data;
+        stbtt_fontinfo info;
+        int ascent;
+        int descent;
+        int line_gap;
+        u8 *atlas_pixels;
+        stbtt_packedchar characters[ATLAS_FONT_SIZE_COUNT][ATLAS_CHARACTER_COUNT];
+    } Font;
+    static Font font = {0};
+
+    assert(font_file.count > 0);
+    if (font.file_data == 0) {
+        font.file_data = font_file.data;
+        const unsigned char *ttf_bytes = (const unsigned char *)font_file.data;
+
+        int info_ok = stbtt_InitFont(&font.info, ttf_bytes, 0);
+        ensure(info_ok);
+        stbtt_GetFontVMetrics(&font.info, &font.ascent, &font.descent, &font.line_gap);
+
+        stbtt_pack_range ranges[ATLAS_FONT_SIZE_COUNT] = {0};
+        for (u32 i = 0; i < ATLAS_FONT_SIZE_COUNT; i += 1) {
+            ranges[i] = (stbtt_pack_range){
+                .font_size = STBTT_POINT_SIZE(atlas_font_sizes[i]),
+                .first_unicode_codepoint_in_range = ATLAS_FIRST_CHARACTER,
+                .num_chars = ATLAS_CHARACTER_COUNT,
+                .chardata_for_range = font.characters[i],
+            };
+        }
+
+        font.atlas_pixels = arena_make(platform->persistent_arena, ATLAS_SIZE * ATLAS_SIZE, u8);
+
+        Scratch scratch = scratch_begin(platform->persistent_arena);
+        {
+            stbtt_pack_context pack_context = {0};
+            int pack_ok = stbtt_PackBegin(&pack_context, font.atlas_pixels, ATLAS_SIZE, ATLAS_SIZE, 0, 1, scratch.arena);
+            ensure(pack_ok);
+            stbtt_PackSetOversampling(&pack_context, 2, 1);
+            pack_ok = stbtt_PackFontRanges(&pack_context, ttf_bytes, 0, ranges, ATLAS_FONT_SIZE_COUNT);
+            ensure(pack_ok);
+            stbtt_PackEnd(&pack_context);
+        }
+        scratch_end(scratch);
+    }
+    // TODO(felix): Multiple fonts.
+    assert(font.file_data == font_file.data);
+
+    u32 nearest_atlas_size_index = 0;
+    for (u32 i = 1; i < ATLAS_FONT_SIZE_COUNT; i += 1) {
+        f32 difference = fabsf(atlas_font_sizes[i] - font_size);
+        f32 nearest_difference = fabsf(atlas_font_sizes[nearest_atlas_size_index] - font_size);
+        // NOTE(felix): <=, not <, so that a tie picks the bigger size, which then scales down.
+        if (difference <= nearest_difference) nearest_atlas_size_index = i;
+    }
+    const stbtt_packedchar *characters = font.characters[nearest_atlas_size_index];
+    f32 atlas_scale = font_size / atlas_font_sizes[nearest_atlas_size_index];
+    f32 scale = stbtt_ScaleForMappingEmToPixels(&font.info, font_size);
+    f32 line_height = (f32)(font.ascent - font.descent) * scale;
+    f32 line_advance = (f32)(font.ascent - font.descent + font.line_gap) * scale;
+    bool should_wrap = wrap_width > 0;
+
+    typedef struct {
+        V4 rectangle;
+        V4 uv;
+    } Glyph_Instance;
+    Glyph_Instance *instances = should_draw ? arena_make(platform->frame_arena, size_t_from_u64(text.count), Glyph_Instance) : 0;
+    u32 instance_count = 0;
+
+    f32 pen_x = 0;
+    f32 line_width = 0;
+    f32 widest_line_width = 0;
+    u32 line_index = 0;
+    f32 word_start_x = 0;
+    f32 line_width_before_word = 0;
+    u32 word_first_instance = 0;
+    int last_glyph_index = 0;
+    for (u64 i = 0; i < text.count; i += 1) {
+        u8 character = (u8)text.data[i];
+        bool is_newline = character == '\n';
+        bool is_space = character == ' ';
+        bool previous_is_word_break = i == 0 || text.data[i - 1] == ' ' || text.data[i - 1] == '\n';
+        bool starts_word = !is_newline && !is_space && previous_is_word_break;
+        if (starts_word) {
+            word_start_x = pen_x;
+            line_width_before_word = line_width;
+            word_first_instance = instance_count;
+        }
+
+        if (is_newline) {
+            widest_line_width = MAX(widest_line_width, line_width);
+            pen_x = 0;
+            line_width = 0;
+            line_index += 1;
+            last_glyph_index = 0;
+        } else {
+            int codepoint = (int)character;
+            int glyph_index = stbtt_FindGlyphIndex(&font.info, codepoint);
+            if (last_glyph_index != 0) pen_x += (f32)stbtt_GetGlyphKernAdvance(&font.info, last_glyph_index, glyph_index) * scale;
+
+            bool is_in_atlas = ATLAS_FIRST_CHARACTER <= codepoint && codepoint < ATLAS_FIRST_CHARACTER + ATLAS_CHARACTER_COUNT;
+            const stbtt_packedchar *packed = is_in_atlas ? &characters[codepoint - ATLAS_FIRST_CHARACTER] : 0;
+            bool has_pixels = is_in_atlas && packed->x1 > packed->x0;
+            if (should_draw && has_pixels) {
+                f32 baseline = position.y + (f32)font.ascent * scale + (f32)line_index * line_advance;
+                f32 left = roundf(position.x + pen_x + packed->xoff * atlas_scale);
+                f32 top = roundf(baseline + packed->yoff * atlas_scale);
+                instances[instance_count] = (Glyph_Instance){
+                    .rectangle = {
+                        .x = left,
+                        .y = top,
+                        .z = left + (packed->xoff2 - packed->xoff) * atlas_scale,
+                        .w = top + (packed->yoff2 - packed->yoff) * atlas_scale,
+                    },
+                    .uv = {
+                        .x = (f32)packed->x0 / (f32)ATLAS_SIZE,
+                        .y = (f32)packed->y0 / (f32)ATLAS_SIZE,
+                        .z = (f32)packed->x1 / (f32)ATLAS_SIZE,
+                        .w = (f32)packed->y1 / (f32)ATLAS_SIZE,
+                    },
+                };
+                instance_count += 1;
+            }
+
+            int advance_width = 0;
+            int left_side_bearing = 0;
+            stbtt_GetGlyphHMetrics(&font.info, glyph_index, &advance_width, &left_side_bearing);
+            pen_x += (f32)advance_width * scale;
+            last_glyph_index = glyph_index;
+            if (!is_space) line_width = pen_x;
+
+            bool next_is_word_break = i + 1 == text.count || text.data[i + 1] == ' ' || text.data[i + 1] == '\n';
+            bool ends_word = !is_space && next_is_word_break;
+            bool word_overflows_line = should_wrap && ends_word && word_start_x > 0 && line_width > wrap_width;
+            if (word_overflows_line) {
+                widest_line_width = MAX(widest_line_width, line_width_before_word);
+                for (u32 instance = word_first_instance; instance < instance_count; instance += 1) {
+                    V4 *rectangle = &instances[instance].rectangle;
+                    f32 width = rectangle->z - rectangle->x;
+                    f32 height = rectangle->w - rectangle->y;
+                    rectangle->x = roundf(rectangle->x - word_start_x);
+                    rectangle->y = roundf(rectangle->y + line_advance);
+                    rectangle->z = rectangle->x + width;
+                    rectangle->w = rectangle->y + height;
+                }
+                pen_x -= word_start_x;
+                line_width = pen_x;
+                line_index += 1;
+            }
+        }
+    }
+    widest_line_width = MAX(widest_line_width, line_width);
+
+    Text_Measurement measurement = {
+        .size = { .x = widest_line_width, .y = (f32)line_index * line_advance + line_height },
+        .ascent = (f32)font.ascent * scale,
+    };
+
+    if (instance_count > 0) {
+        GPU_Texture atlas_description = {
+            .key = (u64)font_file.data,
+            .width = ATLAS_SIZE,
+            .height = ATLAS_SIZE,
+            .format = GPU_Texture_Format_R8,
+            .pixels = { .data = font.atlas_pixels, .size = ATLAS_SIZE * ATLAS_SIZE },
+        };
+        GPU_Texture_Id atlas = gpu_texture_id(platform, &atlas_description);
+
+        GPU_Shader shader_source = {
+            .vertex_source = S(STRINGIFY(
+                layout(location = 8) in vec4 rectangle_attribute;
+                layout(location = 9) in vec4 uv_attribute;
+                out vec2 uv_varying;
+                void main() {
+                    vec2 corner = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+                    uv_varying = mix(uv_attribute.xy, uv_attribute.zw, corner);
+                    gl_Position = gpu_transform * vec4(mix(rectangle_attribute.xy, rectangle_attribute.zw, corner), 0.0, 1.0);
+                }
+            )),
+            .fragment_source = S(STRINGIFY(
+                layout(std140) uniform gpu_arguments { vec4 text_color; };
+                in vec2 uv_varying;
+                void main() {
+                    gpu_color_out = vec4(text_color.rgb, text_color.a * texture(gpu_texture_0, uv_varying).r);
+                }
+            )),
+        };
+        _Static_assert(GPU_MAX_VERTEX_ATTRIBUTES == 8, "the glyph vertex shader reads instance attributes from locations 8 and 9");
+        bool shader_ok = false;
+        GPU_Shader_Id shader = gpu_shader_id(platform, &shader_source, &shader_ok);
+        ensure(shader_ok);
+
+        V4 text_color = rgba_float_from_hex(color);
+        GPU_Draw draw = {
+            .clip = clip,
+            .shader = shader,
+            .textures = { atlas },
+            .arguments = gpu_arguments(text_color),
+            .instances = { .data = instances, .size = instance_count * sizeof *instances },
+            .instance_attributes = { GPU_Vertex_Format_F32X4, GPU_Vertex_Format_F32X4 },
+            .instance_count = instance_count,
+            .blend_mode = GPU_Blend_Mode_ALPHA,
+            .target = platform->gpu_draw_target,
+        };
+        gpu_draw(platform, &draw);
+    }
+
+    return measurement;
+}
+
+static void base_gpu_draw_rectangle(Platform *platform, const Rectangle_Draw *rectangle) {
+    // NOTE(felix): border_radius is the radius of a circular corner. We fit superellipse corners to the same depth on the corner's diagonal, so both kinds match visually. A radius of half the shorter side gives a pill (or a circle for a square) in both modes.
+    // TODO(felix): Support arbitrary MVP transforms, where rectangle units are pixels. The AA width, AA margin, and circular corner snapping all need pixels per unit.
+    GPU_Shader rectangle_shader_source = {
+        .fragment_source = S(STRINGIFY(
+            layout(std140) uniform gpu_arguments {
+                vec4 background_oklch[4]; // lightness, chroma, hue in radians, alpha for the top left, top right, bottom left and bottom right corners
+                vec4 border_color;
+                vec4 corner_radii; // top left, top right, bottom left, bottom right
+                vec4 rounded_clip;
+                float border_width;
+                bool circular_corners;
+                float antialiasing_margin;
+                float rounded_clip_radius;
+            };
+            // NOTE(felix): The exponent sets how long the join is. Any exponent above 2 gives zero curvature where the corner meets the straight edge:
+            //                  n = 3 is close to a circle;
+            //                  n = 4 is the classic squircle;
+            //                  n = 5 roughly matches Apple's continuous corners; and
+            //                  n = 6 is squarer with very long join.
+            //              With a larger n, small boxes fall back towards circles sooner.
+            const float superellipse_exponent = 5.0;
+            const float circle_exponent = 2.0;
+            float rounded_rectangle_distance(vec2 position, vec2 half_size, float radius, float exponent) {
+                vec2 corner_offset = abs(position) - half_size + radius;
+                vec2 outside = max(corner_offset, 0.0);
+                float distance = min(max(corner_offset.x, corner_offset.y), 0.0) + length(outside) - radius;
+                bool is_in_superellipse_corner = exponent != circle_exponent && outside.x > 0.0 && outside.y > 0.0;
+                if (is_in_superellipse_corner) {
+                    float p_norm = pow(pow(outside.x, exponent) + pow(outside.y, exponent), 1.0 / exponent);
+                    vec2 p_norm_gradient = pow(outside / p_norm, vec2(exponent - 1.0));
+                    distance = (p_norm - radius) / length(p_norm_gradient);
+                }
+                return distance;
+            }
+            vec2 superellipse_radius_and_exponent_matching_circle(float circle_radius, vec2 half_size) {
+                float diagonal_depth = circle_radius * (1.0 - inversesqrt(2.0));
+                float unclamped_radius = diagonal_depth / (1.0 - pow(2.0, -1.0 / superellipse_exponent));
+                float radius = min(unclamped_radius, min(half_size.x, half_size.y));
+                float exponent = radius > 0.0001 ? log(2.0) / -log(1.0 - diagonal_depth / radius) : superellipse_exponent;
+                return vec2(radius, exponent);
+            }
+            vec3 srgb_from_oklab(vec3 oklab) {
+                vec3 lms_cube_root = vec3(
+                    oklab.x + 0.3963377774 * oklab.y + 0.2158037573 * oklab.z,
+                    oklab.x - 0.1055613458 * oklab.y - 0.0638541728 * oklab.z,
+                    oklab.x - 0.0894841775 * oklab.y - 1.2914855480 * oklab.z
+                );
+                vec3 lms = lms_cube_root * lms_cube_root * lms_cube_root;
+                vec3 linear = vec3(
+                     4.0767416621 * lms.x - 3.3077115913 * lms.y + 0.2309699292 * lms.z,
+                    -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
+                    -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z
+                );
+                linear = clamp(linear, 0.0, 1.0);
+                vec3 encoded_low = 12.92 * linear;
+                vec3 encoded_high = 1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055;
+                return mix(encoded_low, encoded_high, step(vec3(0.0031308), linear));
+            }
+            vec4 background_color_at(vec2 blend) {
+                vec4 top = mix(background_oklch[0], background_oklch[1], blend.x);
+                vec4 bottom = mix(background_oklch[2], background_oklch[3], blend.x);
+                vec4 oklch = mix(top, bottom, blend.y);
+                vec3 oklab = vec3(oklch.x, oklch.y * cos(oklch.z), oklch.y * sin(oklch.z));
+                return vec4(srgb_from_oklab(oklab), oklch.w);
+            }
+            void main() {
+                vec2 pixel = mix(gpu_rectangle.xy, gpu_rectangle.zw, gpu_uv);
+                vec2 box_min = gpu_rectangle.xy + antialiasing_margin;
+                vec2 box_max = gpu_rectangle.zw - antialiasing_margin;
+                float drawn_border_width = border_width;
+                if (circular_corners) {
+                    box_min = round(box_min);
+                    box_max = round(box_max);
+                    drawn_border_width = border_width > 0.0 ? max(round(border_width), 1.0) : 0.0;
+                }
+                vec2 half_size = 0.5 * (box_max - box_min);
+                vec2 position = pixel - 0.5 * (box_min + box_max);
+
+                vec2 inner_half_size = max(half_size - drawn_border_width, 0.0);
+                float corner_radius = position.y < 0.0 ? (position.x < 0.0 ? corner_radii.x : corner_radii.y) : (position.x < 0.0 ? corner_radii.z : corner_radii.w);
+                float outer_radius = min(corner_radius, min(half_size.x, half_size.y));
+                float inner_radius = max(outer_radius - drawn_border_width, 0.0);
+                float outer_exponent = circle_exponent;
+                float inner_exponent = circle_exponent;
+                if (!circular_corners) {
+                    vec2 outer_superellipse = superellipse_radius_and_exponent_matching_circle(outer_radius, half_size);
+                    vec2 inner_superellipse = superellipse_radius_and_exponent_matching_circle(inner_radius, inner_half_size);
+                    outer_radius = outer_superellipse.x;
+                    outer_exponent = outer_superellipse.y;
+                    inner_radius = inner_superellipse.x;
+                    inner_exponent = inner_superellipse.y;
+                }
+                float outer_distance = rounded_rectangle_distance(position, half_size, outer_radius, outer_exponent);
+                float inner_distance = rounded_rectangle_distance(position, inner_half_size, inner_radius, inner_exponent);
+
+                float outer_coverage = clamp(0.5 - outer_distance, 0.0, 1.0);
+                float inner_coverage = drawn_border_width > 0.0 ? clamp(0.5 - inner_distance, 0.0, 1.0) : 1.0;
+
+                vec2 blend = clamp((pixel - box_min) / max(box_max - box_min, vec2(0.0001)), 0.0, 1.0);
+                vec4 background_color = background_color_at(blend);
+                vec4 premultiplied_background = vec4(background_color.rgb * background_color.a, background_color.a);
+                vec4 premultiplied_border = vec4(border_color.rgb * border_color.a, border_color.a);
+                float clip_coverage = 1.0;
+                if (rounded_clip_radius > 0.0) {
+                    vec2 clip_half_size = 0.5 * (rounded_clip.zw - rounded_clip.xy);
+                    vec2 clip_position = pixel - 0.5 * (rounded_clip.xy + rounded_clip.zw);
+                    vec2 clip_superellipse = superellipse_radius_and_exponent_matching_circle(min(rounded_clip_radius, min(clip_half_size.x, clip_half_size.y)), clip_half_size);
+                    clip_coverage = clamp(0.5 - rounded_rectangle_distance(clip_position, clip_half_size, clip_superellipse.x, clip_superellipse.y), 0.0, 1.0);
+                }
+                gpu_color_out = mix(premultiplied_border, premultiplied_background, inner_coverage) * outer_coverage * clip_coverage;
+            }
+        )),
+    };
+
+    typedef struct {
+        V4 background_oklch[Corner_COUNT];
+        V4 border_color;
+        V4 corner_radii;
+        V4 rounded_clip;
+        f32 border_width;
+        u32 circular_corners;
+        f32 antialiasing_margin;
+        f32 rounded_clip_radius;
+    } Rectangle_Arguments;
+
+    enum { ANTIALIASING_MARGIN = 1 };
+    bool circular_corners = false; // Always use superellipses
+
+    Rectangle_Arguments arguments = {
+        .border_color = rgba_float_from_hex(rectangle->border_color),
+        .corner_radii = {
+            .x = rectangle->corner_radii[Corner_TOP_LEFT],
+            .y = rectangle->corner_radii[Corner_TOP_RIGHT],
+            .z = rectangle->corner_radii[Corner_BOTTOM_LEFT],
+            .w = rectangle->corner_radii[Corner_BOTTOM_RIGHT],
+        },
+        .rounded_clip = rectangle->clip.rounded_rectangle,
+        .border_width = rectangle->border_width,
+        .circular_corners = circular_corners,
+        .antialiasing_margin = ANTIALIASING_MARGIN,
+        .rounded_clip_radius = rectangle->clip.rounded_radius,
+    };
+
+    f32 achromatic_chroma = 0.001f;
+    V4 corner_oklch[Corner_COUNT] = {0};
+    int most_chromatic_corner = 0;
+    for (int corner = 0; corner < Corner_COUNT; corner += 1) {
+        corner_oklch[corner] = oklch_from_rgba(rectangle->background_colors[corner]);
+        if (corner_oklch[corner].y > corner_oklch[most_chromatic_corner].y) most_chromatic_corner = corner;
+    }
+    f32 reference_hue = corner_oklch[most_chromatic_corner].z;
+    for (int corner = 0; corner < Corner_COUNT; corner += 1) {
+        V4 oklch = corner_oklch[corner];
+        f32 hue = oklch.y < achromatic_chroma ? reference_hue : oklch.z;
+        hue -= 360.f * roundf((hue - reference_hue) / 360.f);
+        arguments.background_oklch[corner] = (V4){ .x = oklch.x, .y = oklch.y, .z = radians_from_degrees(hue), .w = oklch.w };
+    }
+
+    bool shader_ok = false;
+    GPU_Shader_Id rectangle_shader = gpu_shader_id(platform, &rectangle_shader_source, &shader_ok);
+    ensure(shader_ok);
+
+    GPU_Draw draw = {
+        .clip = rectangle->clip.rectangle,
+        .shader = rectangle_shader,
+        .rectangle = {
+            .x = rectangle->rectangle.x - (f32)ANTIALIASING_MARGIN,
+            .y = rectangle->rectangle.y - (f32)ANTIALIASING_MARGIN,
+            .z = rectangle->rectangle.z + (f32)ANTIALIASING_MARGIN,
+            .w = rectangle->rectangle.w + (f32)ANTIALIASING_MARGIN,
+        },
+        .arguments = gpu_arguments(arguments),
+        .blend_mode = GPU_Blend_Mode_PREMULTIPLIED_ALPHA,
+        .target = platform->gpu_draw_target,
+    };
+    gpu_draw(platform, &draw);
+}
+
+static void base_ui__render_box(Platform *platform, ui_Box *box, f32 scale) {
+    ui_Rectangle clip_rectangle = box->clip_rectangle;
+    bool is_clipped_away = clip_rectangle.size[ui_X] <= 0 || clip_rectangle.size[ui_Y] <= 0;
+    bool draws_something = (box->flags & UI_FLAG_ANY_VISIBLE) || box->user_data != 0;
+    if (draws_something && !is_clipped_away) {
+        ui_Rectangle rounded = box->rounded_clip_rectangle;
+        Rectangle_Clip clip = {
+            .rectangle = {
+                .x = roundf(scale * clip_rectangle.position[ui_X]),
+                .y = roundf(scale * clip_rectangle.position[ui_Y]),
+                .z = roundf(scale * (clip_rectangle.position[ui_X] + clip_rectangle.size[ui_X])),
+                .w = roundf(scale * (clip_rectangle.position[ui_Y] + clip_rectangle.size[ui_Y])),
+            },
+            .rounded_rectangle = {
+                .x = roundf(scale * rounded.position[ui_X]),
+                .y = roundf(scale * rounded.position[ui_Y]),
+                .z = roundf(scale * (rounded.position[ui_X] + rounded.size[ui_X])),
+                .w = roundf(scale * (rounded.position[ui_Y] + rounded.size[ui_Y])),
+            },
+            .rounded_radius = box->rounded_clip_radius * scale,
+        };
+
+        V4 box_rectangle = {
+            .x = roundf(scale * box->rectangle.position[ui_X]),
+            .y = roundf(scale * box->rectangle.position[ui_Y]),
+            .z = roundf(scale * (box->rectangle.position[ui_X] + box->rectangle.size[ui_X])),
+            .w = roundf(scale * (box->rectangle.position[ui_Y] + box->rectangle.size[ui_Y])),
+        };
+
+        Base_UI_Draw draw = (Base_UI_Draw)(box->user_data & 0xff);
+        f32 radius = box->style.border_radius * scale;
+
+        // TODO(felix): Background blur.
+
+        // TODO(felix): Proper shadow.
+        if (box->flags & ui_Flag_DRAW_SHADOW) {
+            V2 offset = { .x = roundf(box->style.shadow_offset[ui_X] * scale), .y = roundf(box->style.shadow_offset[ui_Y] * scale) };
+            u32 shadow_color = box->style.shadow_color;
+            Rectangle_Draw shadow = {
+                .rectangle = { .x = box_rectangle.x + offset.x, .y = box_rectangle.y + offset.y, .z = box_rectangle.z + offset.x, .w = box_rectangle.w + offset.y },
+                .clip = clip,
+                .background_colors = { shadow_color, shadow_color, shadow_color, shadow_color },
+                .corner_radii = { radius, radius, radius, radius },
+            };
+            base_gpu_draw_rectangle(platform, &shadow);
+        }
+
+        bool draws_own_focus_ring = draw == Base_UI_Draw_SLIDER || draw == Base_UI_Draw_RADIO_BUTTON;
+        bool is_focused = !!(box->flags & ui_Flag_FOCUSED);
+        bool shows_focus_ring = is_focused && !draws_own_focus_ring;
+        bool is_disabled = !!(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+        u32 text_color = is_disabled ? base_ui__disabled_text_color : box->style.fg_color;
+        bool draw_background = !!(box->flags & ui_Flag_DRAW_BACKGROUND);
+        bool draw_border = !!(box->flags & ui_Flag_DRAW_BORDER) || shows_focus_ring;
+        u32 box_border_color = shows_focus_ring ? base_ui__focus_ring_color : box->style.border_color;
+        f32 box_border_width = (shows_focus_ring ? base_ui__focus_ring_width_in_points : box->style.border_width) * scale;
+
+        if (draw == Base_UI_Draw_LIST_ROWS_STRIPED) {
+            u32 row_count = (u32)((box->user_data >> 8) & 1);
+            f32 stripe_top = box_rectangle.y;
+            f32 stripe_height = roundf(18.f * scale);
+            for (ui_Box *row = box->first_child; row != 0; row = row->next_sibling) {
+                if (!(row->flags & ui_Flag_FLOATING)) {
+                    row_count += 1;
+                    stripe_top = roundf(scale * (row->rectangle.position[ui_Y] + row->rectangle.size[ui_Y]));
+                    stripe_height = roundf(scale * row->rectangle.size[ui_Y]);
+                }
+            }
+            u32 stripe_color = base_ui__list_stripe_color;
+            for (u32 row = row_count; stripe_height > 0 && stripe_top < box_rectangle.w; row += 1) {
+                if (row & 1) {
+                    Rectangle_Draw stripe = {
+                        .rectangle = { .x = box_rectangle.x, .y = stripe_top, .z = box_rectangle.z, .w = stripe_top + stripe_height },
+                        .clip = clip,
+                        .background_colors = { stripe_color, stripe_color, stripe_color, stripe_color },
+                    };
+                    base_gpu_draw_rectangle(platform, &stripe);
+                }
+                stripe_top += stripe_height;
+            }
+        }
+        if (draw_background || draw_border) {
+            u32 background_color = draw_background ? box->style.bg_color : 0;
+            Rectangle_Draw background = {
+                .rectangle = box_rectangle,
+                .clip = clip,
+                .background_colors = { background_color, background_color, background_color, background_color },
+                .border_color = box_border_color,
+                .border_width = draw_border ? box_border_width : 0,
+                .corner_radii = { radius, radius, radius, radius },
+            };
+
+            // TODO(felix): Background blur.
+            if (draw == Base_UI_Draw_SEGMENT) {
+                if (box->previous_sibling != 0) background.corner_radii[Corner_TOP_LEFT] = background.corner_radii[Corner_BOTTOM_LEFT] = 0;
+                if (box->next_sibling != 0) background.corner_radii[Corner_TOP_RIGHT] = background.corner_radii[Corner_BOTTOM_RIGHT] = 0;
+            }
+
+            bool background_is_visible = (background_color & 0xff) != 0;
+            bool has_vertical_gradient = background_is_visible && (box->flags & ui_Flag_CLICKABLE) && draw != Base_UI_Draw_GRADIENT;
+            if (has_vertical_gradient) {
+                bool is_pushed_in = draw == Base_UI_Draw_SEGMENT && ((box->user_data >> 8) & 1);
+                bool has_textured_bezel = !!((box->user_data >> 63) & 1);
+                f32 gradient_lightness_change = has_textured_bezel ? 0.1f : 0.03f;
+                if (is_pushed_in) gradient_lightness_change = has_textured_bezel ? -0.1f : -0.06f;
+                V4 top_oklch = oklch_from_rgba(background_color);
+                V4 bottom_oklch = top_oklch;
+                top_oklch.x += gradient_lightness_change;
+                bottom_oklch.x -= gradient_lightness_change;
+                u32 top_color = rgba_from_oklch(top_oklch);
+                u32 bottom_color = rgba_from_oklch(bottom_oklch);
+                background.background_colors[Corner_TOP_LEFT] = top_color;
+                background.background_colors[Corner_TOP_RIGHT] = top_color;
+                background.background_colors[Corner_BOTTOM_LEFT] = bottom_color;
+                background.background_colors[Corner_BOTTOM_RIGHT] = bottom_color;
+            }
+
+            if (draw == Base_UI_Draw_TAB_VIEW && box->first_child != 0) {
+                ui_Rectangle tabs = box->first_child->rectangle;
+                background.rectangle.y = roundf(scale * (tabs.position[ui_Y] + 0.5f * tabs.size[ui_Y]));
+            }
+
+            if (draw == Base_UI_Draw_GRADIENT) {
+                u32 end_color = (u32)(box->user_data >> 32);
+                bool is_vertical = ((box->user_data >> 8) & 1) == ui_Y;
+                background.background_colors[is_vertical ? Corner_BOTTOM_LEFT : Corner_TOP_RIGHT] = end_color;
+                background.background_colors[Corner_BOTTOM_RIGHT] = end_color;
+            }
+
+            if (draw == Base_UI_Draw_SEPARATOR_ETCHED) {
+                u32 light_color = (u32)(box->user_data >> 32);
+                Rectangle_Draw light_line = background;
+                for (int corner = 0; corner < Corner_COUNT; corner += 1) light_line.background_colors[corner] = light_color;
+
+                bool is_horizontal = box_rectangle.z - box_rectangle.x >= box_rectangle.w - box_rectangle.y;
+                if (is_horizontal) {
+                    f32 middle = roundf(0.5f * (box_rectangle.y + box_rectangle.w));
+                    background.rectangle.w = middle;
+                    light_line.rectangle.y = middle;
+                } else {
+                    f32 middle = roundf(0.5f * (box_rectangle.x + box_rectangle.z));
+                    background.rectangle.z = middle;
+                    light_line.rectangle.x = middle;
+                }
+                base_gpu_draw_rectangle(platform, &light_line);
+            }
+
+            base_gpu_draw_rectangle(platform, &background);
+        }
+
+        if (draw == Base_UI_Draw_POPUP_BUTTON) {
+            // TODO(felix): Draw the arrows as triangles once we have svg.h.
+            f32 arrow_font_size = 9.f * scale;
+            f32 arrow_x = box_rectangle.z - roundf((box->style.padding[ui_Side_RIGHT] - 10.f) * scale);
+            bool arrows_at_left = !!((box->user_data >> 9) & 1);
+            if (arrows_at_left) arrow_x = box_rectangle.x + roundf(3.f * scale);
+            f32 middle_y = 0.5f * (box_rectangle.y + box_rectangle.w);
+            V2 up_position = { .x = arrow_x, .y = roundf(middle_y - arrow_font_size) };
+            V2 down_position = { .x = arrow_x, .y = roundf(middle_y - 0.2f * arrow_font_size) };
+            bool is_pull_down = !!((box->user_data >> 8) & 1);
+            if (is_pull_down) down_position.y = roundf(middle_y - 0.6f * arrow_font_size);
+            else base_gpu_draw_or_measure_text(platform, platform->font_file, S("^"), up_position, arrow_font_size, 0, text_color, clip.rectangle);
+            base_gpu_draw_or_measure_text(platform, platform->font_file, S("v"), down_position, arrow_font_size, 0, text_color, clip.rectangle);
+        }
+
+        if (draw == Base_UI_Draw_STEPPER) {
+            // TODO(felix): Draw the arrows as triangles once we have svg.h.
+            bool up_is_pressed = !!((box->user_data >> 8) & 1);
+            bool down_is_pressed = !!((box->user_data >> 9) & 1);
+            f32 line = roundf(MAX(1.f, scale));
+            f32 middle = roundf(0.5f * (box_rectangle.y + box_rectangle.w));
+            for (int half = 0; half < 2; half += 1) {
+                bool is_up = half == 0;
+                bool is_pressed = is_up ? up_is_pressed : down_is_pressed;
+                if (is_pressed) {
+                    u32 pressed_color = base_ui__control_pressed_color;
+                    Rectangle_Draw pressed_half = {
+                        .rectangle = { .x = box_rectangle.x + line, .y = is_up ? box_rectangle.y + line : middle, .z = box_rectangle.z - line, .w = is_up ? middle : box_rectangle.w - line },
+                        .clip = clip,
+                        .background_colors = { pressed_color, pressed_color, pressed_color, pressed_color },
+                    };
+                    base_gpu_draw_rectangle(platform, &pressed_half);
+                }
+            }
+            u32 divider_color = box->style.border_color;
+            Rectangle_Draw divider = {
+                .rectangle = { .x = box_rectangle.x, .y = middle, .z = box_rectangle.z, .w = middle + line },
+                .clip = clip,
+                .background_colors = { divider_color, divider_color, divider_color, divider_color },
+            };
+            base_gpu_draw_rectangle(platform, &divider);
+            f32 arrow_font_size = 9.f * scale;
+            f32 arrow_x = roundf(0.5f * (box_rectangle.x + box_rectangle.z) - 0.25f * arrow_font_size);
+            V2 up_position = { .x = arrow_x, .y = roundf(0.5f * (box_rectangle.y + middle) - 0.55f * arrow_font_size) };
+            V2 down_position = { .x = arrow_x, .y = roundf(0.5f * (middle + box_rectangle.w) - 0.6f * arrow_font_size) };
+            base_gpu_draw_or_measure_text(platform, platform->font_file, S("^"), up_position, arrow_font_size, 0, text_color, clip.rectangle);
+            base_gpu_draw_or_measure_text(platform, platform->font_file, S("v"), down_position, arrow_font_size, 0, text_color, clip.rectangle);
+        }
+
+        if (draw == Base_UI_Draw_SLIDER) {
+            f32 knob_fraction = (f32)((box->user_data >> 8) & 0xffff) / 65535.f;
+            u32 tick_count = (u32)((box->user_data >> 24) & 0xff);
+            bool is_pressed = !!(box->flags & ui_Flag_HELD_LEFT);
+            f32 line = roundf(MAX(1.f, scale));
+            f32 knob_size = roundf(base_ui__slider_knob_size_in_points * scale);
+            f32 track_height = roundf(4.f * scale);
+            f32 track_top = box_rectangle.y + roundf(0.5f * (knob_size - track_height));
+            u32 track_color = is_disabled ? base_ui__slider_track_disabled_color : base_ui__slider_track_color;
+            u32 track_border = is_disabled ? base_ui__slider_track_border_disabled_color : base_ui__slider_track_border_color;
+            Rectangle_Draw track = {
+                .rectangle = { .x = box_rectangle.x, .y = track_top, .z = box_rectangle.z, .w = track_top + track_height },
+                .clip = clip,
+                .background_colors = { track_color, track_color, track_color, track_color },
+                .border_color = track_border,
+                .border_width = line,
+                .corner_radii = { 0.5f * track_height, 0.5f * track_height, 0.5f * track_height, 0.5f * track_height },
+            };
+            base_gpu_draw_rectangle(platform, &track);
+
+            f32 travel = box_rectangle.z - box_rectangle.x - knob_size;
+            if (tick_count >= 2) {
+                u32 tick_color = is_disabled ? base_ui__slider_tick_disabled_color : base_ui__slider_tick_color;
+                f32 tick_top = box_rectangle.y + knob_size + roundf(2.f * scale);
+                f32 tick_bottom = tick_top + roundf(5.f * scale);
+                for (u32 tick = 0; tick < tick_count; tick += 1) {
+                    f32 tick_x = roundf(box_rectangle.x + 0.5f * knob_size + travel * (f32)tick / (f32)(tick_count - 1) - 0.5f * line);
+                    Rectangle_Draw tick_mark = {
+                        .rectangle = { .x = tick_x, .y = tick_top, .z = tick_x + line, .w = tick_bottom },
+                        .clip = clip,
+                        .background_colors = { tick_color, tick_color, tick_color, tick_color },
+                    };
+                    base_gpu_draw_rectangle(platform, &tick_mark);
+                }
+            }
+
+            f32 knob_left = roundf(box_rectangle.x + knob_fraction * travel);
+            u32 knob_color = is_disabled ? base_ui__control_disabled_color : is_pressed ? base_ui__control_pressed_color : base_ui__control_color;
+            f32 knob_radius = 0.5f * knob_size;
+            Rectangle_Draw knob = {
+                .rectangle = { .x = knob_left, .y = box_rectangle.y, .z = knob_left + knob_size, .w = box_rectangle.y + knob_size },
+                .clip = clip,
+                .background_colors = { knob_color, knob_color, knob_color, knob_color },
+                .border_color = is_focused ? base_ui__focus_ring_color : (is_disabled ? base_ui__control_disabled_border_color : base_ui__control_border_color),
+                .border_width = is_focused ? roundf(base_ui__focus_ring_width_in_points * scale) : line,
+                .corner_radii = { knob_radius, knob_radius, knob_radius, knob_radius },
+            };
+            base_gpu_draw_rectangle(platform, &knob);
+        }
+
+        if (draw == Base_UI_Draw_CHECKBOX || draw == Base_UI_Draw_RADIO_BUTTON) {
+            // TODO(felix): Draw a tick mark once we have svg.h. A ticked box is filled for now.
+            bool is_radio_button = draw == Base_UI_Draw_RADIO_BUTTON;
+            bool is_selected = !!((box->user_data >> 8) & 1);
+            bool is_pressed = !!(box->flags & ui_Flag_HELD_OVER);
+            bool label_is_below = is_radio_button && ((box->user_data >> 9) & 1);
+            f32 line = roundf(MAX(1.f, scale));
+            f32 size = roundf((is_radio_button ? base_ui__radio_button_size_in_points : base_ui__checkbox_square_size_in_points) * scale);
+            f32 left = box_rectangle.x + roundf((is_radio_button ? 2.f : base_ui__focus_ring_width_in_points) * scale);
+            f32 top = roundf(0.5f * (box_rectangle.y + box_rectangle.w - size));
+            if (label_is_below) {
+                left = roundf(0.5f * (box_rectangle.x + box_rectangle.z - size));
+                top = box_rectangle.y + roundf(1.f * scale);
+            }
+            u32 fill_color = is_selected ? base_ui__selection_color : base_ui__control_color;
+            if (is_pressed) fill_color = is_selected ? base_ui__selection_pressed_color : base_ui__control_pressed_color;
+            u32 border_color = is_selected ? base_ui__selection_border_color : base_ui__control_border_color;
+            if (is_disabled) {
+                fill_color = is_selected ? base_ui__selection_disabled_color : base_ui__control_disabled_color;
+                border_color = is_selected ? base_ui__selection_disabled_border_color : base_ui__control_disabled_border_color;
+            }
+            f32 indicator_radius = is_radio_button ? 0.5f * size : 3.f * scale;
+            Rectangle_Draw indicator = {
+                .rectangle = { .x = left, .y = top, .z = left + size, .w = top + size },
+                .clip = clip,
+                .background_colors = { fill_color, fill_color, fill_color, fill_color },
+                .border_color = border_color,
+                .border_width = line,
+                .corner_radii = { indicator_radius, indicator_radius, indicator_radius, indicator_radius },
+            };
+            base_gpu_draw_rectangle(platform, &indicator);
+
+            if (is_radio_button && is_focused) {
+                f32 ring_width = roundf(base_ui__focus_ring_width_in_points * scale);
+                f32 ring_outset = ring_width + line;
+                f32 ring_radius = indicator_radius + ring_outset;
+                Rectangle_Draw ring = {
+                    .rectangle = { .x = left - ring_outset, .y = top - ring_outset, .z = left + size + ring_outset, .w = top + size + ring_outset },
+                    .clip = clip,
+                    .border_color = base_ui__focus_ring_color,
+                    .border_width = ring_width,
+                    .corner_radii = { ring_radius, ring_radius, ring_radius, ring_radius },
+                };
+                base_gpu_draw_rectangle(platform, &ring);
+            }
+
+            if (is_radio_button && is_selected) {
+                f32 dot_size = roundf(6.f * scale);
+                f32 dot_left = left + roundf(0.5f * (size - dot_size));
+                f32 dot_top = top + roundf(0.5f * (size - dot_size));
+                u32 dot_color = base_ui__radio_button_dot_color;
+                f32 dot_radius = 0.5f * dot_size;
+                Rectangle_Draw dot = {
+                    .rectangle = { .x = dot_left, .y = dot_top, .z = dot_left + dot_size, .w = dot_top + dot_size },
+                    .clip = clip,
+                    .background_colors = { dot_color, dot_color, dot_color, dot_color },
+                    .corner_radii = { dot_radius, dot_radius, dot_radius, dot_radius },
+                };
+                base_gpu_draw_rectangle(platform, &dot);
+            }
+        }
+
+        if (box->flags & ui_Flag_DRAW_TEXT) {
+            String text = string_from_cstring(box->display_string);
+            bool text_is_cut = box->text_cut_length >= 0;
+            if (text_is_cut) text.count = (u64)box->text_cut_length;
+            V2 position = { .x = roundf(scale * box->text_position[ui_X]), .y = roundf(scale * box->text_position[ui_Y]) };
+            // TODO(felix): Render style.font_id, font_weight and font_italic. Every font renders as the embedded regular font for now.
+            // TODO(felix): Clip text to clip.rounded_rectangle too. Text clips only to the square clip for now, since the glyph shader has no rounded clip.
+            Text_Measurement drawn = base_gpu_draw_or_measure_text(platform, platform->font_file, text, position, box->style.font_size * scale, box->text_wrap_width * scale, text_color, clip.rectangle);
+            if (text_is_cut) {
+                V2 dots_position = { .x = position.x + drawn.size.x, .y = position.y };
+                base_gpu_draw_or_measure_text(platform, platform->font_file, S("..."), dots_position, box->style.font_size * scale, 0, text_color, clip.rectangle);
+            }
+        }
     }
 }
 
-static void base_ui_measure_text(void *user_data, const char *string, ui_Style style, f32 size[2]) {
-    String s = { .data = string, .count = cstring_length(string) };
-    V2 measure = platform_measure_text(user_data, s, style.font_size);
-    size[0] = measure.x;
-    size[1] = measure.y;
+static GPU_Texture_Id base_ui__group_texture(Platform *platform, u32 depth) {
+    GPU_Texture description = {
+        .key = 0x6261736575696700ull + depth,
+        .width = (u32)platform->frame.window_size.x,
+        .height = (u32)platform->frame.window_size.y,
+        .format = GPU_Texture_Format_RGBA8,
+        .flags = GPU_Texture_Flag_RENDER_TARGET,
+    };
+    return gpu_texture_id(platform, &description);
+}
+
+static void base_ui__composite_group(Platform *platform, GPU_Texture_Id texture, GPU_Texture_Id target, f32 opacity, V2 offset) {
+    GPU_Shader composite_shader_source = {
+        .fragment_source = S(STRINGIFY(
+            layout(std140) uniform gpu_arguments { vec4 opacity; };
+            void main() {
+                gpu_color_out = texture(gpu_texture_0, gpu_uv) * opacity.x;
+            }
+        )),
+    };
+    bool shader_ok = false;
+    GPU_Shader_Id shader = gpu_shader_id(platform, &composite_shader_source, &shader_ok);
+    ensure(shader_ok);
+
+    V2 window_size = platform->frame.window_size;
+    V4 opacity_argument = { .x = opacity };
+    GPU_Draw draw = {
+        .target = target,
+        .clip = { .x = 0, .y = 0, .z = window_size.x, .w = window_size.y },
+        .shader = shader,
+        .rectangle = { .x = offset.x, .y = offset.y, .z = window_size.x + offset.x, .w = window_size.y + offset.y },
+        .textures = { texture },
+        .arguments = gpu_arguments(opacity_argument),
+        .blend_mode = GPU_Blend_Mode_PREMULTIPLIED_ALPHA,
+    };
+    gpu_draw(platform, &draw);
+}
+
+static void base_ui_render(ui_State *ui) {
+    Platform *platform = ui->user_data;
+    assert(platform != 0);
+
+    enum { BASE_UI_MAX_RENDER_GROUPS = 8 };
+    typedef struct { ui_Box *box; GPU_Texture_Id texture; f32 opacity; } Render_Group;
+    Render_Group groups[BASE_UI_MAX_RENDER_GROUPS] = {0};
+    u32 group_count = 0;
+    platform->gpu_draw_target = 0;
+
+    for (int draw_index = 0; draw_index <= ui->draw_order_count; draw_index += 1) {
+        ui_Box *box = draw_index < ui->draw_order_count ? ui->draw_order[draw_index] : 0;
+        while (group_count > 0 && (box == 0 || !base_ui__box_is_inside(box, groups[group_count - 1].box))) {
+            group_count -= 1;
+            GPU_Texture_Id outer_target = group_count > 0 ? groups[group_count - 1].texture : 0;
+            base_ui__composite_group(platform, groups[group_count].texture, outer_target, groups[group_count].opacity, (V2){0});
+            platform->gpu_draw_target = outer_target;
+        }
+        if (box != 0) {
+            bool starts_group = box->style.transparency > 0 && group_count < BASE_UI_MAX_RENDER_GROUPS;
+            if (starts_group) {
+                GPU_Texture_Id texture = base_ui__group_texture(platform, group_count);
+                gpu_clear(platform, texture, 0);
+                Render_Group group = { .box = box, .texture = texture, .opacity = 1.f - MIN(box->style.transparency, 1.f) };
+                groups[group_count] = group;
+                group_count += 1;
+                platform->gpu_draw_target = texture;
+            }
+            base_ui__render_box(platform, box, ui->scale);
+        }
+    }
+
+    Base_UI_Drag_Image *image = &base_ui__drag_image;
+    GPU_Texture_Id snapshot = base_ui__group_texture(platform, BASE_UI_MAX_RENDER_GROUPS);
+    if (image->box_to_snapshot != 0) {
+        ui_Box *snapshot_box = image->box_to_snapshot;
+        int image_index = ui->draw_order_count;
+        for (int i = ui->draw_order_count - 1; i >= 0; i -= 1) if (ui->draw_order[i] == snapshot_box) image_index = i;
+        gpu_clear(platform, snapshot, 0);
+        platform->gpu_draw_target = snapshot;
+        for (int i = image_index; i < ui->draw_order_count && base_ui__box_is_inside(ui->draw_order[i], snapshot_box); i += 1) base_ui__render_box(platform, ui->draw_order[i], ui->scale);
+        platform->gpu_draw_target = 0;
+        image->snapshot_position = snapshot_box->rectangle.position[image->axis];
+        image->box_to_snapshot = 0;
+    }
+    if (image->is_shown) {
+        f32 offset_along_axis = roundf((image->position - image->snapshot_position) * ui->scale);
+        V2 offset = image->axis == ui_X ? (V2){ .x = offset_along_axis } : (V2){ .y = offset_along_axis };
+        f32 image_opacity = 0.7f;
+        base_ui__composite_group(platform, snapshot, 0, image_opacity, offset);
+    }
+}
+
+static u64 base_ui_gradient_user_data(int axis, u32 end_color) {
+    return (u64)Base_UI_Draw_GRADIENT | ((u64)axis << 8) | ((u64)end_color << 32);
+}
+
+static ui_Text_Measurement base_ui_measure_text(ui_State *ui, const char *string, ui_Style style, f32 wrap_width) {
+    String text = { .data = string, .count = cstring_length(string) };
+    Platform *platform = ui->user_data;
+    f32 scale = ui->scale;
+    Text_Measurement measurement = base_gpu_draw_or_measure_text(platform, platform->font_file, text, (V2){0}, style.font_size * scale, wrap_width * scale, 0, (V4){0});
+    ui_Text_Measurement result = {
+        .size = { [ui_X] = measurement.size.x / scale, [ui_Y] = measurement.size.y / scale },
+        .ascent = measurement.ascent / scale,
+    };
+    return result;
 }
 
 

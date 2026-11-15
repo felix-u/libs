@@ -198,16 +198,21 @@ export async function start(container) {
         js_performance_now: () => {
             return performance.now();
         },
-        js_set_cursor_hidden: hidden => {
-            canvas.style.cursor = hidden ? "none" : "";
+        // NOTE(felix): Must match Cursor_Shape in base.h.
+        js_set_cursor_shape: shape => {
+            canvas.style.cursor = ["", "none", "col-resize", "row-resize"][shape];
+        },
+        os_exit_js: code => {
+            throw new Error(`os_exit(${code})`);
         },
         os_write_console_js: (pointer, count) => {
             console.log(read_string(pointer, count));
         },
     } };
 
-    // TODO(felix): make .wasm file name changeable in build
-    wasm = await WebAssembly.instantiateStreaming(fetch(new URL("module.wasm", import.meta.url)), imports);
+    const module_url = new URL(import.meta.url);
+    module_url.pathname = module_url.pathname.replace(/\.js$/, ".wasm");
+    wasm = await WebAssembly.instantiateStreaming(fetch(module_url), imports);
     const exports = wasm.instance.exports;
 
     exports.platform__start();

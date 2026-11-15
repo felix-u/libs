@@ -135,7 +135,7 @@ void platform__start(void) {
     base_platform_reserve_frame_arena(base);
 
     base->frame.dpi_scale = 1.f;
-    gles3__initialise(&platform__.gpu, base->persistent_arena);
+    gles3__init(base);
 }
 
 META(link_flag "-Wl,--export=platform__update_and_render")
@@ -161,8 +161,8 @@ void platform__update_and_render(f32 window_width, f32 window_height, f32 mouse_
 
     app_update_and_render(&platform__.base);
 
-    void js_set_cursor_hidden(bool hidden);
-    js_set_cursor_hidden(platform__.base.hide_cursor);
+    void js_set_cursor_shape(u32 shape);
+    js_set_cursor_shape(platform__.base.cursor_shape);
 
     gles3__end_frame(&platform__.base);
 

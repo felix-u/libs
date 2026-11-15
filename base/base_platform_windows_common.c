@@ -22,7 +22,6 @@ enum { // https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles
 };
 
 #define MAKEINTRESOURCEW(i) ((unsigned short *)((unsigned long long)((unsigned short)(i))))
-#define IDC_ARROW MAKEINTRESOURCEW(32512)
 
 #define WIN32__LOWORD(l) ((unsigned short)(((unsigned long long)(l)) & 0xffff))
 #define WIN32__HIWORD(l) ((unsigned short)((((unsigned long long)(l)) >> 16) & 0xffff))
@@ -30,6 +29,7 @@ enum { // https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles
 #define WIN32__GET_Y_LPARAM(l) ((int)(short)WIN32__HIWORD(l))
 
 typedef struct { long x, y; } POINT;
+typedef struct { long left, top, right, bottom; } RECT;
 typedef struct {
     POINT ptReserved;
     POINT ptMaxSize;
@@ -67,6 +67,7 @@ int ReleaseDC(void *window_handle, void *device_context_handle);
 
 META(link "User32")
 void *         CreateWindowExW(unsigned long extended_style, const unsigned short *class_name, const unsigned short *window_name, unsigned long style, int x, int y, int width, int height, void *window_parent_handle, void *menu_handle, void *instance_handle, void *param);
+int            AdjustWindowRectExForDpi(RECT *rectangle, unsigned long style, int has_menu, unsigned long extended_style, unsigned dpi);
 long long      DefWindowProcW(void *window_handle, unsigned message, unsigned long long wparam, long long lparam);
 int            DestroyWindow(void *window_handle);
 long long      DispatchMessageW(const MSG *);
@@ -100,10 +101,9 @@ static void *win32_create_window(const char *window_name, WNDPROC window_procedu
     int ok = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     ensure(ok);
 
-    unsigned extended_style = WS_EX_APPWINDOW;
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT, width = CW_USEDEFAULT, height = CW_USEDEFAULT;
 
-    void *window = CreateWindowExW(extended_style, class_name, window_name_utf16, WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, 0, 0);
+    void *window = CreateWindowExW(WS_EX_APPWINDOW, class_name, window_name_utf16, WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, 0, 0);
     ensure(window != 0);
 
     return window;
@@ -119,6 +119,19 @@ static void win32_process_messages(bool *should_quit) {
         if (message.message == WM_QUIT) *should_quit = true;
         TranslateMessage(&message);
         DispatchMessageW(&message);
+    }
+}
+
+static bool win32__cursor_is_in_client_area;
+static Cursor_Shape win32__cursor_shape_set = Cursor_Shape_COUNT;
+static void win32_cursor_update(Platform *platform, bool always) {
+    enum { IDC_ARROW = 32512, IDC_SIZEWE = 32644, IDC_SIZENS = 32645 };
+    static const u16 cursor_ids[Cursor_Shape_COUNT] = { [Cursor_Shape_POINTER] = IDC_ARROW, [Cursor_Shape_RESIZE_X] = IDC_SIZEWE, [Cursor_Shape_RESIZE_Y] = IDC_SIZENS };
+    Cursor_Shape shape = platform->cursor_shape;
+    bool changes_cursor = win32__cursor_is_in_client_area && (always || shape != win32__cursor_shape_set);
+    if (changes_cursor) {
+        SetCursor(shape == Cursor_Shape_HIDDEN ? 0 : LoadCursorW(0, MAKEINTRESOURCEW(cursor_ids[shape])));
+        win32__cursor_shape_set = shape;
     }
 }
 
@@ -147,6 +160,9 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
     if (message == WM_KEYDOWN || message == WM_KEYUP) switch (w) { // https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
         case 0x10: key = App_Key_SHIFT; break;
         case 0x11: key = App_Key_CONTROL; break;
+        case 0x0d: key = App_Key_RETURN; break;
+        case 0x1b: key = App_Key_ESCAPE; break;
+        case 0x09: key = App_Key_TAB; break;
         case 0x25: key = App_Key_LEFT; break;
         case 0x26: key = App_Key_UP; break;
         case 0x27: key = App_Key_RIGHT; break;
@@ -181,11 +197,21 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
             f32 dpi_1x = 96.f;
             frame->dpi_scale = (f32)GetDpiForWindow(window) / dpi_1x;
         } break;
-        case WM_GETMINMAXINFO: { // TODO(felix): not working. The goal is to not allow the window to become smaller than a certain size
-            MINMAXINFO *info = (MINMAXINFO *)l;
-            int min_width = 100, min_height = 100;
-            info->ptMinTrackSize.x = min_width;
-            info->ptMinTrackSize.y = min_height;
+        case WM_GETMINMAXINFO: {
+            V2 min = platform->window_min_size_logical;
+            bool has_min = min.x > 0 || min.y > 0;
+            if (has_min) {
+                unsigned dpi = GetDpiForWindow(window);
+                f32 dpi_1x = 96.f;
+                f32 dpi_scale = (f32)dpi / dpi_1x;
+                RECT outer = { .right = (i32)ceilf(min.x * dpi_scale), .bottom = (i32)ceilf(min.y * dpi_scale) };
+                int ok = AdjustWindowRectExForDpi(&outer, WS_OVERLAPPEDWINDOW, false, WS_EX_APPWINDOW, dpi);
+                MINMAXINFO *info = (MINMAXINFO *)l;
+                if (ok) {
+                    info->ptMinTrackSize.x = MAX(info->ptMinTrackSize.x, outer.right - outer.left);
+                    info->ptMinTrackSize.y = MAX(info->ptMinTrackSize.y, outer.bottom - outer.top);
+                }
+            }
         } break;
         case WM_KEYDOWN: {
             frame->key_pressed[key] = !frame->key_down[key];
@@ -222,8 +248,8 @@ static i64 win32_window_procedure(void *window, u32 message, u64 w, i64 l, Platf
         } break;
         case WM_SETCURSOR: {
             enum { HTCLIENT = 1 };
-            bool is_client_area = WIN32__LOWORD(l) == HTCLIENT;
-            if (is_client_area) SetCursor(platform->hide_cursor ? 0 : LoadCursorW(0, IDC_ARROW));
+            win32__cursor_is_in_client_area = WIN32__LOWORD(l) == HTCLIENT;
+            win32_cursor_update(platform, true);
         } break;
         case WM_SIZE: {
             window_size[0] = (f32)WIN32__LOWORD(l);

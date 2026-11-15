@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-08
+// https://github.com/felix-u 2026-11-15
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(DS_H)
@@ -28,7 +28,7 @@ typedef struct {
     ds_size_t used;
 } ds_Static_Buffer;
 
-DS_FUNCTION ds_u64 ds_array_grow_capacity(ds_u64 capacity, ds_u64 minimum);
+DS_FUNCTION ds_u64 ds_array_grow_capacity(ds_u64 capacity, ds_u64 min);
 DS_FUNCTION void  *ds_array_resize(void *allocate_context, void *data, ds_size_t item_size, ds_u64 capacity, ds_u64 new_capacity);
 DS_FUNCTION ds_u32 ds_hash_fnv1a(const void *data, ds_size_t count);
 DS_FUNCTION ds_u64 ds_hash_fnv1a_64(const void *data, ds_u64 count);
@@ -48,14 +48,14 @@ DS_FUNCTION void  *ds_static_buffer_allocate(void *context, void *pointer, ds_si
     #define DS_ALLOCATE(context, pointer, old_size, new_size) ds_static_buffer_allocate((context), (pointer), (old_size), (new_size))
 #endif
 
-DS_FUNCTION ds_u64 ds_array_grow_capacity(ds_u64 capacity, ds_u64 minimum) {
+DS_FUNCTION ds_u64 ds_array_grow_capacity(ds_u64 capacity, ds_u64 min) {
     ds_u64 result = capacity;
-    if (result < minimum) {
-        _Bool can_double_to_minimum = minimum <= ((ds_u64)1 << 62);
-        if (can_double_to_minimum) {
+    if (result < min) {
+        _Bool can_double_to_min = min <= ((ds_u64)1 << 62);
+        if (can_double_to_min) {
             result += result == 0;
-            while (result < minimum) result *= 2;
-        } else result = minimum;
+            while (result < min) result *= 2;
+        } else result = min;
     }
     return result;
 }

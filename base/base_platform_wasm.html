@@ -10,7 +10,7 @@
 </style>
 
 <script type=module>
-    import { start } from "./module.js";
+    const { start } = await import(location.pathname.replace(/\.html$/, ".js"));
     await start(document.body);
     document.querySelector("canvas")?.focus();
 </script>

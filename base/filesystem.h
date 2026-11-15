@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-07
+// https://github.com/felix-u 2026-11-15
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(FS_H)
@@ -234,8 +234,8 @@ static _Bool fs__utf16_from_utf8(unsigned short *destination, unsigned destinati
         unsigned char leading = bytes[read];
         unsigned sequence_length = 1;
         unsigned codepoint = leading;
-        unsigned char second_minimum = 0x80;
-        unsigned char second_maximum = 0xbf;
+        unsigned char second_min = 0x80;
+        unsigned char second_max = 0xbf;
 
         if (0xc2 <= leading && leading <= 0xdf) {
             sequence_length = 2;
@@ -243,23 +243,23 @@ static _Bool fs__utf16_from_utf8(unsigned short *destination, unsigned destinati
         } else if (0xe0 <= leading && leading <= 0xef) {
             sequence_length = 3;
             codepoint = leading & 0x0f;
-            if (leading == 0xe0) second_minimum = 0xa0;
+            if (leading == 0xe0) second_min = 0xa0;
         } else if (0xf0 <= leading && leading <= 0xf4) {
             sequence_length = 4;
             codepoint = leading & 0x07;
-            if (leading == 0xf0) second_minimum = 0x90;
-            if (leading == 0xf4) second_maximum = 0x8f;
+            if (leading == 0xf0) second_min = 0x90;
+            if (leading == 0xf4) second_max = 0x8f;
         }
 
         ok = leading < 0x80 || sequence_length > 1;
         ok = ok && read + sequence_length <= source_count;
 
         for (unsigned i = 1; ok && i < sequence_length; i += 1) {
-            unsigned char minimum = i == 1 ? second_minimum : 0x80;
-            unsigned char maximum = i == 1 ? second_maximum : 0xbf;
+            unsigned char min = i == 1 ? second_min : 0x80;
+            unsigned char max = i == 1 ? second_max : 0xbf;
             unsigned char continuation = bytes[read + i];
 
-            ok = minimum <= continuation && continuation <= maximum;
+            ok = min <= continuation && continuation <= max;
             codepoint = (codepoint << 6) | (continuation & 0x3f);
         }
 

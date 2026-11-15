@@ -189,7 +189,7 @@ typedef struct {
 } Vertex;
 _Static_assert(sizeof(Vertex) == 80, "Vertex must match MSL stride");
 
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
+static Text_Measurement platform_measure_text(Platform *platform, String text, f32 font_size) {
     (void)platform;
 
     CTFontRef font = CTFontCreateWithGraphicsFont(platform__.core_graphics_font, (CGFloat)font_size, 0, 0);
@@ -205,7 +205,10 @@ static V2 platform_measure_text(Platform *platform, String text, f32 font_size) 
 
     CGFloat ascent = 0, descent = 0;
     double width = CTLineGetTypographicBounds(line, &ascent, &descent, 0);
-    V2 size = { .x = (f32)width, .y = (f32)(ascent + descent) };
+    Text_Measurement measurement = {
+        .size = { .x = (f32)width, .y = (f32)(ascent + descent) },
+        .ascent = (f32)ascent,
+    };
 
     CFRelease(line);
     CFRelease(attr_str);
@@ -213,7 +216,7 @@ static V2 platform_measure_text(Platform *platform, String text, f32 font_size) 
     CFRelease(cf_str);
     CFRelease(font);
 
-    return size;
+    return measurement;
 }
 
 static const char *platform_view_class_name = "PlatformView";

@@ -110,6 +110,7 @@ static void wingles3_update_and_render(Platform_Implementation *platform) {
     frame->seconds_since_last_frame = (f32)time_averaged_sample_elapsed_seconds(&sampler);
 
     app_update_and_render(&platform->base);
+    win32_cursor_update(&platform->base, false);
     gles3__end_frame(&platform->base);
 
     bool should_present = frame->window_size.x > 0 && frame->window_size.y > 0;
@@ -129,6 +130,7 @@ static i64 window_procedure__(void *window, u32 message, u64 w, i64 l) {
     Platform_Implementation *platform = window_procedure__platform;
     i64 result = win32_window_procedure(window, message, w, l, &platform->base, &platform->base.frame.window_size.x, &platform->base.frame.mouse_position.x);
 
+    // TODO(felix): Live resize is 30-50 fps for me. Frames are ~1.2 ms, but SwapBuffers is 15-45 ms and grows with window area. vsync off with glFinish and DwmFlush didn't help. Nor did a pixel format without depth and stencil. Investigate once base supports profiling. We could try DirectComposition with a flip-model swap chain that presents the new size from WM_NCCALCSIZE.
     enum { WM_SIZE = 0x0005 };
     bool should_render_after_resize = message == WM_SIZE && platform->gpu.is_ready;
     if (should_render_after_resize) wingles3_update_and_render(platform);
@@ -268,7 +270,7 @@ static void program(void) {
     bool vsync = true;
     wglSwapIntervalEXT(vsync ? 1 : 0);
 
-    gles3__initialise(&platform.gpu, platform.base.persistent_arena);
+    gles3__init(&platform.base);
     frame->dpi_scale = (f32)GetDpiForWindow(window) / 96.f;
 
     ShowWindow(window, SW_SHOWDEFAULT);

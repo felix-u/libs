@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-07
+// https://github.com/felix-u 2026-11-15
 // Public domain. NO WARRANTY - use at your own risk
 
 
@@ -385,7 +385,7 @@ typedef struct {
     unsigned long long address_size;
     unsigned long long file_offset;
     unsigned long long size; // bytes from file offset
-    object_MachO_Memory_Permissions maximum_memory_protections;
+    object_MachO_Memory_Permissions max_memory_protections;
     object_MachO_Memory_Permissions initial_virtual_memory_protections;
     unsigned number_of_sections;
     object_MachO_Segment_Flags flag32;
@@ -752,7 +752,7 @@ OBJECT_FUNCTION unsigned char *object_bundle(
             .address_size = data_size,
             .file_offset = (unsigned)raw_data_offset,
             .size = data_size,
-            .maximum_memory_protections =
+            .max_memory_protections =
                 object_MachO_Memory_Permission_READ |
                 object_MachO_Memory_Permission_WRITE,
             .initial_virtual_memory_protections =

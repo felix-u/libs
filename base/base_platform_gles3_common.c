@@ -377,14 +377,6 @@ typedef struct {
 
 static GLES3_GPU *gles3__gpu_from_platform(Platform *platform);
 
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
-    (void)platform;
-    (void)text;
-    (void)font_size;
-    panic("TODO(felix)");
-    return (V2){0};
-}
-
 static void gles3__command_push(Platform *platform, const GLES3_Command *command) {
     GLES3_GPU *gpu = gles3__gpu_from_platform(platform);
     gpu->commands = arena_array_reserve(platform->frame_arena, gpu->commands, gpu->command_count, &gpu->command_capacity, gpu->command_count + 1);
@@ -475,7 +467,11 @@ static void gpu_draw(Platform *platform, const GPU_Draw *draw) {
     if (draw_ok) {
         const GLES3_Shader *shader = &gpu->shaders[shader_slot];
         bool shader_has_arguments = shader->arguments_block_index != GL_INVALID_INDEX;
-        u64 expected_arguments_size = shader_has_arguments ? (u64)shader->arguments_block_size : 0;
+        
+        // NOTE(felix): GL_UNIFORM_BLOCK_DATA_SIZE may or may not include the padding after a trailing scalar depending on the driver. gpu_arguments always sends whole vec4s.
+        enum { STD140_VEC4_SIZE = 16 };
+        u64 arguments_block_size = shader_has_arguments ? (u64)shader->arguments_block_size : 0;
+        u64 expected_arguments_size = (arguments_block_size + STD140_VEC4_SIZE - 1) / STD140_VEC4_SIZE * STD140_VEC4_SIZE;
         assert(draw->arguments.size == expected_arguments_size);
 
         for (u32 i = 0; i < GPU_MAX_TEXTURES_PER_DRAW; i += 1) assert(draw->textures[i] == 0 || draw->textures[i] != draw->target);
@@ -830,8 +826,8 @@ static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *text
     GLES3_GPU *gpu = gles3__gpu_from_platform(platform);
     assert(gpu->is_ready);
 
+    assert(texture->key != 0);
     bool has_pixels = texture->pixels.size > 0;
-    bool is_keyed_by_content = texture->key == 0;
     bool has_description = texture->width > 0 && texture->height > 0;
 
     u32 pixels_per_row = texture->pixels_per_row != 0 ? texture->pixels_per_row : texture->width;
@@ -839,22 +835,10 @@ static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *text
     u64 expected_pixels_size = has_description ? ((u64)(texture->height - 1) * pixels_per_row + texture->width) * bytes_per_pixel : 0;
     bool pixels_ok = !has_pixels || (has_description && texture->pixels.size >= expected_pixels_size);
 
-    u64 key = texture->key;
-    if (is_keyed_by_content && has_pixels) {
-        key = ds_hash_fnv1a_64(texture->pixels.data, texture->pixels.size);
-        key = ds_hash_fnv1a_64_update(key, &texture->width, sizeof texture->width);
-        key = ds_hash_fnv1a_64_update(key, &texture->height, sizeof texture->height);
-        key = ds_hash_fnv1a_64_update(key, &texture->format, sizeof texture->format);
-        key = ds_hash_fnv1a_64_update(key, &texture->flags, sizeof texture->flags);
-        key = ds_hash_fnv1a_64_update(key, &texture->filter, sizeof texture->filter);
-        key = ds_hash_fnv1a_64_update(key, &texture->wrap, sizeof texture->wrap);
-        key = ds_hash_fnv1a_64_update(key, &pixels_per_row, sizeof pixels_per_row);
-    }
-
-    bool lookup_ok = pixels_ok && (!is_keyed_by_content || has_pixels);
+    bool lookup_ok = pixels_ok;
     bool may_insert = has_description;
     GPU_Cache_Lookup lookup = {0};
-    if (lookup_ok) lookup = gles3__cache_find_or_insert(gpu, &gpu->texture_cache, key, is_keyed_by_content, may_insert, &lookup_ok);
+    if (lookup_ok) lookup = gles3__cache_find_or_insert(gpu, &gpu->texture_cache, texture->key, false, may_insert, &lookup_ok);
 
     GPU_Texture_Id id = 0;
     if (lookup_ok) {
@@ -868,9 +852,8 @@ static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *text
             gles3_texture->format != texture->format ||
             gles3_texture->flags != texture->flags
         );
-        bool should_upload = has_pixels && (!is_keyed_by_content || !lookup.was_found);
 
-        if (lookup.was_found && !description_changed && !should_upload) gpu->stats.cache_hits += 1;
+        if (lookup.was_found && !description_changed) gpu->stats.cache_hits += 1;
         else gpu->stats.cache_misses += 1;
 
         static const GLint gl_internal_format[GPU_Texture_Format_COUNT] = {
@@ -889,12 +872,10 @@ static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *text
             [GPU_Texture_Format_RGBA16F] = GL_HALF_FLOAT,
         };
 
-        if (description_changed || should_upload) {
+        if (description_changed) {
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)pixels_per_row);
-        }
 
-        if (description_changed) {
             gles3__texture_delete(gpu, gles3_texture);
 
             u64 color_byte_size = (u64)texture->width * texture->height * bytes_per_pixel;
@@ -933,12 +914,7 @@ static GPU_Texture_Id gpu_texture_id(Platform *platform, const GPU_Texture *text
                 ensure(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
             }
-        } else if (should_upload) {
-            glBindTexture(GL_TEXTURE_2D, gles3_texture->texture);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)texture->width, (GLsizei)texture->height, gl_format[texture->format], gl_type[texture->format], texture->pixels.data);
-        }
 
-        if (description_changed || should_upload) {
             static const GLint gl_filter[GPU_Texture_Filter_COUNT] = {
                 [GPU_Texture_Filter_LINEAR] = GL_LINEAR,
                 [GPU_Texture_Filter_NEAREST] = GL_NEAREST,
@@ -1202,7 +1178,14 @@ static void gles3__end_frame(Platform *platform) {
 
 #define GLES3_DEFAULT_MEMORY_LIMIT_IN_BYTES (1ull << 30)
 
-static void gles3__initialise(GLES3_GPU *gpu, Arena *persistent_arena) {
+static void gles3__init(Platform *platform) {
+    GLES3_GPU *gpu = gles3__gpu_from_platform(platform);
+    Arena *persistent_arena = platform->persistent_arena;
+
+    META(embed "src/base/third_party/Inter/Inter-Regular.ttf")
+    platform->font_file = base_embedded_files_get(S("src/base/third_party/Inter/Inter-Regular.ttf"));
+    ensure(platform->font_file.count > 0);
+
     glGenVertexArrays(1, &gpu->vertex_array);
     glBindVertexArray(gpu->vertex_array);
 

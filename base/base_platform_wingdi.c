@@ -55,7 +55,7 @@ struct Platform_Implementation {
     cpu_draw_Font font;
 };
 
-static V2 platform_measure_text(Platform *platform, String text, f32 font_size) {
+static Text_Measurement platform_measure_text(Platform *platform, String text, f32 font_size) {
     return cpu_draw_platform_measure_text(&((Platform_Implementation *)platform)->font, text, font_size);
 }
 
@@ -144,6 +144,7 @@ static void program(void) {
             platform.base.frame.seconds_since_last_frame = (f32)time_averaged_sample_elapsed_seconds(&sampler);
 
             app_update_and_render(&platform.base);
+            win32_cursor_update(&platform.base, false);
 
             i32 virtual_width = (i32)frame->window_size.x;
             i32 virtual_height = (i32)frame->window_size.y;

@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-08
+// https://github.com/felix-u 2026-11-15
 // Public domain. NO WARRANTY - use at your own risk
 
 #if !defined(CLEX_H)
@@ -478,7 +478,6 @@ static clex__Value clex__evaluate(const clex_Token *tokens, const clex_Node *nod
             if (is_known && node.kind == clex_Node_LITERAL) {
                 node_ok = token.kind == clex_Token_INTEGER || token.kind == clex_Token_CHARACTER;
 
-                // TODO(felix): Report integer constants that overflow.
                 // TODO(felix): Character constants with more than one character, with an encoding prefix, or of type char where char is signed.
                 if (token.kind == clex_Token_INTEGER) {
                     unsigned base = 10;
@@ -489,6 +488,8 @@ static clex__Value clex__evaluate(const clex_Token *tokens, const clex_Node *nod
 
                     for (const char *c = token.data.start + prefix_size; c < token.data.end; c += 1) {
                         unsigned digit = clex__digit_value(*c);
+                        _Bool overflows = digit < base && result > (~0ull - digit) / base;
+                        node_ok = node_ok && !overflows;
                         if (digit < base) result = result * base + digit;
                     }
                 }
@@ -548,9 +549,9 @@ static clex__Value clex__evaluate(const clex_Token *tokens, const clex_Node *nod
 
             unsigned long long left_bits = (unsigned long long)left.value;
             unsigned long long right_bits = (unsigned long long)right.value;
-            long long minimum = (long long)(1ull << 63);
+            long long min = (long long)(1ull << 63);
             _Bool both_known = left.is_known && right.is_known;
-            _Bool division_ok = !right.is_known || (right.value != 0 && !(both_known && left.value == minimum && right.value == -1));
+            _Bool division_ok = !right.is_known || (right.value != 0 && !(both_known && left.value == min && right.value == -1));
             _Bool shift_ok = !right.is_known || (0 <= right.value && right.value < 64);
             is_known = both_known;
 
@@ -1221,7 +1222,7 @@ static void clex__parse_expect(clex_Parser *p, clex_Token_Kind kind, _Bool *ok) 
 }
 
 // TODO(felix): Postfix operators (calls, subscripts, member access, `++`, `--`), casts, `sizeof`, `alignof`, compound literals and `_Generic`, for parsing C.
-static void clex__parse_expression(clex_Parser *p, unsigned minimum_binding_power, _Bool *ok) {
+static void clex__parse_expression(clex_Parser *p, unsigned min_binding_power, _Bool *ok) {
     enum {
         clex__Binding_Power_COMMA          =  1,
         clex__Binding_Power_ASSIGNMENT     =  2,
@@ -1299,7 +1300,7 @@ static void clex__parse_expression(clex_Parser *p, unsigned minimum_binding_powe
             default: break;
         }
 
-        continuing = left_power != 0 && left_power >= minimum_binding_power;
+        continuing = left_power != 0 && left_power >= min_binding_power;
         if (continuing) {
             operator_index = p->token_index;
             p->token_index += 1;

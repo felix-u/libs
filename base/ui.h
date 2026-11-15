@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2026-11-07
+// https://github.com/felix-u 2026-11-14
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(UI_H)
@@ -14,6 +14,10 @@
     #define UI_MAX_HASH_STRING_SIZE 32
 #endif
 
+#if !defined(UI_MAX_SIZE_GROUPS)
+    #define UI_MAX_SIZE_GROUPS 16
+#endif
+
 #if !defined(UI_DISPLAY_STRING_BUFFER_SIZE)
     #define UI_DISPLAY_STRING_BUFFER_SIZE 4096
 #endif
@@ -26,51 +30,89 @@
     #define UI_MAX_STRING_LENGTH 256
 #endif
 
-typedef unsigned short ui_Flags;
+typedef unsigned ui_Flags;
 enum {
     ui_X = 0,
     ui_Y = 1,
     ui_Axis_COUNT = 2,
 
-    ui_Flag_CHILD_AXIS      = 1 <<  0,
-    ui_Flag_DRAW_BACKGROUND = 1 <<  1,
-    ui_Flag_DRAW_BORDER     = 1 <<  2,
-    ui_Flag_DRAW_TEXT       = 1 <<  3,
-    ui_Flag_DRAW_SHADOW     = 1 <<  5,
-    ui_Flag_HOVERABLE       = 1 <<  7,
-    ui_Flag_CLICKABLE       = 1 <<  8,
-    ui_Flag_DRAGGABLE       = 1 <<  9,
-    ui_Flag_CLIP_TO_PARENT  = 1 << 10,
+    ui_Flag_CHILD_AXIS                     = 1 <<  0,
+    ui_Flag_DRAW_BACKGROUND                = 1 <<  1,
+    ui_Flag_DRAW_BORDER                    = 1 <<  2,
+    ui_Flag_DRAW_TEXT                      = 1 <<  3,
+    ui_Flag_WRAP_TEXT                      = 1 <<  4,
+    ui_Flag_DRAW_SHADOW                    = 1 <<  5,
+    ui_Flag_FLOATING                       = 1 <<  6,
+    ui_Flag_HOVERABLE                      = 1 <<  7,
+    ui_Flag_CLICKABLE                      = 1 <<  8,
+    ui_Flag_CLIP_TO_PARENT                 = 1 <<  9,
+    ui_Flag_SCROLL_X                       = 1 << 10,
+    ui_Flag_SCROLL_Y                       = 1 << 11,
+    ui_Flag_KEEP_INSIDE_ROOT_WHEN_FLOATING = 1 << 12,
+    ui_Flag_FOCUSABLE                      = 1 << 13,
+    ui_Flag_DISABLED_BUT_SWALLOWS_INPUT    = 1 << 14,
+    ui_Flag_TRUNCATE_TEXT                  = 1 << 15,
 
-    // computed by builder code
-    ui_Flag_HOVERED         = 1 << 11,
-    ui_Flag_CLICKED         = 1 << 12,
-    ui_Flag_DRAGGING        = 1 << 13, // persisted across frames
+    UI_SIGNAL_FIRST_BIT                         = 16,
+    ui_Flag_HOVERED                        = 1 << 16,
+    ui_Flag_PRESSED_LEFT                   = 1 << 17,
+    ui_Flag_PRESSED_RIGHT                  = 1 << 18,
+    ui_Flag_CLICKED                        = 1 << 19,
+    ui_Flag_HELD_LEFT                      = 1 << 20,
+    ui_Flag_RELEASED_LEFT                  = 1 << 21,
+    ui_Flag_FOCUSED                        = 1 << 22,
+    ui_Flag_HELD_OVER                      = 1 << 23,
+    UI_SIGNAL_COUNT = 8,
 };
+_Static_assert(ui_Flag_HOVERED == 1 << UI_SIGNAL_FIRST_BIT && ui_Flag_HELD_OVER == 1 << (UI_SIGNAL_FIRST_BIT + UI_SIGNAL_COUNT - 1), "the signal flags must be the UI_SIGNAL_COUNT bits from UI_SIGNAL_FIRST_BIT");
 #define UI_FLAG_ANY_VISIBLE (ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_BORDER | ui_Flag_DRAW_TEXT | ui_Flag_DRAW_SHADOW)
-#define UI_FLAG_ANY_INTERACTABLE (ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE)
-#define UI_FLAG_ANY_INTERACTION (ui_Flag_HOVERED | ui_Flag_CLICKED | ui_Flag_DRAGGING)
+#define UI_FLAG_ANY_INTERACTABLE (ui_Flag_HOVERABLE | ui_Flag_CLICKABLE | ui_Flag_FOCUSABLE)
+#define UI_FLAG_PRESSED_OR_CLICKED (ui_Flag_PRESSED_LEFT | ui_Flag_CLICKED)
+#define UI_FLAG_ANY_INTERACTION (ui_Flag_HOVERED | ui_Flag_PRESSED_LEFT | ui_Flag_CLICKED | ui_Flag_HELD_LEFT | ui_Flag_RELEASED_LEFT | ui_Flag_PRESSED_RIGHT | ui_Flag_HELD_OVER)
 
 typedef struct {
     float position[ui_Axis_COUNT];
     float size[ui_Axis_COUNT];
 } ui_Rectangle;
 
-typedef enum {
-    ui_Size_Kind_NIL = 0,
-    ui_Size_Kind_PIXELS,
-    ui_Size_Kind_TEXT,
-    ui_Size_Kind_SUM_OF_CHILDREN,
-    ui_Size_Kind_LARGEST_CHILD,
-    ui_Size_Kind_OF_PARENT, // TODO(felix): replace with GROW (simpler)
+typedef unsigned char ui_Size_Kind;
+enum {
+    ui_Size_Kind_FIT = 0,
+    ui_Size_Kind_FIXED,
+    ui_Size_Kind_GROW,
+    ui_Size_Kind_GROW_FROM_MINIMUM,
+    ui_Size_Kind_PERCENT,
 
     ui_Size_Kind_COUNT,
-} ui_Size_Kind;
+};
+
+typedef unsigned char ui_Align;
+enum {
+    ui_Align_START = 0,
+    ui_Align_CENTER,
+    ui_Align_END,
+    ui_Align_BASELINE,
+
+    ui_Align_COUNT,
+};
+
+typedef enum {
+    ui_Side_LEFT   = ui_X,
+    ui_Side_TOP    = ui_Y,
+    ui_Side_RIGHT  = ui_Axis_COUNT + ui_X,
+    ui_Side_BOTTOM = ui_Axis_COUNT + ui_Y,
+
+    ui_Side_COUNT,
+} ui_Side;
 
 typedef struct {
     float font_size;
-    float padding[ui_Axis_COUNT];
+    unsigned font_id;
+    float font_weight;
+    _Bool font_italic;
+    float padding[ui_Side_COUNT];
     float child_gap;
+    ui_Align child_alignment[ui_Axis_COUNT];
     unsigned bg_color;
     unsigned fg_color;
     unsigned border_color;
@@ -78,34 +120,50 @@ typedef struct {
     float border_width;
     float border_radius;
     float shadow_offset[ui_Axis_COUNT];
+    float transparency;
 } ui_Style;
+
+typedef struct {
+    float size[ui_Axis_COUNT];
+    float ascent;
+} ui_Text_Measurement;
 
 typedef struct {
     ui_Size_Kind kind;
     float value;
+    float min;
+    float max;
 } ui_Size;
 
 typedef struct ui_Box ui_Box;
 struct ui_Box {
-    // === frame data ===
-    ui_Flags flags; // some bits persisted across frames
+    ui_Flags flags;
     const char *display_string;
     ui_Size size[ui_Axis_COUNT];
     ui_Style style;
-    // links
+    float float_offset_from_parent_top_left[ui_Axis_COUNT];
+    unsigned long long user_data;
+    unsigned size_group[ui_Axis_COUNT];
+
     ui_Box *parent;
     ui_Box *previous_sibling;
     ui_Box *next_sibling;
     ui_Box *first_child;
     ui_Box *last_child;
 
-    // === cached data ===
-    void *user_data;
     char hash_string[UI_MAX_HASH_STRING_SIZE];
-    // computed
-    float drag_start_value;
-    float drag_start_mouse[ui_Axis_COUNT];
+    unsigned key_hash;
+    float scroll_offset[ui_Axis_COUNT];
+    float min_size[ui_Axis_COUNT];
+    float content_size[ui_Axis_COUNT];
+    ui_Text_Measurement text_measurement;
+    float text_wrap_width;
+    int text_cut_length; // -1 when the whole text fits
+    float text_position[ui_Axis_COUNT];
     ui_Rectangle rectangle;
+    ui_Rectangle clip_rectangle;
+    ui_Rectangle rounded_clip_rectangle;
+    float rounded_clip_radius;
 
     unsigned long long frame_id;
 };
@@ -114,7 +172,8 @@ struct ui_Box {
 #define UI_MAX_KEYED_BOXES_EXPONENT (UI_MAX_BOX_SLOTS_EXPONENT - 1)
 #define UI_MAX_KEYED_BOXES (1 << UI_MAX_KEYED_BOXES_EXPONENT)
 
-typedef void (ui_text_measure_function)(void *user_data, const char *string, ui_Style style, float size[2]);
+typedef struct ui_State ui_State;
+typedef ui_Text_Measurement (ui_text_measure_function)(ui_State *ui, const char *string, ui_Style style, float wrap_width);
 
 typedef enum {
     ui_Mouse_Button_LEFT,
@@ -129,6 +188,9 @@ typedef enum {
 
     ui_Key_SHIFT,
     ui_Key_CONTROL,
+    ui_Key_RETURN,
+    ui_Key_ESCAPE,
+    ui_Key_TAB,
     ui_Key_LEFT,
     ui_Key_DOWN,
     ui_Key_UP,
@@ -143,24 +205,40 @@ typedef enum {
     ui_Key_MAX_VALUE,
 } ui_Key;
 
-typedef struct {
+// NOTE(felix): Every length in ui.h is in points, and scale is the pixels per point.
+struct ui_State {
+    float scale;
     float window_size[ui_Axis_COUNT];
     float mouse_position[ui_Axis_COUNT];
     _Bool mouse_clicked[ui_Mouse_Button_COUNT];
     _Bool mouse_down[ui_Mouse_Button_COUNT];
+    float scroll_offset[ui_Axis_COUNT];
+    _Bool key_down[ui_Key_MAX_VALUE];
     _Bool key_pressed[ui_Key_MAX_VALUE];
 
     void *user_data;
     ui_text_measure_function *measure_text;
-    _Bool input_blocked;
 
     _Bool interacted_this_frame;
 
-    int keyed_box_count; // for asserting we don't go over the 70% usage threshold. hashmap uses first half of boxes
-    int per_frame_unkeyed_boxes_index; // grows down from last box to midpoint
+    int keyed_box_count;
+    int per_frame_unkeyed_boxes_index;
     ui_Box boxes[UI_MAX_BOX_SLOTS];
 
     ui_Box *root;
+    ui_Box *current_parent;
+    ui_Box *box_under_mouse;
+    union { // in the order of the signal flags
+        struct { ui_Box *hovered_box, *pressed_box, *right_pressed_box, *clicked_box, *held_box, *released_box, *focused_box, *held_over_box; };
+        ui_Box *signal_boxes[UI_SIGNAL_COUNT];
+    };
+    int tab_start_draw_index; // -1 for none
+    _Bool new_boxes_are_disabled;
+    _Bool uses_size_groups;
+    float size_group_sizes[UI_MAX_SIZE_GROUPS];
+    float mouse_position_at_press[ui_Axis_COUNT];
+    int draw_order_count;
+    ui_Box *draw_order[UI_MAX_BOX_SLOTS];
 
     int display_string_used;
     char display_string_buffer[UI_DISPLAY_STRING_BUFFER_SIZE];
@@ -170,20 +248,8 @@ typedef struct {
     char hash_buffer[UI_MAX_STRING_LENGTH];
 
     unsigned long long frame_id;
-} ui_State;
+};
 
-typedef struct {
-    ui_Style bar;
-    ui_Style dragging;
-
-    float length;
-    float thickness;
-    float radius;
-
-    float handle_length;
-    float handle_thickness;
-    float handle_radius;
-} ui_Slider_Style;
 
 #if !defined(UI_FUNCTION)
     #define UI_FUNCTION
@@ -199,11 +265,26 @@ typedef struct {
 UI_FUNCTION void     ui_begin(ui_State *ui);
 UI_FUNCTION void     ui_create(ui_State *ui, ui_text_measure_function *text_measure_function);
 UI_FUNCTION void     ui_end(ui_State *ui);
-UI_FUNCTION ui_Box  *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ...);
-UI_FUNCTION ui_Box  *ui_push_styled(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *, const char *format, ...);
-UI_FUNCTION ui_Box  *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ui_va_list arguments);
-UI_FUNCTION ui_Box  *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...);
-UI_FUNCTION ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
+UI_FUNCTION ui_Box  *ui_push(ui_State *ui, ui_Flags flags, const char *format, ...);
+UI_FUNCTION ui_Box  *ui_push_styled(ui_State *ui, ui_Flags flags, const ui_Style *, const char *format, ...);
+UI_FUNCTION ui_Box  *ui_pushv(ui_State *ui, ui_Flags flags, const char *format, ui_va_list arguments);
+UI_FUNCTION int      ui_set_disabled(ui_State *ui, int disabled);
+UI_FUNCTION ui_Box  *ui_set_parent(ui_State *ui, ui_Box *parent);
+UI_FUNCTION ui_Box  *ui_spacer(ui_State *ui);
+
+#define UI__GLUE_(a, b) a##b
+#define UI__GLUE(a, b) UI__GLUE_(a, b)
+#define UI__NAME_ON_LINE(name) UI__GLUE(name, __LINE__)
+
+#define UI_DISABLED_IF(ui, condition) \
+    for (int UI__NAME_ON_LINE(ui__previous_disabled) = ui_set_disabled((ui), (ui)->new_boxes_are_disabled || (condition)); \
+         UI__NAME_ON_LINE(ui__previous_disabled) != -1; \
+         ui_set_disabled((ui), UI__NAME_ON_LINE(ui__previous_disabled)), UI__NAME_ON_LINE(ui__previous_disabled) = -1)
+
+#define UI_PARENT(ui, parent) \
+    for (ui_Box *UI__NAME_ON_LINE(ui__previous_parent) = ui_set_parent((ui), (parent)); \
+         UI__NAME_ON_LINE(ui__previous_parent) != 0; \
+         ui_set_parent((ui), UI__NAME_ON_LINE(ui__previous_parent)), UI__NAME_ON_LINE(ui__previous_parent) = 0)
 
 
 #endif // UI_H
@@ -227,7 +308,490 @@ UI_FUNCTION ui_Box  *ui_spacer(ui_State *ui, ui_Box *parent);
     #define ui_size_t size_t
 #endif
 
+static inline void *ui__memset(void *destination_, int byte_, ui_size_t count) {
+    UI_ASSERT(byte_ < 256);
+    char byte = (char)byte_;
+    char *destination = destination_;
+    for (ui_size_t i = 0; i < count; i += 1) destination[i] = byte;
+    return destination;
+}
+
+UI_FUNCTION void ui_create(ui_State *ui, ui_text_measure_function *text_measure_function) {
+    ui__memset(ui, 0, sizeof *ui);
+    ui->tab_start_draw_index = -1;
+    ui->measure_text = text_measure_function;
+}
+
+#define UI__MAX(a, b) ((a) > (b) ? (a) : (b))
+#define UI__MIN(a, b) ((a) < (b) ? (a) : (b))
+#define UI__NO_LIMIT 3.4e38f
+
+static float ui__size_clamped(ui_Size size, float value) {
+    float clamped = UI__MAX(value, size.min);
+    _Bool has_max = size.max > 0;
+    if (has_max) clamped = UI__MIN(clamped, size.max);
+    return clamped;
+}
+
+static float ui__children_total_size(ui_Box *box, int axis) {
+    float total_size = 0;
+    int child_count = 0;
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (!(child->flags & ui_Flag_FLOATING)) {
+            total_size += child->rectangle.size[axis];
+            child_count += 1;
+        }
+    }
+    if (child_count > 1) total_size += box->style.child_gap * (float)(child_count - 1);
+    return total_size;
+}
+
+static float ui__children_largest_size(ui_Box *box, int axis) {
+    float largest_size = 0;
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (!(child->flags & ui_Flag_FLOATING)) largest_size = UI__MAX(largest_size, child->rectangle.size[axis]);
+    }
+    return largest_size;
+}
+
+static _Bool ui__scrolls_on_axis(ui_Box *box, int axis) {
+    ui_Flags scroll_flag = axis == ui_X ? ui_Flag_SCROLL_X : ui_Flag_SCROLL_Y;
+    return !!(box->flags & scroll_flag);
+}
+
+static float ui__padding_on_both_sides(ui_Style style, int axis) {
+    return style.padding[axis] + style.padding[ui_Axis_COUNT + axis];
+}
+
+static const float ui__alignment_fractions[ui_Align_COUNT] = {
+    [ui_Align_START]    = 0,
+    [ui_Align_CENTER]   = 0.5f,
+    [ui_Align_END]      = 1.f,
+    [ui_Align_BASELINE] = 0,
+};
+
+static float ui__text_offset(ui_Box *box, int axis) {
+    float inner_size = box->rectangle.size[axis] - ui__padding_on_both_sides(box->style, axis);
+    float free_space = inner_size - box->text_measurement.size[axis];
+    return box->style.padding[axis] + free_space * ui__alignment_fractions[box->style.child_alignment[axis]];
+}
+
+static float ui__baseline_from_top(ui_Box *box) {
+    ui_Box *first_child = box->first_child;
+    while (first_child != 0 && (first_child->flags & ui_Flag_FLOATING)) first_child = first_child->next_sibling;
+
+    float baseline = box->rectangle.size[ui_Y];
+    if (box->flags & ui_Flag_DRAW_TEXT) baseline = ui__text_offset(box, ui_Y) + box->text_measurement.ascent;
+    else if (first_child != 0) {
+        float inner_height = box->rectangle.size[ui_Y] - ui__padding_on_both_sides(box->style, ui_Y);
+        _Bool children_stack_down = (int)(box->flags & ui_Flag_CHILD_AXIS) == ui_Y;
+        float space_around_children = inner_height - (children_stack_down ? ui__children_total_size(box, ui_Y) : first_child->rectangle.size[ui_Y]);
+        float first_child_top = box->style.padding[ui_Side_TOP] + UI__MAX(space_around_children, 0) * ui__alignment_fractions[box->style.child_alignment[ui_Y]];
+        baseline = first_child_top + ui__baseline_from_top(first_child);
+    }
+    return baseline;
+}
+
+static float ui__children_largest_baseline(ui_Box *box) {
+    float largest_baseline = 0;
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (!(child->flags & ui_Flag_FLOATING)) largest_baseline = UI__MAX(largest_baseline, ui__baseline_from_top(child));
+    }
+    return largest_baseline;
+}
+
+// NOTE(felix): Axis sizes depend only on sizes on that axis, except that wrapped text needs final width to measure height. So ui_end fits and distributes X before Y.
+static void ui__layout_fit(ui_State *ui, ui_Box *box, int axis) {
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        ui__layout_fit(ui, child, axis);
+    }
+
+    float content_size = 0;
+    float content_min_size = 0;
+    _Bool has_text = !!(box->flags & ui_Flag_DRAW_TEXT);
+    _Bool wraps_text = has_text && (box->flags & ui_Flag_WRAP_TEXT);
+    if (has_text && axis == ui_X) {
+        ui_Text_Measurement unwrapped = ui->measure_text(ui, box->display_string, box->style, 0);
+        content_size = unwrapped.size[ui_X];
+        content_min_size = unwrapped.size[ui_X];
+        if (wraps_text) {
+            ui_Text_Measurement one_word_per_line = ui->measure_text(ui, box->display_string, box->style, 1.f);
+            content_min_size = one_word_per_line.size[ui_X];
+        }
+        if (box->flags & ui_Flag_TRUNCATE_TEXT) {
+            ui_Text_Measurement dots = ui->measure_text(ui, "...", box->style, 0);
+            content_min_size = dots.size[ui_X];
+        }
+    } else if (has_text) {
+        box->text_wrap_width = wraps_text ? UI__MAX(box->rectangle.size[ui_X] - ui__padding_on_both_sides(box->style, ui_X), 1.f) : 0;
+        box->text_measurement = ui->measure_text(ui, box->display_string, box->style, box->text_wrap_width);
+
+        box->text_cut_length = -1;
+        float available_width = box->rectangle.size[ui_X] - ui__padding_on_both_sides(box->style, ui_X);
+        _Bool cuts_text = (box->flags & ui_Flag_TRUNCATE_TEXT) && !wraps_text && box->text_measurement.size[ui_X] > available_width + 0.5f;
+        if (cuts_text) {
+            int text_length = 0;
+            while (box->display_string[text_length] != 0) text_length += 1;
+            int fitting_length = 0;
+            int too_long_length = text_length;
+            box->text_measurement = ui->measure_text(ui, "...", box->style, 0);
+            while (too_long_length - fitting_length > 1) {
+                int middle = (fitting_length + too_long_length) / 2;
+                UI_ASSERT(middle + 4 <= (int)(sizeof ui->format_buffer));
+                for (int i = 0; i < middle; i += 1) ui->format_buffer[i] = box->display_string[i];
+                ui->format_buffer[middle] = ui->format_buffer[middle + 1] = ui->format_buffer[middle + 2] = '.';
+                ui->format_buffer[middle + 3] = 0;
+                ui_Text_Measurement candidate = ui->measure_text(ui, ui->format_buffer, box->style, 0);
+                _Bool fits = candidate.size[ui_X] <= available_width;
+                if (fits) {
+                    fitting_length = middle;
+                    box->text_measurement = candidate;
+                } else too_long_length = middle;
+            }
+            box->text_cut_length = fitting_length;
+        }
+        content_size = box->text_measurement.size[ui_Y];
+        content_min_size = box->text_measurement.size[ui_Y];
+    } else {
+        _Bool along_child_axis = (int)(box->flags & ui_Flag_CHILD_AXIS) == axis;
+        content_size = along_child_axis ? ui__children_total_size(box, axis) : ui__children_largest_size(box, axis);
+
+        int child_count = 0;
+        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+            if (!(child->flags & ui_Flag_FLOATING)) {
+                if (along_child_axis) content_min_size += child->min_size[axis];
+                else content_min_size = UI__MAX(content_min_size, child->min_size[axis]);
+                child_count += 1;
+            }
+        }
+        if (along_child_axis && child_count > 1) content_min_size += box->style.child_gap * (float)(child_count - 1);
+
+        _Bool aligns_baselines = axis == ui_Y && !along_child_axis && box->style.child_alignment[ui_Y] == ui_Align_BASELINE;
+        if (aligns_baselines) {
+            float largest_size_below_baseline = 0;
+            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+                if (!(child->flags & ui_Flag_FLOATING)) largest_size_below_baseline = UI__MAX(largest_size_below_baseline, child->rectangle.size[ui_Y] - ui__baseline_from_top(child));
+            }
+            content_size = ui__children_largest_baseline(box) + largest_size_below_baseline;
+            content_min_size = UI__MAX(content_min_size, content_size);
+        }
+
+        if (ui__scrolls_on_axis(box, axis)) content_min_size = 0;
+    }
+
+    ui_Size size = box->size[axis];
+    float padding = ui__padding_on_both_sides(box->style, axis);
+    float fitted_size = content_size + padding;
+    float min_size = ui__size_clamped(size, content_min_size + padding);
+    if (size.kind == ui_Size_Kind_FIXED) fitted_size = min_size = size.value;
+    if (size.kind == ui_Size_Kind_PERCENT) fitted_size = 0;
+    box->rectangle.size[axis] = ui__size_clamped(size, fitted_size);
+    box->min_size[axis] = min_size;
+
+    unsigned group = box->size_group[axis];
+    if (group != 0) {
+        UI_ASSERT(group < UI_MAX_SIZE_GROUPS);
+        float *group_size = &ui->size_group_sizes[group];
+        *group_size = UI__MAX(*group_size, box->rectangle.size[axis]);
+        box->rectangle.size[axis] = *group_size;
+        box->min_size[axis] = UI__MAX(box->min_size[axis], *group_size);
+        ui->uses_size_groups = 1;
+    }
+}
+
+static float ui__room_to_change_size(ui_Box *child, int axis, float direction) {
+    ui_Size size = child->size[axis];
+    float current_size = child->rectangle.size[axis];
+    float room = 0;
+    _Bool grows = size.kind == ui_Size_Kind_GROW || size.kind == ui_Size_Kind_GROW_FROM_MINIMUM;
+    if (direction > 0 && grows) room = size.max > 0 ? size.max - current_size : UI__NO_LIMIT;
+    _Bool can_shrink = size.kind == ui_Size_Kind_FIT || grows;
+    if (direction < 0 && can_shrink) room = current_size - child->min_size[axis];
+    if (child->flags & ui_Flag_FLOATING) room = 0;
+    return UI__MAX(room, 0);
+}
+
+static void ui__layout_even_out_children(ui_Box *box, int axis, float space) {
+    float direction = space > 0 ? 1.f : -1.f;
+    float space_left = space * direction;
+    float tolerance = 0.01f;
+
+    _Bool some_child_can_change = 1;
+    while (space_left > tolerance && some_child_can_change) {
+        float smallest_key = UI__NO_LIMIT;
+        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+            if (ui__room_to_change_size(child, axis, direction) > tolerance) smallest_key = UI__MIN(smallest_key, direction * child->rectangle.size[axis]);
+        }
+        some_child_can_change = smallest_key < UI__NO_LIMIT;
+
+        float second_smallest_key = UI__NO_LIMIT;
+        float size_change_per_child = space_left;
+        int children_with_smallest_key_count = 0;
+        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+            float room = ui__room_to_change_size(child, axis, direction);
+            float key = direction * child->rectangle.size[axis];
+            _Bool has_smallest_key = key < smallest_key + tolerance;
+            if (room > tolerance && has_smallest_key) {
+                size_change_per_child = UI__MIN(size_change_per_child, room);
+                children_with_smallest_key_count += 1;
+            }
+            if (room > tolerance && !has_smallest_key) second_smallest_key = UI__MIN(second_smallest_key, key);
+        }
+
+        if (some_child_can_change) {
+            size_change_per_child = UI__MIN(size_change_per_child, space_left / (float)children_with_smallest_key_count);
+            size_change_per_child = UI__MIN(size_change_per_child, second_smallest_key - smallest_key);
+            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+                float room = ui__room_to_change_size(child, axis, direction);
+                _Bool has_smallest_key = direction * child->rectangle.size[axis] < smallest_key + tolerance;
+                if (room > tolerance && has_smallest_key) child->rectangle.size[axis] += direction * size_change_per_child;
+            }
+            space_left -= size_change_per_child * (float)children_with_smallest_key_count;
+        }
+    }
+}
+
+static void ui__layout_distribute(ui_Box *box, int axis) {
+    float inner_size = box->rectangle.size[axis] - ui__padding_on_both_sides(box->style, axis);
+    _Bool along_child_axis = (int)(box->flags & ui_Flag_CHILD_AXIS) == axis;
+    _Bool scrolls = ui__scrolls_on_axis(box, axis);
+
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        ui_Size size = child->size[axis];
+        float *child_size = &child->rectangle.size[axis];
+        _Bool is_floating = !!(child->flags & ui_Flag_FLOATING);
+        _Bool sizes_against_whole_parent = !along_child_axis || is_floating;
+        _Bool grows = size.kind == ui_Size_Kind_GROW || size.kind == ui_Size_Kind_GROW_FROM_MINIMUM;
+        if (size.kind == ui_Size_Kind_PERCENT) *child_size = ui__size_clamped(size, inner_size * size.value);
+        if (sizes_against_whole_parent && grows) *child_size = ui__size_clamped(size, inner_size);
+        if (!sizes_against_whole_parent && size.kind == ui_Size_Kind_GROW_FROM_MINIMUM && !scrolls) *child_size = child->min_size[axis];
+        _Bool can_shrink = (size.kind == ui_Size_Kind_FIT || grows) && !scrolls;
+        if (sizes_against_whole_parent && can_shrink && *child_size > inner_size) *child_size = UI__MAX(inner_size, child->min_size[axis]);
+    }
+
+    float space = inner_size - ui__children_total_size(box, axis);
+    _Bool should_even_out = along_child_axis && (space > 0 || !scrolls);
+    if (should_even_out) ui__layout_even_out_children(box, axis, space);
+
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        ui__layout_distribute(child, axis);
+    }
+}
+
+static ui_Rectangle ui__rectangle_intersection(ui_Rectangle a, ui_Rectangle b) {
+    ui_Rectangle intersection = {0};
+    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+        float start = UI__MAX(a.position[axis], b.position[axis]);
+        float end = UI__MIN(a.position[axis] + a.size[axis], b.position[axis] + b.size[axis]);
+        intersection.position[axis] = start;
+        intersection.size[axis] = UI__MAX(end - start, 0);
+    }
+    return intersection;
+}
+
+static ui_Rectangle ui__inside_border(ui_Box *box) {
+    float border_width = (box->flags & ui_Flag_DRAW_BORDER) ? box->style.border_width : 0;
+    ui_Rectangle inside = box->rectangle;
+    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+        inside.position[axis] += border_width;
+        inside.size[axis] = UI__MAX(inside.size[axis] - 2.f * border_width, 0);
+    }
+    return inside;
+}
+
+static void ui__layout_position(ui_State *ui, ui_Box *box) {
+    int child_axis = (int)(box->flags & ui_Flag_CHILD_AXIS);
+    int cross_axis = !child_axis;
+
+    float inner_position[ui_Axis_COUNT] = {0};
+    float inner_size[ui_Axis_COUNT] = {0};
+    float alignment_fraction[ui_Axis_COUNT] = {0};
+    ui_Rectangle inside_border = ui__inside_border(box);
+    ui_Rectangle scroll_clip = box->clip_rectangle;
+    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+        inner_position[axis] = box->rectangle.position[axis] + box->style.padding[axis];
+        inner_size[axis] = box->rectangle.size[axis] - ui__padding_on_both_sides(box->style, axis);
+        alignment_fraction[axis] = ui__alignment_fractions[box->style.child_alignment[axis]];
+        if (box->flags & ui_Flag_DRAW_TEXT) box->text_position[axis] = box->rectangle.position[axis] + ui__text_offset(box, axis);
+
+        _Bool scrolls = ui__scrolls_on_axis(box, axis);
+        float content_size = axis == child_axis ? ui__children_total_size(box, axis) : ui__children_largest_size(box, axis);
+        box->content_size[axis] = content_size;
+        float max_scroll_offset = scrolls ? UI__MAX(content_size - inner_size[axis], 0) : 0;
+        box->scroll_offset[axis] = UI__MIN(UI__MAX(box->scroll_offset[axis], 0), max_scroll_offset);
+        if (scrolls) {
+            scroll_clip.position[axis] = inside_border.position[axis];
+            scroll_clip.size[axis] = inside_border.size[axis];
+        }
+    }
+
+    ui_Rectangle clip_for_children = ui__rectangle_intersection(box->clip_rectangle, scroll_clip);
+
+    _Bool aligns_baselines = cross_axis == ui_Y && box->style.child_alignment[ui_Y] == ui_Align_BASELINE;
+    float largest_baseline = aligns_baselines ? ui__children_largest_baseline(box) : 0;
+
+    float free_space = UI__MAX(inner_size[child_axis] - ui__children_total_size(box, child_axis), 0);
+    float cursor = inner_position[child_axis] + free_space * alignment_fraction[child_axis] - box->scroll_offset[child_axis];
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (child->style.fg_color == 0) child->style.fg_color = box->style.fg_color;
+        if (child->flags & ui_Flag_FLOATING) {
+            ui_Rectangle root = ui->root->rectangle;
+            for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+                float position = box->rectangle.position[axis] + child->float_offset_from_parent_top_left[axis];
+                if (child->flags & ui_Flag_KEEP_INSIDE_ROOT_WHEN_FLOATING) {
+                    float largest_position_inside_root = root.position[axis] + root.size[axis] - child->rectangle.size[axis];
+                    position = UI__MAX(UI__MIN(position, largest_position_inside_root), root.position[axis]);
+                }
+                child->rectangle.position[axis] = position;
+            }
+        } else {
+            child->rectangle.position[child_axis] = cursor;
+            cursor += child->rectangle.size[child_axis] + box->style.child_gap;
+
+            float cross_free_space = UI__MAX(inner_size[cross_axis] - child->rectangle.size[cross_axis], 0);
+            float cross_offset = cross_free_space * alignment_fraction[cross_axis];
+            if (aligns_baselines) cross_offset = largest_baseline - ui__baseline_from_top(child);
+            child->rectangle.position[cross_axis] = inner_position[cross_axis] + cross_offset - box->scroll_offset[cross_axis];
+        }
+
+        _Bool clips_only_to_root = (child->flags & ui_Flag_FLOATING) && !(child->flags & ui_Flag_CLIP_TO_PARENT);
+        child->clip_rectangle = clips_only_to_root ? ui->root->clip_rectangle : clip_for_children;
+        child->rounded_clip_rectangle = box->rounded_clip_rectangle;
+        child->rounded_clip_radius = clips_only_to_root ? 0 : box->rounded_clip_radius;
+        if (child->flags & ui_Flag_CLIP_TO_PARENT) {
+            ui_Box *visible_ancestor = box;
+            while (visible_ancestor->parent != 0 && !(visible_ancestor->flags & (UI_FLAG_ANY_VISIBLE | ui_Flag_FLOATING))) visible_ancestor = visible_ancestor->parent;
+            ui_Rectangle inside_visible_ancestor = ui__inside_border(visible_ancestor);
+            child->clip_rectangle = ui__rectangle_intersection(child->clip_rectangle, inside_visible_ancestor);
+
+            float drawn_border_width = (visible_ancestor->flags & ui_Flag_DRAW_BORDER) ? visible_ancestor->style.border_width : 0;
+            float inner_radius = visible_ancestor->style.border_radius - drawn_border_width;
+            if (inner_radius > 0) {
+                child->rounded_clip_rectangle = inside_visible_ancestor;
+                child->rounded_clip_radius = inner_radius;
+            }
+        }
+
+        ui__layout_position(ui, child);
+    }
+}
+
+static void ui__append_to_draw_order(ui_State *ui, ui_Box *box) {
+    UI_ASSERT(ui->draw_order_count < UI_MAX_BOX_SLOTS);
+    ui->draw_order[ui->draw_order_count] = box;
+    ui->draw_order_count += 1;
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (!(child->flags & ui_Flag_FLOATING)) ui__append_to_draw_order(ui, child);
+    }
+}
+
+static void ui__append_floating_to_draw_order(ui_State *ui, ui_Box *box) {
+    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
+        if (child->flags & ui_Flag_FLOATING) ui__append_to_draw_order(ui, child);
+        ui__append_floating_to_draw_order(ui, child);
+    }
+}
+
 UI_FUNCTION void ui_begin(ui_State *ui) {
+    ui_Box *top_box_under_mouse = 0;
+    int top_box_draw_index = -1;
+    for (int i = ui->draw_order_count - 1; i >= 0 && top_box_under_mouse == 0; i -= 1) {
+        ui_Box *box = ui->draw_order[i];
+        ui_Rectangle hit_area = ui__rectangle_intersection(box->rectangle, box->clip_rectangle);
+        _Bool contains_mouse = 1;
+        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+            float mouse = ui->mouse_position[axis];
+            contains_mouse = contains_mouse && hit_area.position[axis] <= mouse && mouse < hit_area.position[axis] + hit_area.size[axis];
+        }
+        if (contains_mouse) {
+            top_box_under_mouse = box;
+            top_box_draw_index = i;
+        }
+    }
+
+    ui->box_under_mouse = 0;
+    ui_Box *scroll_box_under_mouse = 0;
+    _Bool click_is_taken = 0;
+    for (ui_Box *box = top_box_under_mouse; box != 0; box = box->parent) {
+        _Bool is_disabled = !!(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+        _Bool is_interactable = (box->flags & UI_FLAG_ANY_INTERACTABLE) && !is_disabled;
+        if (!click_is_taken && is_interactable) ui->box_under_mouse = box;
+        click_is_taken = click_is_taken || is_interactable || is_disabled;
+        if (scroll_box_under_mouse == 0 && (box->flags & (ui_Flag_SCROLL_X | ui_Flag_SCROLL_Y))) scroll_box_under_mouse = box;
+    }
+
+    if (scroll_box_under_mouse != 0) {
+        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+            if (ui__scrolls_on_axis(scroll_box_under_mouse, axis)) scroll_box_under_mouse->scroll_offset[axis] += ui->scroll_offset[axis];
+        }
+    }
+
+    ui->pressed_box = 0;
+    ui->clicked_box = 0;
+    ui->released_box = 0;
+    ui->right_pressed_box = ui->mouse_clicked[ui_Mouse_Button_RIGHT] ? ui->box_under_mouse : 0;
+    _Bool press_starts_on_clickable_box = ui->mouse_clicked[ui_Mouse_Button_LEFT] && ui->box_under_mouse != 0 && (ui->box_under_mouse->flags & ui_Flag_CLICKABLE);
+    if (press_starts_on_clickable_box) {
+        ui->pressed_box = ui->box_under_mouse;
+        ui->held_box = ui->box_under_mouse;
+    }
+    if (ui->mouse_clicked[ui_Mouse_Button_LEFT]) {
+        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) ui->mouse_position_at_press[axis] = ui->mouse_position[axis];
+    }
+    _Bool held_box_is_released = ui->held_box != 0 && !ui->mouse_down[ui_Mouse_Button_LEFT];
+    if (held_box_is_released) {
+        ui->released_box = ui->held_box;
+        if (ui->box_under_mouse == ui->held_box) ui->clicked_box = ui->held_box;
+        ui->held_box = 0;
+    }
+    _Bool hover_is_free = ui->held_box == 0 || ui->held_box == ui->box_under_mouse;
+    ui->hovered_box = hover_is_free ? ui->box_under_mouse : 0;
+
+    _Bool any_mouse_button_went_down = 0;
+    for (int button = 0; button < ui_Mouse_Button_COUNT; button += 1) any_mouse_button_went_down = any_mouse_button_went_down || ui->mouse_clicked[button];
+    if (any_mouse_button_went_down) {
+        ui->focused_box = 0;
+        ui->tab_start_draw_index = top_box_draw_index;
+    }
+
+    if (ui->key_pressed[ui_Key_TAB]) {
+        int start_index = ui->tab_start_draw_index < ui->draw_order_count ? ui->tab_start_draw_index : -1;
+        for (int i = 0; i < ui->draw_order_count; i += 1) {
+            if (ui->focused_box != 0 && ui->draw_order[i] == ui->focused_box) start_index = i;
+        }
+
+        ui_Box *first_focusable = 0;
+        ui_Box *last_focusable = 0;
+        ui_Box *focusable_before_start = 0;
+        ui_Box *focusable_after_start = 0;
+        for (int i = 0; i < ui->draw_order_count; i += 1) {
+            ui_Box *box = ui->draw_order[i];
+            _Bool can_take_focus = (box->flags & ui_Flag_FOCUSABLE) && !(box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+            if (can_take_focus) {
+                if (first_focusable == 0) first_focusable = box;
+                last_focusable = box;
+                if (i < start_index) focusable_before_start = box;
+                if (i > start_index && focusable_after_start == 0) focusable_after_start = box;
+            }
+        }
+
+        _Bool backwards = ui->key_down[ui_Key_SHIFT];
+        ui_Box *wrapped_focus = backwards ? last_focusable : first_focusable;
+        ui_Box *next_focus = backwards ? focusable_before_start : focusable_after_start;
+        if (start_index < 0 || next_focus == 0) next_focus = wrapped_focus;
+        ui->focused_box = next_focus;
+        ui->tab_start_draw_index = -1;
+    }
+    _Bool focused_box_is_disabled = ui->focused_box != 0 && (ui->focused_box->flags & ui_Flag_DISABLED_BUT_SWALLOWS_INPUT);
+    if (focused_box_is_disabled) ui->focused_box = 0;
+    if (ui->focused_box != 0 && ui->key_pressed[' ']) ui->clicked_box = ui->focused_box;
+    ui_Box *previous_held_over_box = ui->held_over_box;
+    ui->held_over_box = ui->held_box != 0 && ui->held_box == ui->box_under_mouse ? ui->held_box : 0;
+    if (ui->focused_box != 0 && ui->key_down[' ']) ui->held_over_box = ui->focused_box;
+    ui_Box *box_input_lands_on = ui->clicked_box != 0 ? ui->clicked_box : ui->pressed_box;
+    _Bool keeps_previous_look = box_input_lands_on != 0 && (ui->held_over_box == box_input_lands_on || previous_held_over_box == box_input_lands_on);
+    if (keeps_previous_look) ui->held_over_box = previous_held_over_box == box_input_lands_on ? box_input_lands_on : 0;
+
     ui->per_frame_unkeyed_boxes_index = UI_MAX_BOX_SLOTS;
     for (int i = 0; i < UI_MAX_KEYED_BOXES; i += 1) {
         ui_Box *box = &ui->boxes[i];
@@ -239,228 +803,48 @@ UI_FUNCTION void ui_begin(ui_State *ui) {
     }
     ui->frame_id += 1;
 
+    for (int i = 0; i < UI_SIGNAL_COUNT; i += 1) {
+        _Bool box_was_removed = ui->signal_boxes[i] != 0 && ui->signal_boxes[i]->hash_string[0] == 0;
+        if (box_was_removed) ui->signal_boxes[i] = 0;
+    }
+
     ui->root = 0;
+    ui->current_parent = 0;
     ui->interacted_this_frame = 0;
     ui->display_string_used = 0;
 }
 
-static inline void *ui__memset(void *destination_, int byte_, ui_size_t count) {
-    UI_ASSERT(byte_ < 256);
-    char byte = (char)byte_;
-    char *destination = destination_;
-    for (ui_size_t i = 0; i < count; i += 1) destination[i] = byte;
-    return destination;
-}
-
-UI_FUNCTION void ui_create(ui_State *ui, ui_text_measure_function *text_measure_function) {
-    ui__memset(ui, 0, sizeof *ui);
-    ui->measure_text = text_measure_function;
-}
-
-static void ui__layout_standalone(ui_State *ui, ui_Box *box) {
-    ui_Style *style = &box->style;
-
-    // NOTE(felix): If the box parent is nil, this is the root, so we don't reset the position in order to allow shifting on the user side--for example, to shift by the safe area inset.
-    if (box->parent == 0) UI_ASSERT(box->hash_string[0] == 0);
-    else box->rectangle = (ui_Rectangle){0};
-
-    float text_size[2] = {0};
-    _Bool measure = box->size[ui_X].kind == ui_Size_Kind_TEXT || box->size[ui_Y].kind == ui_Size_Kind_TEXT;
-    if (measure) {
-        UI_ASSERT(box->display_string != 0);
-        UI_ASSERT(box->display_string[0] != 0);
-        ui->measure_text(ui->user_data, box->display_string, box->style, text_size);
-        UI_ASSERT(text_size[0] > 0);
-        UI_ASSERT(text_size[1] > 0);
-    }
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        switch (box->size[axis].kind) {
-            case ui_Size_Kind_PIXELS: {
-                box->rectangle.size[axis] = box->size[axis].value;
-            } break;
-            case ui_Size_Kind_SUM_OF_CHILDREN: case ui_Size_Kind_LARGEST_CHILD: {
-                // Not solved here, but let's error-check.
-                UI_ASSERT(box->first_child != 0);
-            } break;
-            case ui_Size_Kind_OF_PARENT: {
-                // Not solved here, but let's error-check.
-                UI_ASSERT(box->parent != 0);
-            } break;
-            case ui_Size_Kind_TEXT: {
-                UI_ASSERT(box->display_string != 0);
-                UI_ASSERT(text_size[ui_X] > 0);
-                UI_ASSERT(text_size[ui_Y] > 0);
-                box->rectangle.size[axis] = text_size[axis];
-            } break;
-            default: UI_ASSERT(0 && "unreachable"); break;
-        }
-
-		box->rectangle.size[axis] += 2.f * style->padding[axis];
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_standalone(ui, child);
-    }
-}
-
-static void ui__layout_dependent_ancestor(ui_State *ui, ui_Box *box) {
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_Kind_LARGEST_CHILD: /* not solved here */ break;
-        case ui_Size_Kind_SUM_OF_CHILDREN: /* not solved here */ break;
-        case ui_Size_Kind_OF_PARENT: /* not solved here */ break;
-        case ui_Size_Kind_TEXT: /* not solved here */ break;
-        case ui_Size_Kind_PIXELS: /* not solved here */ break;
-        default: UI_ASSERT(0 && "unreachable"); break;
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_dependent_ancestor(ui, child);
-    }
-}
-
-static void ui__layout_dependent_descendant(ui_State *ui, ui_Box *box) {
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_dependent_descendant(ui, child);
-    }
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) switch (box->size[axis].kind) {
-        case ui_Size_Kind_TEXT: break;
-        case ui_Size_Kind_SUM_OF_CHILDREN: {
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                box->rectangle.size[axis] += child->rectangle.size[axis];
-				box->rectangle.size[axis] += box->style.child_gap;
-            }
-
-            _Bool has_at_least_one_child = box->first_child != 0;
-            box->rectangle.size[axis] -= has_at_least_one_child * box->style.child_gap;
-        } break;
-        case ui_Size_Kind_LARGEST_CHILD: {
-            float largest = 0;
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-                float size = child->rectangle.size[axis];
-                largest = size > largest ? size : largest;
-            }
-            box->rectangle.size[axis] += largest;
-        } break;
-        case ui_Size_Kind_OF_PARENT: /* not solved here */ break;
-        case ui_Size_Kind_PIXELS: /* not solved here */ break;
-        default: UI_ASSERT(0 && "unreachable"); break;
-    }
-}
-
-#define UI__MIN(a, b) ((a) < (b) ? (a) : (b))
-#define UI__MAX(a, b) ((a) > (b) ? (a) : (b))
-#define UI__CLAMP(v, low, high) UI__MIN(UI__MAX((v), (low)), (high))
-
-static void ui__layout_solve_violations(ui_State *ui, ui_Box *box) {
-    ui_Flags layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-
-    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-        float applies_to_this_axis = (float)(layout_axis == axis);
-
-        float parent_size = box->rectangle.size[axis];
-        parent_size -= 2.f * box->style.padding[axis];
-        float available_size = parent_size;
-
-        float wanted_size = 0;
-        float child_count = 0;
-
-        for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-            child_count += applies_to_this_axis;
-
-            switch (child->size[axis].kind) {
-                case ui_Size_Kind_OF_PARENT: {
-                    child->rectangle.size[axis] = parent_size * child->size[axis].value;
-                    wanted_size += applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                case ui_Size_Kind_SUM_OF_CHILDREN: case ui_Size_Kind_LARGEST_CHILD: case ui_Size_Kind_TEXT: case ui_Size_Kind_PIXELS: {
-                    available_size -= applies_to_this_axis * child->rectangle.size[axis];
-                } break;
-                default: UI_ASSERT(0 && "unreachable"); break;
-            }
-        }
-
-        float total_child_gap = box->style.child_gap * (child_count - 1.f);
-        available_size -= total_child_gap;
-
-        if (wanted_size > available_size) {
-            for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) if (child->size[axis].kind == ui_Size_Kind_OF_PARENT) {
-                float average_ratio_available = available_size / wanted_size;
-
-                float ratio_left = child->size[axis].value;
-                if (child->size[axis].value > average_ratio_available) {
-                    float min_ratio_left = 0;
-                    ratio_left = UI__CLAMP(min_ratio_left, average_ratio_available, child->size[axis].value);
-                }
-
-                float wanted = child->rectangle.size[axis];
-                float got = parent_size * ratio_left;
-
-                wanted_size -= wanted;
-                available_size -= got;
-                child->rectangle.size[axis] = got;
-            }
-        }
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_solve_violations(ui, child);
-    }
-}
-
-static void ui__layout_relative_positions_and_rectangle(ui_State *ui, ui_Box *box) {
-    if (box->parent != 0) {
-        ui_Flags layout_axis = box->parent->flags & ui_Flag_CHILD_AXIS;
-
-        if (box->previous_sibling != 0) {
-            box->rectangle.position[layout_axis] = box->previous_sibling->rectangle.position[layout_axis];
-            box->rectangle.position[layout_axis] += box->previous_sibling->rectangle.size[layout_axis];
-            box->rectangle.position[layout_axis] += box->parent->style.child_gap;
-        } else {
-            box->rectangle.position[layout_axis] = box->parent->rectangle.position[layout_axis];
-			box->rectangle.position[layout_axis] += box->parent->style.padding[layout_axis];
-        }
-
-        ui_Flags non_layout_axis = !layout_axis;
-        box->rectangle.position[non_layout_axis] = box->parent->rectangle.position[non_layout_axis];
-        box->rectangle.position[non_layout_axis] += box->parent->style.padding[non_layout_axis];
-    }
-
-    if (box->flags & UI_FLAG_ANY_VISIBLE) {
-        ui_Rectangle display = box->rectangle;
-        for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-            UI_ASSERT(display.position[axis] >= 0);
-            UI_ASSERT(display.size[axis] >= 0);
-        }
-    }
-
-    for (ui_Box *child = box->first_child; child != 0; child = child->next_sibling) {
-        ui__layout_relative_positions_and_rectangle(ui, child);
-    }
-}
-
 UI_FUNCTION void ui_end(ui_State *ui) {
     UI_ASSERT(ui->root != 0);
-    ui__layout_standalone(ui, ui->root);
-    ui__layout_dependent_ancestor(ui, ui->root);
-    ui__layout_dependent_descendant(ui, ui->root);
-    ui__layout_solve_violations(ui, ui->root);
-    ui__layout_relative_positions_and_rectangle(ui, ui->root);
+    UI_ASSERT(ui->current_parent == ui->root);
+    for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
+        ui__memset(ui->size_group_sizes, 0, sizeof ui->size_group_sizes);
+        ui->uses_size_groups = 0;
+        ui__layout_fit(ui, ui->root, axis);
+        if (ui->uses_size_groups) ui__layout_fit(ui, ui->root, axis);
+        ui__layout_distribute(ui->root, axis);
+    }
+    ui->root->clip_rectangle = ui->root->rectangle;
+    ui->root->rounded_clip_radius = 0;
+    ui__layout_position(ui, ui->root);
+
+    ui->draw_order_count = 0;
+    ui__append_to_draw_order(ui, ui->root);
+    ui__append_floating_to_draw_order(ui, ui->root);
 }
 
-UI_FUNCTION ui_Box *ui_push(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format, ...) {
+UI_FUNCTION ui_Box *ui_push(ui_State *ui, ui_Flags flags, const char *format, ...) {
     ui_va_list arguments;
     ui_va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, parent, flags, format, arguments);
+    ui_Box *box = ui_pushv(ui, flags, format, arguments);
     ui_va_end(arguments);
     return box;
 }
 
-UI_FUNCTION ui_Box *ui_push_styled(ui_State *ui, ui_Box *parent, ui_Flags flags, const ui_Style *style, const char *format, ...) {
+UI_FUNCTION ui_Box *ui_push_styled(ui_State *ui, ui_Flags flags, const ui_Style *style, const char *format, ...) {
     ui_va_list arguments;
     ui_va_start(arguments, format);
-    ui_Box *box = ui_pushv(ui, parent, flags, format, arguments);
+    ui_Box *box = ui_pushv(ui, flags, format, arguments);
     ui_va_end(arguments);
 
     UI_ASSERT(style != 0);
@@ -469,7 +853,8 @@ UI_FUNCTION ui_Box *ui_push_styled(ui_State *ui, ui_Box *parent, ui_Flags flags,
     return box;
 }
 
-UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const char *format_c, ui_va_list arguments) {
+UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Flags flags, const char *format_c, ui_va_list arguments) {
+    ui_Box *parent = ui->current_parent;
     _Bool keyed = format_c != 0;
 
     const char *hash_string = 0;
@@ -508,10 +893,8 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
         int display_and_hash_left_end = marker_start;
         int hash_right_start = marker_start;
 
-        // before `##` displayed and hashed; after only hashed
         hash_right_start += 2 * has_2_hash_marker;
 
-        // before `###` only displayed; after only hashed
         int hash_left_start = display_and_hash_left_end * has_3_hash_marker;
         hash_right_start += 3 * has_3_hash_marker;
 
@@ -552,7 +935,6 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
         if (hash_string_length == 0) keyed = 0;
 
         if (keyed) {
-            // djb2
             unsigned hash = 5381;
             for (int i = 0; i < hash_string_length; i += 1) {
                 hash += (hash << 5) + (unsigned)(hash_string[i]);
@@ -561,47 +943,49 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
             unsigned exponent = UI_MAX_KEYED_BOXES_EXPONENT;
             unsigned mask = ((unsigned)1 << exponent) - 1;
             unsigned step = (hash >> (32 - exponent)) | 1;
-            for (unsigned index = hash;;) {
+            ui_Box *first_unused_box = 0;
+            unsigned index = hash;
+            for (int probe_count = 0; probe_count < UI_MAX_KEYED_BOXES && box == 0; probe_count += 1) {
                 index = (index + step) & mask;
                 index += !index; // never 0
 
                 ui_Box *this_box = &ui->boxes[index];
-
                 _Bool this_box_is_unused = this_box->hash_string[0] == 0;
-                if (this_box_is_unused) {
-                    ui->keyed_box_count += 1;
-                    int hashmap_max_load = 70;
-                    int max_used_boxes = UI_MAX_KEYED_BOXES * hashmap_max_load / 100;
-                    _Bool hashmap_saturated = ui->keyed_box_count > max_used_boxes;
-                    UI_ASSERT(!hashmap_saturated);
+                if (this_box_is_unused && first_unused_box == 0) first_unused_box = this_box;
 
-                    box_is_new = 1;
-                    box = this_box;
-                    break;
-                }
-
-                _Bool equals = 1;
-                {
-                    const char *a = this_box->hash_string;
-                    const char *b = hash_string;
-
-                    if (a[0] == 0 || b[0] == 0) equals = 0;
-                    else while (*a != 0 && *a == *b) {
-                        a += 1;
-                        b += 1;
+                _Bool equals = 0;
+                if (!this_box_is_unused && this_box->key_hash == hash) {
+                    int kept_length = (int)sizeof this_box->hash_string - 1;
+                    int i = 0;
+                    equals = 1;
+                    while (equals && i < kept_length && hash_string[i] != 0) {
+                        equals = this_box->hash_string[i] == hash_string[i];
+                        i += 1;
                     }
-                    equals = (*a == *b);
+                    if (equals && i < kept_length) equals = this_box->hash_string[i] == 0;
                 }
 
                 if (equals) {
                     _Bool already_used_this_frame = this_box->frame_id == ui->frame_id;
                     UI_ASSERT(!already_used_this_frame);
                     box = this_box;
-                    break;
                 }
             }
 
+            if (box == 0) {
+                UI_ASSERT(first_unused_box != 0);
+                ui->keyed_box_count += 1;
+                int hashmap_max_load = 70;
+                int max_used_boxes = UI_MAX_KEYED_BOXES * hashmap_max_load / 100;
+                _Bool hashmap_saturated = ui->keyed_box_count > max_used_boxes;
+                UI_ASSERT(!hashmap_saturated);
+
+                box_is_new = 1;
+                box = first_unused_box;
+            }
+
             if (box_is_new) {
+                box->key_hash = hash;
                 int i = 0;
                 while (i < (int)(sizeof box->hash_string - 1) && hash_string[i] != 0) {
                     box->hash_string[i] = hash_string[i];
@@ -620,15 +1004,19 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
         box_is_new = 1;
     }
 
-    _Bool was_dragging = !box_is_new && !!(box->flags & ui_Flag_DRAGGING);
-
     box->flags = flags;
-    box->flags |= was_dragging * ui_Flag_DRAGGING;
+    if (ui->new_boxes_are_disabled) box->flags |= ui_Flag_DISABLED_BUT_SWALLOWS_INPUT;
 
-    { // zero frame data, keep cached data
+    {
         box->display_string = 0;
         box->size[ui_X] = (ui_Size){0};
         box->size[ui_Y] = (ui_Size){0};
+        box->float_offset_from_parent_top_left[ui_X] = 0;
+        box->float_offset_from_parent_top_left[ui_Y] = 0;
+        box->style = (ui_Style){0};
+        box->user_data = 0;
+        box->size_group[ui_X] = 0;
+        box->size_group[ui_Y] = 0;
         box->parent = 0;
         box->previous_sibling = 0;
         box->next_sibling = 0;
@@ -642,20 +1030,15 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
         UI_ASSERT(parent == 0);
 
         for (int axis = 0; axis < ui_Axis_COUNT; axis += 1) {
-            box->size[axis].kind = ui_Size_Kind_PIXELS;
-            box->size[axis].value = ui->window_size[axis];
+            box->size[axis] = (ui_Size){ .kind = ui_Size_Kind_FIXED, .value = ui->window_size[axis] };
         }
 
         ui->root = box;
-    }
-
-    if (box != ui->root) {
-        ui_Flags child_layout_axis = box->flags & ui_Flag_CHILD_AXIS;
-        box->size[child_layout_axis].kind = ui_Size_Kind_SUM_OF_CHILDREN;
-        box->size[!child_layout_axis].kind = ui_Size_Kind_LARGEST_CHILD;
+        ui->current_parent = box;
     }
 
     box->display_string = display_string;
+    if (display_string == 0 || display_string[0] == 0) box->flags &= ~(ui_Flags)ui_Flag_DRAW_TEXT;
 
     if (box->parent != 0) {
         if (box->parent->first_child == 0) {
@@ -672,39 +1055,9 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
 
     if (box->flags & UI_FLAG_ANY_INTERACTABLE) UI_ASSERT(box->hash_string[0] != 0);
 
-    if (!ui->input_blocked && (box->flags & UI_FLAG_ANY_INTERACTABLE)) {
-        _Bool mouse_over = 1;
-        {
-            float left = box->rectangle.position[ui_X];
-            float top = box->rectangle.position[ui_Y];
-            float right = left + box->rectangle.size[ui_X];
-            float bottom = top + box->rectangle.size[ui_Y];
-
-            float x = ui->mouse_position[ui_X];
-            float y = ui->mouse_position[ui_Y];
-
-            mouse_over = mouse_over && left <= x && x < right;
-            mouse_over = mouse_over && top <= y && y < bottom;
-        }
-
-        box->flags |= ui_Flag_HOVERED * (mouse_over && (box->flags & ui_Flag_HOVERABLE));
-        box->flags |= ui_Flag_CLICKED * (mouse_over && (box->flags & ui_Flag_CLICKABLE) && ui->mouse_clicked[ui_Mouse_Button_LEFT]);
-
-        if (box->flags & ui_Flag_DRAGGABLE) {
-            _Bool start_drag = !was_dragging && mouse_over && ui->mouse_down[ui_Mouse_Button_LEFT] && !ui->mouse_clicked[ui_Mouse_Button_LEFT];
-            if (start_drag) {
-                box->flags |= ui_Flag_DRAGGING;
-                box->drag_start_mouse[ui_X] = ui->mouse_position[ui_X];
-                box->drag_start_mouse[ui_Y] = ui->mouse_position[ui_Y];
-            }
-
-            _Bool end_drag = was_dragging && !ui->mouse_down[ui_Mouse_Button_LEFT];
-            if (end_drag) {
-                box->flags &= ~ui_Flag_DRAGGING;
-                box->drag_start_mouse[ui_X] = 0;
-                box->drag_start_mouse[ui_Y] = 0;
-            }
-        }
+    if (box->flags & UI_FLAG_ANY_INTERACTABLE) {
+        for (int i = 0; i < UI_SIGNAL_COUNT; i += 1) box->flags |= (ui_Flags)(box == ui->signal_boxes[i]) << (UI_SIGNAL_FIRST_BIT + i);
+        if (!(box->flags & ui_Flag_HOVERABLE)) box->flags &= ~(ui_Flags)ui_Flag_HOVERED;
 
         ui->interacted_this_frame |= !!(box->flags & UI_FLAG_ANY_INTERACTION);
     }
@@ -713,113 +1066,23 @@ UI_FUNCTION ui_Box *ui_pushv(ui_State *ui, ui_Box *parent, ui_Flags flags, const
     return box;
 }
 
-// TODO(felix): Simplify! Maybe remove.
-UI_FUNCTION ui_Box *ui_slider(ui_State *ui, ui_Box *parent, ui_Flags slider_axis, float least, float most, float *value, ui_Slider_Style style, const char *format, ...) {
-    ui_Box *slider_box = 0;
-
-    float range = most - least;
-    UI_ASSERT(range > 0);
-
-    ui_Style slider_style = style.bar;
-    slider_style.padding[ui_X] = 0;
-    slider_style.padding[ui_Y] = 0;
-    slider_style.child_gap = 0;
-    slider_style.border_radius = style.radius;
-
-    const char *formatted = 0;
-
-    ui_va_list arguments;
-    ui_va_start(arguments, format);
-    {
-        char format_buffer[UI_MAX_STRING_LENGTH] = {0};
-
-        int written = UI_VSNPRINTF(format_buffer, sizeof format_buffer, format, arguments);
-        UI_ASSERT(written < (int)(sizeof format_buffer));
-
-        formatted = format_buffer;
-    }
-    ui_va_end(arguments);
-
-    slider_box = ui_push_styled(ui, parent, slider_axis | ui_Flag_CLICKABLE | ui_Flag_DRAGGABLE, &slider_style, "%s##slider box", formatted);
-    {
-        if (slider_box->flags & ui_Flag_CLICKED) slider_box->drag_start_value = *value;
-
-        if (slider_box->flags & ui_Flag_DRAGGING) {
-            float mouse = ui->mouse_position[slider_axis];
-
-            float delta = mouse - slider_box->drag_start_mouse[slider_axis];
-            float difference = delta * range / style.length;
-
-            *value = slider_box->drag_start_value + difference;
-            if (*value < least) *value = least;
-            if (*value > most) *value = most;
-        }
-
-        float travel = style.length - style.handle_length;
-        float first_part_length = (*value - least) * travel / range;
-        float last_part_length  = travel - first_part_length;
-
-        slider_box->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.length };
-        slider_box->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-
-        ui_Flags slider_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND;
-
-        if (first_part_length >= 1.f) {
-            ui_Box *first_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            first_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = first_part_length };
-            first_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, first_part);
-
-            ui_Box *first = ui_push_styled(ui, first_part, slider_flags, &slider_style, "%s##slider first", formatted);
-            first->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-            first->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.thickness };
-
-            ui_spacer(ui, first_part);
-        }
-
-        {
-            ui_Box *handle_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            handle_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.handle_length };
-            handle_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, handle_part);
-
-            ui_Style handle_style = slider_style;
-            handle_style.border_radius = style.handle_radius;
-            ui_Flags handle_flags = ui_Flag_DRAW_BORDER | ui_Flag_DRAW_BACKGROUND | ui_Flag_DRAW_SHADOW;
-            ui_Box *handle = ui_push_styled(ui, handle_part, handle_flags, &handle_style, "%s##slider handle", formatted);
-            if (slider_box->flags & ui_Flag_DRAGGING) {
-                handle->style.bg_color = style.dragging.bg_color;
-                handle->style.border_color = style.dragging.border_color;
-            }
-            handle->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-            handle->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.handle_thickness };
-
-            ui_spacer(ui, handle_part);
-        }
-
-        if (last_part_length >= 1.f) {
-            ui_Box *last_part = ui_push_styled(ui, slider_box, !slider_axis, &slider_style, 0);
-            last_part->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = last_part_length };
-            last_part->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-
-            ui_spacer(ui, last_part);
-
-            ui_Box *last = ui_push_styled(ui, last_part, slider_flags, &slider_style, "%s##slider last", formatted);
-            last->size[slider_axis] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
-            last->size[!slider_axis] = (ui_Size){ .kind = ui_Size_Kind_PIXELS, .value = style.thickness };
-
-            ui_spacer(ui, last_part);
-        }
-    }
-
-    return slider_box;
+UI_FUNCTION int ui_set_disabled(ui_State *ui, int disabled) {
+    int previous_disabled = ui->new_boxes_are_disabled;
+    ui->new_boxes_are_disabled = !!disabled;
+    return previous_disabled;
 }
 
-UI_FUNCTION ui_Box *ui_spacer(ui_State *ui, ui_Box *parent) {
-    ui_Box *box = ui_push(ui, parent, 0, 0, 0);
-    box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_OF_PARENT, .value = 1.f };
+UI_FUNCTION ui_Box *ui_set_parent(ui_State *ui, ui_Box *parent) {
+    UI_ASSERT(parent != 0);
+    UI_ASSERT(ui->current_parent != 0);
+    ui_Box *previous_parent = ui->current_parent;
+    ui->current_parent = parent;
+    return previous_parent;
+}
+
+UI_FUNCTION ui_Box *ui_spacer(ui_State *ui) {
+    ui_Box *box = ui_push(ui, 0, 0);
+    box->size[ui_X] = box->size[ui_Y] = (ui_Size){ .kind = ui_Size_Kind_GROW };
     return box;
 }
 
